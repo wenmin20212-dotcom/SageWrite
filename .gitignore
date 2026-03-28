@@ -2,5 +2,12 @@
 .DS_Store
 Thumbs.db
 *.log
+engine/.codex/
+engine/0320/
+engine/319/
+engine/backup/
+engine/bak*/
+engine/02-structurebak.ps1
+engine/03-writebak.txt
 engine/webui/node_modules/
 engine/webui/.cache/
