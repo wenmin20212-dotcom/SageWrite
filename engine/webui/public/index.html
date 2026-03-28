@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SageWrite 控制台</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">SageWrite Engine <span class="version-badge">v0.1.0</span></p>
+          <h1>写作引擎 Web 控制台</h1>
+          <p class="hero-copy">
+            用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建。
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-card">
+            <span>OpenAI Key</span>
+            <strong id="api-key-status">检查中</strong>
+          </div>
+          <div class="status-card">
+            <span>工作区数量</span>
+            <strong id="workspace-count">0</strong>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel project-picker-panel">
+          <div class="panel-header">
+            <h2>项目选择</h2>
+            <button id="refresh-status" class="ghost-button" type="button">刷新</button>
+          </div>
+
+          <label class="field">
+            <span>BookName</span>
+            <input id="bookName" name="bookName" placeholder="例如 SageWriteManualCN">
+          </label>
+
+          <div class="workspace-list-wrap">
+            <div class="workspace-list-title">已有工作区</div>
+            <div id="workspace-list" class="workspace-list"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>项目状态</h2>
+          </div>
+          <div id="project-status" class="status-grid">
+            <div class="status-empty">选择一个 BookName 后，这里会显示项目状态。</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>01 初始化项目</h2>
+          </div>
+          <form id="intake-form" class="form-grid">
+            <label class="field">
+              <span>书名标题</span>
+              <input name="title" required>
+            </label>
+            <label class="field">
+              <span>目标读者</span>
+              <textarea name="audience" rows="3" required></textarea>
+            </label>
+            <label class="field">
+              <span>作品类型</span>
+              <input name="type" required>
+            </label>
+            <label class="field">
+              <span>核心论点</span>
+              <textarea name="coreThesis" rows="4" required></textarea>
+            </label>
+            <label class="field">
+              <span>写作范围</span>
+              <textarea name="scope" rows="4" required></textarea>
+            </label>
+            <label class="field">
+              <span>文风要求</span>
+              <textarea name="style" rows="3" required></textarea>
+            </label>
+            <div class="intake-actions">
+              <div class="intake-submit-actions">
+                <button id="intake-create" class="primary-button" type="submit">创建项目</button>
+                <button id="intake-save" class="ghost-button" type="submit">保存项目修改</button>
+              </div>
+              <div id="intake-action-hint" class="intake-action-hint">新项目会创建并生成 `objective.md`。</div>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>02 生成目录</h2>
+            <div class="toc-actions">
+              <button id="show-toc" class="primary-button toc-action-button" type="button">显示目录</button>
+              <button id="save-toc" class="ghost-button" type="button">保存目录</button>
+            </div>
+          </div>
+          <form id="structure-form">
+            <button class="primary-button" type="submit">运行 02-structure.ps1</button>
+          </form>
+          <div class="toc-preview-wrap">
+            <div class="toc-preview-title">当前目录预览</div>
+            <textarea id="toc-preview" class="toc-preview toc-editor" spellcheck="false">选择一个已有目录的 BookName 后，这里会显示 toc.md 内容。</textarea>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>02b 扩展小节</h2>
+          </div>
+          <form id="expand-form" class="form-grid">
+            <label class="field">
+              <span>模式</span>
+              <select name="mode">
+                <option value="all">全部章节</option>
+                <option value="chapter">单章</option>
+                <option value="range">区间</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>单章编号</span>
+              <input name="chapter" type="number" min="1">
+            </label>
+            <label class="field split">
+              <span>章节区间</span>
+              <div class="split-row">
+                <input name="startChapter" type="number" min="1" placeholder="开始">
+                <input name="endChapter" type="number" min="1" placeholder="结束">
+              </div>
+            </label>
+            <label class="field split">
+              <span>小节数量</span>
+              <div class="split-row">
+                <input name="minSubsections" type="number" min="1" value="3">
+                <input name="maxSubsections" type="number" min="1" value="5">
+              </div>
+            </label>
+            <label class="field">
+              <span>模型</span>
+              <input name="model" value="gpt-4o-mini">
+            </label>
+            <button class="primary-button" type="submit">运行 02b-expand.ps1</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>03 写章节</h2>
+          </div>
+          <form id="write-form" class="form-grid">
+            <label class="field">
+              <span>模式</span>
+              <select name="mode">
+                <option value="all">全部章节</option>
+                <option value="chapter">单章</option>
+                <option value="range">区间</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>单章编号</span>
+              <input name="chapter" type="number" min="1">
+            </label>
+            <label class="field split">
+              <span>章节区间</span>
+              <div class="split-row">
+                <input name="startChapter" type="number" min="1" placeholder="开始">
+                <input name="endChapter" type="number" min="1" placeholder="结束">
+              </div>
+            </label>
+            <label class="field">
+              <span>MaxTokens</span>
+              <input name="maxTokens" type="number" min="1000" step="500" value="6000">
+            </label>
+            <label class="checkbox-field">
+              <input name="force" type="checkbox">
+              <span>覆盖已存在章节</span>
+            </label>
+            <div class="write-extra-actions">
+              <button id="open-write-notes" class="ghost-button" type="button">附加说明</button>
+              <span id="write-notes-status" class="write-notes-status">未添加附加说明</span>
+            </div>
+            <textarea id="additional-instructions" name="additionalInstructions" hidden></textarea>
+            <div class="write-submit-actions">
+              <button id="run-write-normal" class="primary-button" type="submit">正常运行 03-write.ps1</button>
+              <button id="run-write-rewrite" class="ghost-button" type="submit">重写单章并附加说明</button>
+            </div>
+          </form>
+          <div class="chapter-browser-wrap">
+            <div class="chapter-browser-title">章节浏览</div>
+            <div class="chapter-browser-controls">
+              <button id="chapter-prev" class="ghost-button" type="button">上一章</button>
+              <select id="chapter-preview-select">
+                <option value="">请选择章节</option>
+              </select>
+              <button id="show-chapter" class="primary-button" type="button">显示章节</button>
+              <button id="save-chapter" class="ghost-button" type="button">保存章节</button>
+              <button id="rewrite-current-chapter" class="ghost-button" type="button">重写这一章</button>
+              <button id="chapter-next" class="ghost-button" type="button">下一章</button>
+            </div>
+            <textarea id="chapter-preview" class="chapter-preview chapter-editor" spellcheck="false">选中一个已有章节的 BookName 后，这里会显示章节内容。</textarea>
+          </div>
+        </section>
+
+        <div id="write-notes-modal" class="modal-shell hidden" aria-hidden="true">
+          <div class="modal-backdrop" data-close-write-notes="true"></div>
+          <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="write-notes-title">
+            <div class="modal-header">
+              <h3 id="write-notes-title">单章附加说明</h3>
+              <button id="close-write-notes" class="ghost-button" type="button">关闭</button>
+            </div>
+            <p class="modal-copy">把你希望这一章如何重写的要求贴在这里。单章写作时，系统会同时参考 `objective.md`、`toc.md` 和这份附加说明。</p>
+            <textarea id="write-notes-editor" class="modal-textarea" rows="10" placeholder="例如：这一章需要更偏实操，减少概念解释，增加步骤示例，并突出与第 2 章的衔接。"></textarea>
+            <div class="modal-actions">
+              <button id="clear-write-notes" class="ghost-button" type="button">清空</button>
+              <button id="save-write-notes" class="primary-button" type="button">保存附加说明</button>
+            </div>
+          </div>
+        </div>
+
+        <section class="panel compact-panel">
+          <div class="panel-header">
+            <h2>04 检查</h2>
+          </div>
+          <form id="edit-form">
+            <label class="checkbox-field">
+              <input name="strict" type="checkbox">
+              <span>严格模式</span>
+            </label>
+            <button class="primary-button" type="submit">运行 04-edit.ps1</button>
+          </form>
+          <div class="preflight-wrap">
+            <div class="preflight-title">Build 前检查报告（edit_report.txt）</div>
+            <textarea id="preflight-report" class="preflight-report preflight-textarea" readonly spellcheck="false">运行 04-edit.ps1 后，这里会显示 edit_report.txt 的完整内容。</textarea>
+          </div>
+        </section>
+
+        <section class="panel compact-panel">
+          <div class="panel-header">
+            <h2>05 构建文档</h2>
+          </div>
+          <form id="build-form">
+            <label class="checkbox-field">
+              <input name="autoNumber" type="checkbox">
+              <span>自动编号</span>
+            </label>
+            <button class="primary-button" type="submit">运行 05-build.ps1</button>
+          </form>
+        </section>
+
+        <section class="panel log-panel">
+          <div class="panel-header">
+            <h2>运行日志</h2>
+            <div id="job-badge" class="job-badge">空闲</div>
+          </div>
+          <pre id="log-output" class="log-output">这里会显示 PowerShell 输出。</pre>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

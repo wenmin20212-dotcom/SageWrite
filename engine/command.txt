@@ -1,0 +1,147 @@
+.\02b-expand.ps1 -BookName ChipBook -StartChapter 1 -EndChapter 5
+
+
+
+Workspace: C:\Users\User\.openclaw\workspace-SageWriteManualCN
+PS C:\Users\User\.openclaw> & "C:\Users\User\.openclaw\SageWrite\engine\02-structure.ps1" `
+>> -BookName "SageWriteManualCN"
+
+ & "C:\Users\User\.openclaw\SageWrite\engine\02-structure.ps1" `
+>> -BookName "SageWriteManualCN"
+
+ &"C:\Users\User\.openclaw\SageWrite\engine\\02b-expand.ps1 " `
+>> -BookName "SageWriteManualCN"
+
+
+.\BatchRunner.ps1 -ProgramDir book -d
+
+.\selfpatch.ps1 -d
+
+.\clean.ps1 -InputDir book
+
+ .\selfpatch.ps1 -R
+
+
+& "C:\Users\User\.openclaw\SageWrite\engine\01-intake.ps1" `
+-BookName "SageWriteManualBook" `
+-Title "SageWrite 安装与使用说明书" `
+-Audience "SageWrite 系统使用者、知识工作者、写作者、教育工作者，以及希望利用 AI 完成结构化写作的人群" `
+-Type "系统安装与使用说明书" `
+-CoreThesis "本书系统说明 SageWrite 的安装方法、目录结构、脚本功能、调用方式、运行流程与实际使用规范，使读者能够从零开始完成 SageWrite 的部署、初始化、结构生成、章节写作、编辑整理与整书构建。" `
+-Scope "全书围绕 SageWrite 的安装、配置、五个核心脚本的作用、完整调用链、目录结构、常见问题与标准操作流程展开，兼顾入门说明与实际操作，形成一本可直接用于部署与使用的完整说明书。" `
+-Style "技术说明文风，语言清晰直接，结构化表达，强调步骤性、准确性与可操作性，尽量避免空泛论述，便于读者直接照着执行。"
+
+
+& "C:\Users\User\.openclaw\SageWrite\engine\02-structure.ps1" `
+-BookName "SageWriteManualCN"
+
+
+& "C:\Users\User\.openclaw\SageWrite\engine\02-structure.ps1" `
+-BookName "SageWriteManualCN"
+
+
+
+
+& "C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1" `
+-BookName "SageWriteManualBook"
+
+
+& "C:\Users\User\.openclaw\SageWrite\engine\05-build.ps1" `
+-BookName "SageWriteManualBook"
+
+C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1 -BookName "SageWriteBook"
+
+C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1 -BookName "SageWriteManualCN" -Chapter 3
+
+C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1 -BookName "SageWriteBook" -StartChapter 3 -EndChapter 6
+
+C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1 -BookName "SageWriteBook" -StartChapter 1 -EndChapter 3 -MaxTokens 4000
+
+
+C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1 -BookName "SageWriteManualCN" -StartChapter 3 -EndChapter 6 -force
+
+C:\Users\User\.openclaw\SageWrite\engine\03-write.ps1 -BookName "SageWriteManualCN" -StartChapter 7 -EndChapter 8 -force
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+不指定章节参数，程序会从第一章写到最后一章。
+
+```powershell
+.\03-write.ps1 -BookName "YourBookName"
+```
+
+---
+
+## 2. 只生成某一章
+
+用 `-Chapter` 指定章节号。
+
+```powershell
+.\03-write.ps1 -BookName "YourBookName" -Chapter 3
+```
+
+表示只生成第 3 章。
+
+---
+
+## 3. 生成一段章节
+
+用 `-StartChapter` 和 `-EndChapter` 指定起止章节。
+
+```powershell
+.\03-write.ps1 -BookName "YourBookName" -StartChapter 3 -EndChapter 6
+```
+
+表示生成第 3 章到第 6 章。
+
+---
+
+# 参数说明
+
+## `-BookName`
+
+书的工程名。
+程序会根据这个名字找到对应的书目录。
+
+例如：
+
+```powershell
+-BookName "SageWriteManualCN"
+```
+
+---
+
+
+## `-MaxTokens`
+
+控制单章生成时的最大输出 token 数。
+默认值是：
+
+```powershell
+6000
+```
+
+例如：
+
+```powershell
+.\03-write.ps1 -BookName "YourBookName" -Chapter 3 -MaxTokens 5000
+```
+
+---
+
+## `-Force`
+
+
+
