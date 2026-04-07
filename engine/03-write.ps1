@@ -63,6 +63,21 @@ function Get-MarkdownSectionBody {
     return ""
 }
 
+function Normalize-MarkdownOutput {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $Normalized = $Content.Trim()
+
+    if ($Normalized -match '^(?:```markdown|```md|```)\s*\r?\n([\s\S]*?)\r?\n```$') {
+        return $Matches[1].Trim()
+    }
+
+    return $Normalized
+}
+
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
 Set-SageCurrentStep -Context $Context -Step "write" -Data @{
@@ -340,6 +355,8 @@ Write the complete chapter now.
         Write-Output "ERROR: Empty response."
         exit 1
     }
+
+    $ChapterText = Normalize-MarkdownOutput -Content $ChapterText
 
 @"
 ---

@@ -787,12 +787,92 @@ async function loadRunOutput(bookName, fileName, item) {
   }
 }
 
+function renderBuildOutputs(item) {
+  const panel = $("#build-output-list");
+  if (!panel) {
+    return;
+  }
+
+  if (!item) {
+    panel.innerHTML = '<div class="build-output-empty">选择一个 BookName 后，这里会显示生成的文档文件。</div>';
+    return;
+  }
+
+  const outputFiles = item.outputFiles || [];
+  if (!outputFiles.length) {
+    panel.innerHTML = '<div class="build-output-empty">当前项目还没有生成可打开的文档文件。</div>';
+    return;
+  }
+
+  panel.innerHTML = outputFiles.map((fileName) => `
+    <div class="build-output-item">
+      <div class="build-output-meta">
+        <strong>${escapeHtml(fileName)}</strong>
+        <span>位于 04_output 目录</span>
+      </div>
+      <div class="build-output-actions">
+        <button
+          type="button"
+          class="ghost-button build-open-button"
+          data-reveal-output="${escapeHtml(fileName)}"
+        >
+          定位文件
+        </button>
+        <button
+          type="button"
+          class="ghost-button build-open-button"
+          data-open-folder="${escapeHtml(fileName)}"
+        >
+          打开文件夹
+        </button>
+      </div>
+    </div>
+  `).join("");
+
+  panel.querySelectorAll("[data-reveal-output]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const bookName = requireBookName();
+        const fileName = button.dataset.revealOutput || "";
+        await api("/api/reveal-output", {
+          method: "POST",
+          body: JSON.stringify({ bookName, fileName })
+        });
+        setStatusBadge("已定位", "success");
+        setLog(`已在资源管理器中定位文件：${fileName}`);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
+  });
+
+  panel.querySelectorAll("[data-open-folder]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const bookName = requireBookName();
+        const fileName = button.dataset.openFolder || "";
+        await api("/api/open-output-folder", {
+          method: "POST",
+          body: JSON.stringify({ bookName, fileName })
+        });
+        setStatusBadge("已打开", "success");
+        setLog(`已打开输出文件夹，可查看文件：${fileName}`);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
+  });
+}
+
 function renderWorkspaceSelection(item) {
   renderIntakePreview(item);
   renderProjectStatus(item);
   renderTocPreview(item);
   renderPreflightReport(item);
   renderChapterBrowser(item);
+  renderBuildOutputs(item);
 }
 
 function renderWorkspaces(workspaces) {

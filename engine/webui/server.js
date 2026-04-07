@@ -18,6 +18,7 @@ function getWorkspacePaths(bookName) {
   const workspacePath = path.join(CLAW_ROOT, `workspace-${bookName}`);
   const bookRoot = path.join(workspacePath, "sagewrite", "book");
   const logRoot = path.join(bookRoot, "logs");
+  const outputRoot = path.join(bookRoot, "04_output");
   const webRunRoot = path.join(logRoot, "webui-runs");
   const webRunIndexPath = path.join(logRoot, "webui_runs.jsonl");
 
@@ -25,6 +26,7 @@ function getWorkspacePaths(bookName) {
     workspacePath,
     bookRoot,
     logRoot,
+    outputRoot,
     webRunRoot,
     webRunIndexPath
   };
@@ -209,7 +211,7 @@ function listWorkspaces() {
       const chapterFiles = getChapterMetadata(chapterRoot);
       const chapterCount = chapterFiles.length;
       const outputs = fs.existsSync(outputRoot)
-        ? fs.readdirSync(outputRoot).filter((name) => name.endsWith(".docx"))
+        ? fs.readdirSync(outputRoot).filter((name) => name.endsWith(".docx") && !name.startsWith("~$"))
         : [];
       let status = null;
       let recentRuns = [];
@@ -380,6 +382,50 @@ function validateBookName(bookName) {
   }
 }
 
+function validateOutputFileName(fileName) {
+  if (!fileName || typeof fileName !== "string") {
+    throw new Error("fileName is required.");
+  }
+  if (fileName !== path.basename(fileName)) {
+    throw new Error("Invalid fileName.");
+  }
+  if (!/\.docx$/i.test(fileName)) {
+    throw new Error("Only .docx output files can be opened.");
+  }
+}
+
+function openFileWithDefaultApp(filePath) {
+  const child = spawn("powershell.exe", [
+    "-NoProfile",
+    "-Command",
+    "Start-Process -LiteralPath $args[0]",
+    filePath
+  ], {
+    detached: true,
+    stdio: "ignore"
+  });
+
+  child.unref();
+}
+
+function openFolder(folderPath) {
+  const child = spawn("explorer.exe", [folderPath], {
+    detached: true,
+    stdio: "ignore"
+  });
+
+  child.unref();
+}
+
+function revealFileInExplorer(filePath) {
+  const child = spawn("explorer.exe", ["/select,", filePath], {
+    detached: true,
+    stdio: "ignore"
+  });
+
+  child.unref();
+}
+
 function pushArg(args, flag, value) {
   if (value === undefined || value === null || value === "") {
     return;
@@ -536,6 +582,98 @@ const server = http.createServer(async (req, res) => {
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
       workspaces: listWorkspaces()
     });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-output") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const fileName = body.fileName;
+
+      validateBookName(bookName);
+      validateOutputFileName(fileName);
+
+      const paths = getWorkspacePaths(bookName);
+      const outputPath = path.join(paths.outputRoot, fileName);
+
+      if (!outputPath.startsWith(paths.outputRoot)) {
+        sendJson(res, 400, { error: "Invalid output file path." });
+        return;
+      }
+
+      if (!fs.existsSync(outputPath)) {
+        sendJson(res, 404, { error: "Output document not found." });
+        return;
+      }
+
+      openFileWithDefaultApp(outputPath);
+      sendJson(res, 200, {
+        opened: true,
+        bookName,
+        fileName
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-output-folder") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+
+      validateBookName(bookName);
+
+      const paths = getWorkspacePaths(bookName);
+      if (!fs.existsSync(paths.outputRoot)) {
+        sendJson(res, 404, { error: "Output folder not found." });
+        return;
+      }
+
+      openFolder(paths.outputRoot);
+      sendJson(res, 200, {
+        opened: true,
+        bookName
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/reveal-output") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const fileName = body.fileName;
+
+      validateBookName(bookName);
+      validateOutputFileName(fileName);
+
+      const paths = getWorkspacePaths(bookName);
+      const outputPath = path.join(paths.outputRoot, fileName);
+
+      if (!outputPath.startsWith(paths.outputRoot)) {
+        sendJson(res, 400, { error: "Invalid output file path." });
+        return;
+      }
+
+      if (!fs.existsSync(outputPath)) {
+        sendJson(res, 404, { error: "Output document not found." });
+        return;
+      }
+
+      revealFileInExplorer(outputPath);
+      sendJson(res, 200, {
+        opened: true,
+        bookName,
+        fileName
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
     return;
   }
 

@@ -490,6 +490,66 @@ textarea {
   border-left: 4px solid rgba(201, 124, 55, 0.7);
 }
 
+.build-output-wrap {
+  margin-top: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.build-output-title {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.build-output-list {
+  display: grid;
+  gap: 10px;
+  min-height: 260px;
+  align-content: start;
+}
+
+.build-output-item,
+.build-output-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #fbf6ee;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+}
+
+.build-output-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.build-output-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.build-output-meta strong,
+.build-output-meta span,
+.build-output-empty {
+  word-break: break-word;
+}
+
+.build-output-meta span,
+.build-output-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.build-open-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -822,6 +882,16 @@ textarea {
   .toc-preview {
     min-height: 320px;
     height: 320px;
+  }
+
+  .build-output-item,
+  .build-output-empty {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .build-output-actions {
+    justify-content: stretch;
   }
 
   .modal-header,

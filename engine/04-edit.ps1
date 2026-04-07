@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
     [switch]$Strict
@@ -133,10 +133,10 @@ function Get-LocalizedCheckName {
         "11. Chapter length sanity check" { return "11. $(Get-LocText 'check11')" }
         "12. Token-limit truncation check" { return "12. $(Get-LocText 'check12')" }
         "13. TODO marker check" { return "13. $(Get-LocText 'check13')" }
+        "14. Whole-document fenced markdown check" { return "14. æ•´ç«  Markdown ä»£ç å—åŒ…è£¹æ£€æŸ¥" }
         default { return $Name }
     }
 }
-
 function Get-LocalizedCheckDetail {
     param(
         [Parameter(Mandatory=$true)]
@@ -227,6 +227,12 @@ function Get-LocalizedCheckDetail {
     if ($Detail -eq "No TODO markers found in buildable chapter files.") {
         return (Get-LocText 'todo_ok')
     }
+    if ($Detail -match '^Chapters wrapped in whole-document markdown fences:\s+(.+)$') {
+        return "以下章节被整章 markdown 代码块包裹：$($Matches[1])"
+    }
+    if ($Detail -eq "No chapters were wrapped in whole-document markdown fences.") {
+        return "未发现整章被 Markdown 代码块整体包裹的章节。"
+    }
 
     return $Detail
 }
@@ -251,10 +257,10 @@ function Get-LocalizedIssueMessage {
         "Token usage metadata missing; token-limit check could not be verified." { return (Get-LocText 'issue_token_missing') }
         "Chapter output tokens reached max_tokens and may be truncated." { return (Get-LocText 'issue_token_hit') }
         "Found TODO marker." { return (Get-LocText 'issue_todo') }
+        "Chapter body is wrapped in a whole-document markdown code fence." { return "章节正文被整章 Markdown 代码块包裹，标题可能无法进入目录。" }
         default { return $Message }
     }
 }
-
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
 Set-SageCurrentStep -Context $Context -Step "edit" -Data @{
@@ -351,6 +357,16 @@ function Get-FrontMatterValue {
     }
 
     return $ValueMatch.Groups[1].Value.Trim().Trim('"')
+}
+
+function Test-WholeDocumentMarkdownFence {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $Normalized = $Content -replace "`r", ""
+    return [regex]::IsMatch($Normalized.Trim(), '^(?:```markdown|```md|```)\s*\n[\s\S]*\n```$')
 }
 
 if (!(Test-Path $WorkspaceRoot)) {
@@ -524,6 +540,7 @@ $shortFiles = @()
 $tokenLimitedFiles = @()
 $tokenMetadataMissingFiles = @()
 $todoFiles = @()
+$wholeDocumentFencedFiles = @()
 foreach ($file in $buildFiles) {
     $raw = Get-Content $file.FullName -Raw
     $body = Get-MarkdownBodyText -Content $raw
@@ -542,6 +559,11 @@ foreach ($file in $buildFiles) {
     if ($charCount -lt 200 -or $lineCount -lt 5) {
         Add-Issue -Type "Warning" -Message "Chapter content looks unusually short and may be incomplete." -File $file.Name
         $shortFiles += $file.Name
+    }
+
+    if (Test-WholeDocumentMarkdownFence -Content $body) {
+        Add-Issue -Type "Error" -Message "Chapter body is wrapped in a whole-document markdown code fence." -File $file.Name
+        $wholeDocumentFencedFiles += $file.Name
     }
 
     $maxTokens = 0
@@ -595,6 +617,13 @@ if ($todoFiles.Count -gt 0) {
 }
 else {
     Add-CheckResult -Name "13. TODO marker check" -Status "Pass" -Detail "No TODO markers found in buildable chapter files."
+}
+
+if ($wholeDocumentFencedFiles.Count -gt 0) {
+    Add-CheckResult -Name "14. Whole-document fenced markdown check" -Status "Error" -Detail ("Chapters wrapped in whole-document markdown fences: " + ($wholeDocumentFencedFiles -join ", "))
+}
+else {
+    Add-CheckResult -Name "14. Whole-document fenced markdown check" -Status "Pass" -Detail "No chapters were wrapped in whole-document markdown fences."
 }
 
 $errorCount = [int](($issues | Where-Object { $_.Type -eq "Error" }).Count)
