@@ -97,13 +97,41 @@ function Save-XmlUtf8 {
     }
 }
 
+function Load-XmlDocument {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
+    $Document = New-Object System.Xml.XmlDocument
+    $Document.PreserveWhitespace = $true
+    $Document.Load($Path)
+    return $Document
+}
+
+function Write-Utf8Text {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $Utf8NoBom)
+}
+
 function Update-DocxFormatting {
     param(
         [Parameter(Mandatory=$true)]
         [string]$DocxPath,
 
         [Parameter(Mandatory=$true)]
-        [string]$TempRoot
+        [string]$TempRoot,
+
+        [Parameter(Mandatory=$true)]
+        [string]$DocumentTitle
     )
 
     if (!(Test-Path $DocxPath)) {
@@ -120,14 +148,28 @@ function Update-DocxFormatting {
 
     $StylesPath = Join-Path $ExtractRoot "word\styles.xml"
     $SettingsPath = Join-Path $ExtractRoot "word\settings.xml"
+    $DocumentPath = Join-Path $ExtractRoot "word\document.xml"
+    $DocumentRelsPath = Join-Path $ExtractRoot "word\_rels\document.xml.rels"
+    $ContentTypesPath = Join-Path $ExtractRoot "[Content_Types].xml"
+    $HeaderPath = Join-Path $ExtractRoot "word\header1.xml"
+    $FooterPath = Join-Path $ExtractRoot "word\footer1.xml"
     if (!(Test-Path -LiteralPath $StylesPath)) {
         throw "word/styles.xml not found in generated document."
     }
     if (!(Test-Path -LiteralPath $SettingsPath)) {
         throw "word/settings.xml not found in generated document."
     }
+    if (!(Test-Path -LiteralPath $DocumentPath)) {
+        throw "word/document.xml not found in generated document."
+    }
+    if (!(Test-Path -LiteralPath $DocumentRelsPath)) {
+        throw "word/_rels/document.xml.rels not found in generated document."
+    }
+    if (!(Test-Path -LiteralPath $ContentTypesPath)) {
+        throw "[Content_Types].xml not found in generated document."
+    }
 
-    [xml]$StylesDoc = Get-Content -LiteralPath $StylesPath
+    [xml]$StylesDoc = Load-XmlDocument -Path $StylesPath
     $Ns = New-Object System.Xml.XmlNamespaceManager($StylesDoc.NameTable)
     $Ns.AddNamespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
@@ -156,7 +198,7 @@ function Update-DocxFormatting {
 
     Save-XmlUtf8 -Document $StylesDoc -Path $StylesPath
 
-    [xml]$SettingsDoc = Get-Content -LiteralPath $SettingsPath
+    [xml]$SettingsDoc = Load-XmlDocument -Path $SettingsPath
     $SettingsNs = New-Object System.Xml.XmlNamespaceManager($SettingsDoc.NameTable)
     $SettingsNs.AddNamespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
 
@@ -173,6 +215,148 @@ function Update-DocxFormatting {
     [void]$UpdateFieldsNode.SetAttribute("val", $SettingsNs.LookupNamespace("w"), "true")
 
     Save-XmlUtf8 -Document $SettingsDoc -Path $SettingsPath
+
+    $EscapedTitle = [System.Security.SecurityElement]::Escape($DocumentTitle)
+    Write-Utf8Text -Path $HeaderPath -Content @"
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header" />
+      <w:jc w:val="center" />
+    </w:pPr>
+    <w:r>
+      <w:t xml:space="preserve">$EscapedTitle</w:t>
+    </w:r>
+  </w:p>
+</w:hdr>
+"@
+
+    Write-Utf8Text -Path $FooterPath -Content @"
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer" />
+      <w:jc w:val="center" />
+    </w:pPr>
+    <w:fldSimple w:instr=" PAGE ">
+      <w:r>
+        <w:rPr>
+          <w:noProof />
+        </w:rPr>
+        <w:t>1</w:t>
+      </w:r>
+    </w:fldSimple>
+  </w:p>
+</w:ftr>
+"@
+
+    [xml]$ContentTypesDoc = Load-XmlDocument -Path $ContentTypesPath
+    $CtNs = New-Object System.Xml.XmlNamespaceManager($ContentTypesDoc.NameTable)
+    $CtNs.AddNamespace("ct", "http://schemas.openxmlformats.org/package/2006/content-types")
+    $TypesRoot = $ContentTypesDoc.SelectSingleNode("/ct:Types", $CtNs)
+    if ($null -eq $TypesRoot) {
+        throw "content types root node not found in generated document."
+    }
+
+    if ($null -eq $ContentTypesDoc.SelectSingleNode("/ct:Types/ct:Override[@PartName='/word/header1.xml']", $CtNs)) {
+        $HeaderOverride = $ContentTypesDoc.CreateElement("Override", $CtNs.LookupNamespace("ct"))
+        [void]$HeaderOverride.SetAttribute("PartName", "/word/header1.xml")
+        [void]$HeaderOverride.SetAttribute("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml")
+        [void]$TypesRoot.AppendChild($HeaderOverride)
+    }
+
+    if ($null -eq $ContentTypesDoc.SelectSingleNode("/ct:Types/ct:Override[@PartName='/word/footer1.xml']", $CtNs)) {
+        $FooterOverride = $ContentTypesDoc.CreateElement("Override", $CtNs.LookupNamespace("ct"))
+        [void]$FooterOverride.SetAttribute("PartName", "/word/footer1.xml")
+        [void]$FooterOverride.SetAttribute("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml")
+        [void]$TypesRoot.AppendChild($FooterOverride)
+    }
+
+    Save-XmlUtf8 -Document $ContentTypesDoc -Path $ContentTypesPath
+
+    [xml]$DocRelsDoc = Load-XmlDocument -Path $DocumentRelsPath
+    $RelNs = New-Object System.Xml.XmlNamespaceManager($DocRelsDoc.NameTable)
+    $RelNs.AddNamespace("pr", "http://schemas.openxmlformats.org/package/2006/relationships")
+    $RelsRoot = $DocRelsDoc.SelectSingleNode("/pr:Relationships", $RelNs)
+    if ($null -eq $RelsRoot) {
+        throw "document relationships root node not found in generated document."
+    }
+
+    $HeaderRelId = "rIdSageHeader"
+    $FooterRelId = "rIdSageFooter"
+    $HeaderRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
+    $FooterRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
+
+    $HeaderRel = $DocRelsDoc.SelectSingleNode("/pr:Relationships/pr:Relationship[@Id='$HeaderRelId']", $RelNs)
+    if ($null -eq $HeaderRel) {
+        $HeaderRel = $DocRelsDoc.CreateElement("Relationship", $RelNs.LookupNamespace("pr"))
+        [void]$HeaderRel.SetAttribute("Id", $HeaderRelId)
+        [void]$HeaderRel.SetAttribute("Type", $HeaderRelType)
+        [void]$HeaderRel.SetAttribute("Target", "header1.xml")
+        [void]$RelsRoot.AppendChild($HeaderRel)
+    }
+    else {
+        [void]$HeaderRel.SetAttribute("Type", $HeaderRelType)
+        [void]$HeaderRel.SetAttribute("Target", "header1.xml")
+    }
+
+    $FooterRel = $DocRelsDoc.SelectSingleNode("/pr:Relationships/pr:Relationship[@Id='$FooterRelId']", $RelNs)
+    if ($null -eq $FooterRel) {
+        $FooterRel = $DocRelsDoc.CreateElement("Relationship", $RelNs.LookupNamespace("pr"))
+        [void]$FooterRel.SetAttribute("Id", $FooterRelId)
+        [void]$FooterRel.SetAttribute("Type", $FooterRelType)
+        [void]$FooterRel.SetAttribute("Target", "footer1.xml")
+        [void]$RelsRoot.AppendChild($FooterRel)
+    }
+    else {
+        [void]$FooterRel.SetAttribute("Type", $FooterRelType)
+        [void]$FooterRel.SetAttribute("Target", "footer1.xml")
+    }
+
+    Save-XmlUtf8 -Document $DocRelsDoc -Path $DocumentRelsPath
+
+    [xml]$DocumentDoc = Load-XmlDocument -Path $DocumentPath
+    $DocNs = New-Object System.Xml.XmlNamespaceManager($DocumentDoc.NameTable)
+    $DocNs.AddNamespace("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main")
+    $DocNs.AddNamespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
+
+    $BodyNode = $DocumentDoc.SelectSingleNode("/w:document/w:body", $DocNs)
+    if ($null -eq $BodyNode) {
+        throw "document body node not found in generated document."
+    }
+
+    $SectPrNode = $BodyNode.SelectSingleNode("w:sectPr", $DocNs)
+    if ($null -eq $SectPrNode) {
+        $SectPrNode = $DocumentDoc.SelectSingleNode("//w:sectPr", $DocNs)
+    }
+    if ($null -eq $SectPrNode) {
+        $SectPrNode = $DocumentDoc.CreateElement("w", "sectPr", $DocNs.LookupNamespace("w"))
+        [void]$BodyNode.AppendChild($SectPrNode)
+    }
+
+    @($SectPrNode.SelectNodes("w:headerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
+    @($SectPrNode.SelectNodes("w:footerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
+
+    $HeaderRef = $DocumentDoc.CreateElement("w", "headerReference", $DocNs.LookupNamespace("w"))
+    [void]$HeaderRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
+    [void]$HeaderRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $HeaderRelId)
+    [void]$SectPrNode.PrependChild($HeaderRef)
+
+    $FooterRef = $DocumentDoc.CreateElement("w", "footerReference", $DocNs.LookupNamespace("w"))
+    [void]$FooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
+    [void]$FooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
+    [void]$SectPrNode.InsertAfter($FooterRef, $HeaderRef)
+
+    $PageNumTypeNode = $SectPrNode.SelectSingleNode("w:pgNumType", $DocNs)
+    if ($null -eq $PageNumTypeNode) {
+        $PageNumTypeNode = $DocumentDoc.CreateElement("w", "pgNumType", $DocNs.LookupNamespace("w"))
+        [void]$SectPrNode.AppendChild($PageNumTypeNode)
+    }
+    [void]$PageNumTypeNode.SetAttribute("start", $DocNs.LookupNamespace("w"), "1")
+
+    Save-XmlUtf8 -Document $DocumentDoc -Path $DocumentPath
 
     Remove-Item -Path $DocxPath -Force -ErrorAction Stop
     [System.IO.Compression.ZipFile]::CreateFromDirectory($ExtractRoot, $DocxPath)
@@ -316,7 +500,7 @@ try {
         throw "Pandoc build failed."
     }
 
-    Update-DocxFormatting -DocxPath $OutputFile -TempRoot $BuildTempRoot
+    Update-DocxFormatting -DocxPath $OutputFile -TempRoot $BuildTempRoot -DocumentTitle $DocumentTitle
 
     Write-Host ""
     Write-Host "Build completed successfully:"
