@@ -7,6 +7,12 @@ const state = {
   runOutputLoadingKey: "",
   preflightCache: {},
   preflightLoadingBook: "",
+  coverCache: {},
+  coverLoadingBook: "",
+  coverCopyCache: {},
+  coverCopyLoadingBook: "",
+  frontmatterCache: {},
+  frontmatterLoadingBook: "",
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -277,6 +283,359 @@ function renderPreflightReport(item) {
   }
 
   panel.value = reportText;
+}
+
+function renderCoverForm(item) {
+  const form = $("#cover-form");
+  if (!form) {
+    return;
+  }
+
+  const titleField = form.querySelector('[name="title"]');
+  if (titleField) {
+    titleField.value = item?.objectiveData?.title || "";
+  }
+}
+
+function renderCoverGallerySection(targetId, bookName, section, files) {
+  const panel = document.querySelector(targetId);
+  if (!panel) {
+    return;
+  }
+
+  if (!bookName) {
+    panel.innerHTML = '<div class="cover-gallery-empty">选择一个 BookName 后，这里会显示封面结果。</div>';
+    return;
+  }
+
+  if (!files || !files.length) {
+    panel.innerHTML = '<div class="cover-gallery-empty">当前分组还没有结果。</div>';
+    return;
+  }
+
+  panel.innerHTML = files.map((fileName) => {
+    const isPdf = /\.pdf$/i.test(fileName);
+    const preview = isPdf
+      ? '<div class="cover-thumb cover-thumb-pdf">PDF</div>'
+      : `<img class="cover-thumb" src="/api/cover-image?bookName=${encodeURIComponent(bookName)}&section=${encodeURIComponent(section)}&fileName=${encodeURIComponent(fileName)}" alt="${escapeHtml(fileName)}">`;
+
+    return `
+      <div class="cover-card">
+        ${preview}
+        <div class="cover-card-meta">
+          <strong>${escapeHtml(fileName)}</strong>
+          <div class="cover-card-actions">
+            <button class="ghost-button cover-file-button" type="button" data-cover-section="${escapeHtml(section)}" data-cover-file="${escapeHtml(fileName)}">定位文件</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  panel.querySelectorAll("[data-cover-file]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        const currentBookName = requireBookName();
+        await api("/api/reveal-cover-file", {
+          method: "POST",
+          body: JSON.stringify({
+            bookName: currentBookName,
+            section: button.dataset.coverSection,
+            fileName: button.dataset.coverFile
+          })
+        });
+        setStatusBadge("已定位", "success");
+        setLog(`已在资源管理器中定位封面文件：${button.dataset.coverFile}`);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
+  });
+}
+
+function formatCoverCopyCandidates(copyJson) {
+  const candidates = copyJson?.candidates || {};
+  const editorNotes = Array.isArray(copyJson?.editor_notes) ? copyJson.editor_notes : [];
+  const blocks = [];
+
+  [
+    ["副标题候选", candidates.subtitle || []],
+    ["封底短句候选", candidates.back_cover_hook || []],
+    ["腰封文案候选", candidates.obi_copy || []],
+    ["宣传语候选", candidates.marketing_tagline || []]
+  ].forEach(([title, items]) => {
+    blocks.push(`## ${title}`);
+    if (items.length) {
+      items.forEach((item) => blocks.push(`- ${item}`));
+    } else {
+      blocks.push("- ");
+    }
+    blocks.push("");
+  });
+
+  blocks.push("## 编辑备注");
+  if (editorNotes.length) {
+    editorNotes.forEach((item) => blocks.push(`- ${item}`));
+  } else {
+    blocks.push("- ");
+  }
+
+  return blocks.join("\n");
+}
+
+function setCoverCopyFields(copyJson) {
+  const selected = copyJson?.selected || {};
+  setFormValue("#cover-copy-subtitle", selected.subtitle || "");
+  setFormValue("#cover-copy-hook", selected.back_cover_hook || "");
+  setFormValue("#cover-copy-obi", selected.obi_copy || "");
+  setFormValue("#cover-copy-tagline", selected.marketing_tagline || "");
+  setFormValue("#cover-copy-spine", selected.spine_text || "");
+  setFormValue("#cover-copy-blurb", selected.back_cover_blurb || "");
+  setFormValue("#cover-copy-author-bio", selected.author_bio || "");
+  setFormValue("#cover-copy-editor-notes", Array.isArray(copyJson?.editor_notes) ? copyJson.editor_notes.join("\n") : "");
+  const candidatesPanel = $("#cover-copy-candidates");
+  if (candidatesPanel) {
+    candidatesPanel.value = copyJson ? formatCoverCopyCandidates(copyJson) : "运行 08g-copy.ps1 后，这里会显示候选池。";
+  }
+}
+
+function renderCoverCopyEditor(item) {
+  if (!item) {
+    setCoverCopyFields(null);
+    return;
+  }
+
+  const cached = state.coverCopyCache[item.bookName] || null;
+  if (!cached) {
+    setCoverCopyFields(null);
+    if (state.coverCopyLoadingBook !== item.bookName) {
+      loadCoverCopy(item);
+    }
+    return;
+  }
+
+  setCoverCopyFields(cached);
+}
+
+async function loadCoverCopy(item) {
+  if (!item) {
+    return;
+  }
+
+  state.coverCopyLoadingBook = item.bookName;
+  try {
+    const result = await api(`/api/cover-copy?bookName=${encodeURIComponent(item.bookName)}&t=${Date.now()}`);
+    state.coverCopyCache[item.bookName] = result.copyJson || null;
+  } catch (error) {
+    state.coverCopyCache[item.bookName] = {
+      selected: {
+        subtitle: "",
+        back_cover_hook: "",
+        obi_copy: "",
+        marketing_tagline: "",
+        back_cover_blurb: "",
+        author_bio: "",
+        spine_text: ""
+      },
+      candidates: {
+        subtitle: [],
+        back_cover_hook: [],
+        obi_copy: [],
+        marketing_tagline: []
+      },
+      editor_notes: [`读取封面文案失败：${error.message}`]
+    };
+  } finally {
+    state.coverCopyLoadingBook = "";
+    renderCoverCopyEditor(item);
+  }
+}
+
+async function saveCoverCopy() {
+  const bookName = requireBookName();
+  const payload = {
+    bookName,
+    selected: {
+      subtitle: ($("#cover-copy-subtitle")?.value || "").trim(),
+      back_cover_hook: ($("#cover-copy-hook")?.value || "").trim(),
+      obi_copy: ($("#cover-copy-obi")?.value || "").trim(),
+      marketing_tagline: ($("#cover-copy-tagline")?.value || "").trim(),
+      back_cover_blurb: ($("#cover-copy-blurb")?.value || "").trim(),
+      author_bio: ($("#cover-copy-author-bio")?.value || "").trim(),
+      spine_text: ($("#cover-copy-spine")?.value || "").trim()
+    },
+    editorNotes: ($("#cover-copy-editor-notes")?.value || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  };
+
+  const cached = state.coverCopyCache[bookName] || {};
+  payload.candidates = cached.candidates || {};
+
+  const result = await api("/api/cover-copy", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  state.coverCopyCache[bookName] = result.copyJson || payload;
+  renderCoverCopyEditor(getSelectedWorkspaceItem());
+  setStatusBadge("已保存", "success");
+  setLog(`封面文案已保存到 ${bookName} 的 cover_copy.json`);
+}
+
+function setFrontmatterFields(frontmatter) {
+  setFormValue(
+    "#frontmatter-cover-page",
+    frontmatter?.coverPage || "è¿è¡Œ 08h-frontmatter.ps1 åŽï¼Œè¿™é‡Œä¼šæ˜¾ç¤ºå°é¢é¡µ markdownã€‚"
+  );
+  setFormValue(
+    "#frontmatter-title-page",
+    frontmatter?.titlePage || "è¿è¡Œ 08h-frontmatter.ps1 åŽï¼Œè¿™é‡Œä¼šæ˜¾ç¤ºæ‰‰é¡µ markdownã€‚"
+  );
+  setFormValue(
+    "#frontmatter-copyright-page",
+    frontmatter?.copyrightPage || "è¿è¡Œ 08h-frontmatter.ps1 åŽï¼Œè¿™é‡Œä¼šæ˜¾ç¤ºç‰ˆæƒé¡µ markdownã€‚"
+  );
+}
+
+function renderFrontmatterEditor(item) {
+  if (!item) {
+    setFrontmatterFields(null);
+    return;
+  }
+
+  const cached = state.frontmatterCache[item.bookName] || null;
+  if (!cached) {
+    setFrontmatterFields(null);
+    if (state.frontmatterLoadingBook !== item.bookName) {
+      loadFrontmatter(item);
+    }
+    return;
+  }
+
+  setFrontmatterFields(cached);
+}
+
+async function loadFrontmatter(item) {
+  if (!item) {
+    return;
+  }
+
+  state.frontmatterLoadingBook = item.bookName;
+  try {
+    const result = await api(`/api/frontmatter?bookName=${encodeURIComponent(item.bookName)}&t=${Date.now()}`);
+    state.frontmatterCache[item.bookName] = result.frontmatter || null;
+  } catch (error) {
+    state.frontmatterCache[item.bookName] = {
+      coverPage: `è¯»å–å°é¢é¡µå¤±è´¥ï¼š${error.message}`,
+      titlePage: `è¯»å–æ‰‰é¡µå¤±è´¥ï¼š${error.message}`,
+      copyrightPage: `è¯»å–ç‰ˆæƒé¡µå¤±è´¥ï¼š${error.message}`
+    };
+  } finally {
+    state.frontmatterLoadingBook = "";
+    renderFrontmatterEditor(item);
+  }
+}
+
+async function saveFrontmatter() {
+  const bookName = requireBookName();
+  const payload = {
+    bookName,
+    coverPage: $("#frontmatter-cover-page")?.value || "",
+    titlePage: $("#frontmatter-title-page")?.value || "",
+    copyrightPage: $("#frontmatter-copyright-page")?.value || ""
+  };
+
+  const result = await api("/api/frontmatter", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  state.frontmatterCache[bookName] = result.frontmatter || payload;
+  renderFrontmatterEditor(getSelectedWorkspaceItem());
+  setStatusBadge("å·²ä¿å­˜", "success");
+  setLog(`å‰ç½®ä¸‰é¡µå·²ä¿å­˜åˆ° ${bookName} çš„ 00_frontmatter/ebook ç›®å½•ã€‚`);
+}
+
+function renderCoverPanel(item) {
+  const summary = $("#cover-summary");
+  const report = $("#cover-report");
+  const cached = item ? state.coverCache[item.bookName] : null;
+  const artifacts = cached || item?.coverArtifacts || null;
+
+  renderCoverForm(item);
+
+  if (!summary || !report) {
+    return;
+  }
+
+  if (!item) {
+    summary.textContent = "选择一个 BookName 后，这里会显示封面系统的输出摘要。";
+    report.value = "运行 08-cover.ps1 后，这里会显示 final/cover_report.md 的内容。";
+    renderCoverGallerySection("#cover-drafts", "", "drafts", []);
+    renderCoverGallerySection("#cover-layout", "", "layout", []);
+    renderCoverGallerySection("#cover-mockup", "", "mockup", []);
+    renderCoverGallerySection("#cover-final", "", "final", []);
+    return;
+  }
+
+  if (!artifacts) {
+    summary.textContent = "当前项目还没有 07_cover 输出。";
+    report.value = "当前项目还没有生成 cover_report.md。";
+    renderCoverGallerySection("#cover-drafts", item.bookName, "drafts", []);
+    renderCoverGallerySection("#cover-layout", item.bookName, "layout", []);
+    renderCoverGallerySection("#cover-mockup", item.bookName, "mockup", []);
+    renderCoverGallerySection("#cover-final", item.bookName, "final", []);
+    if (state.coverLoadingBook !== item.bookName) {
+      loadCoverArtifacts(item);
+    }
+    return;
+  }
+
+  summary.textContent =
+    `brief: ${artifacts.hasBrief ? "已生成" : "未生成"} · ` +
+    `strategy: ${artifacts.hasStrategy ? "已生成" : "未生成"} · ` +
+    `drafts: ${artifacts.draftFiles?.length || 0} · ` +
+    `layout: ${artifacts.layoutFiles?.length || 0} · ` +
+    `mockup: ${artifacts.mockupFiles?.length || 0} · ` +
+    `final: ${artifacts.finalFiles?.length || 0}` +
+    (artifacts.topCandidate ? ` · top: ${artifacts.topCandidate}` : "");
+
+  report.value = artifacts.reportText || "当前项目还没有生成 cover_report.md。";
+
+  renderCoverGallerySection("#cover-drafts", item.bookName, "drafts", artifacts.draftFiles || []);
+  renderCoverGallerySection("#cover-layout", item.bookName, "layout", artifacts.layoutFiles || []);
+  renderCoverGallerySection("#cover-mockup", item.bookName, "mockup", artifacts.mockupFiles || []);
+  renderCoverGallerySection("#cover-final", item.bookName, "final", artifacts.finalFiles || []);
+}
+
+async function loadCoverArtifacts(item) {
+  if (!item) {
+    return;
+  }
+
+  state.coverLoadingBook = item.bookName;
+  try {
+    const result = await api(`/api/cover-files?bookName=${encodeURIComponent(item.bookName)}&t=${Date.now()}`);
+    state.coverCache[item.bookName] = result.coverArtifacts || null;
+  } catch (error) {
+    state.coverCache[item.bookName] = {
+      hasBrief: false,
+      hasStrategy: false,
+      draftFiles: [],
+      layoutFiles: [],
+      mockupFiles: [],
+      finalFiles: [],
+      selectedReviewFiles: [],
+      topCandidate: "",
+      reportText: `读取封面结果失败：${error.message}`
+    };
+  } finally {
+    state.coverLoadingBook = "";
+    renderCoverPanel(item);
+  }
 }
 
 function getSelectedChapterFileName() {
@@ -873,6 +1232,9 @@ function renderWorkspaceSelection(item) {
   renderPreflightReport(item);
   renderChapterBrowser(item);
   renderBuildOutputs(item);
+  renderCoverPanel(item);
+  renderCoverCopyEditor(item);
+  renderFrontmatterEditor(item);
 }
 
 function renderWorkspaces(workspaces) {
@@ -933,11 +1295,24 @@ async function pollJob(jobId) {
   if (job.meta?.route === "edit" && job.meta?.bookName) {
     delete state.preflightCache[job.meta.bookName];
   }
+  if (job.meta?.route === "cover" && job.meta?.bookName) {
+    delete state.coverCache[job.meta.bookName];
+    delete state.coverCopyCache[job.meta.bookName];
+    delete state.frontmatterCache[job.meta.bookName];
+  }
   await refreshStatus();
   if (job.meta?.route === "edit" && job.meta?.bookName) {
     const selected = state.workspaces.find((item) => item.bookName === job.meta.bookName) || null;
     if (selected) {
       loadPreflightReport(selected);
+    }
+  }
+  if (job.meta?.route === "cover" && job.meta?.bookName) {
+    const selected = state.workspaces.find((item) => item.bookName === job.meta.bookName) || null;
+    if (selected) {
+      loadCoverArtifacts(selected);
+      loadCoverCopy(selected);
+      loadFrontmatter(selected);
     }
   }
 }
@@ -1071,6 +1446,37 @@ function setupForms() {
     }
   });
 
+  $("#cover-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = formToObject(event.currentTarget);
+      payload.bookName = requireBookName();
+      payload.variants = intOrEmpty(payload.variants) || 4;
+      await run("cover", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#save-cover-copy").addEventListener("click", async () => {
+    try {
+      await saveCoverCopy();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#save-frontmatter").addEventListener("click", async () => {
+    try {
+      await saveFrontmatter();
+    } catch (error) {
+      setStatusBadge("å¤±è´¥", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#refresh-status").addEventListener("click", async () => {
     try {
       await refreshStatus();
@@ -1179,6 +1585,32 @@ function setupForms() {
     const selected = state.workspaces.find((item) => item.bookName === getBookName());
     state.selectedRunKey = "";
     renderWorkspaceSelection(selected || null);
+  });
+
+  [
+    ["#open-cover-drafts", "drafts"],
+    ["#open-cover-layout", "layout"],
+    ["#open-cover-mockup", "mockup"],
+    ["#open-cover-final", "final"]
+  ].forEach(([selector, section]) => {
+    const button = document.querySelector(selector);
+    if (!button) {
+      return;
+    }
+    button.addEventListener("click", async () => {
+      try {
+        const bookName = requireBookName();
+        await api("/api/open-cover-folder", {
+          method: "POST",
+          body: JSON.stringify({ bookName, section })
+        });
+        setStatusBadge("已打开", "success");
+        setLog(`已打开封面目录：${section}`);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
   });
 }
 

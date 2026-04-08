@@ -19,6 +19,21 @@ function getWorkspacePaths(bookName) {
   const bookRoot = path.join(workspacePath, "sagewrite", "book");
   const logRoot = path.join(bookRoot, "logs");
   const outputRoot = path.join(bookRoot, "04_output");
+  const coverRoot = resolveCoverRoot(bookRoot, "ebook");
+  const coverBriefRoot = path.join(coverRoot, "brief");
+  const coverDraftRoot = path.join(coverRoot, "drafts");
+  const coverReviewRoot = path.join(coverRoot, "reviews");
+  const coverLayoutRoot = path.join(coverRoot, "layout");
+  const coverMockupRoot = path.join(coverRoot, "mockup");
+  const coverFinalRoot = path.join(coverRoot, "final");
+  const coverCopyJsonPath = path.join(coverBriefRoot, "cover_copy.json");
+  const coverCopyMdPath = path.join(coverBriefRoot, "cover_copy.md");
+  const frontmatterBaseRoot = path.join(bookRoot, "00_frontmatter");
+  const frontmatterRoot = path.join(frontmatterBaseRoot, "ebook");
+  const frontmatterManifestPath = path.join(frontmatterRoot, "frontmatter_manifest.json");
+  const coverPagePath = path.join(frontmatterRoot, "cover_page.md");
+  const titlePagePath = path.join(frontmatterRoot, "title_page.md");
+  const copyrightPagePath = path.join(frontmatterRoot, "copyright_page.md");
   const webRunRoot = path.join(logRoot, "webui-runs");
   const webRunIndexPath = path.join(logRoot, "webui_runs.jsonl");
 
@@ -27,9 +42,57 @@ function getWorkspacePaths(bookName) {
     bookRoot,
     logRoot,
     outputRoot,
+    coverRoot,
+    coverBriefRoot,
+    coverDraftRoot,
+    coverReviewRoot,
+    coverLayoutRoot,
+    coverMockupRoot,
+    coverFinalRoot,
+    coverCopyJsonPath,
+    coverCopyMdPath,
+    frontmatterBaseRoot,
+    frontmatterRoot,
+    frontmatterManifestPath,
+    coverPagePath,
+    titlePagePath,
+    copyrightPagePath,
     webRunRoot,
     webRunIndexPath
   };
+}
+
+function hasCoverArtifactsAt(root) {
+  if (!fs.existsSync(root)) {
+    return false;
+  }
+
+  const checks = [
+    path.join(root, "brief", "cover_brief.json"),
+    path.join(root, "brief", "cover_strategy.json"),
+    path.join(root, "brief", "cover_copy.json"),
+    path.join(root, "drafts"),
+    path.join(root, "layout"),
+    path.join(root, "mockup"),
+    path.join(root, "final")
+  ];
+
+  return checks.some((item) => fs.existsSync(item));
+}
+
+function resolveCoverRoot(bookRoot, edition = "ebook") {
+  const baseRoot = path.join(bookRoot, "07_cover");
+  const editionRoot = path.join(baseRoot, edition);
+
+  if (hasCoverArtifactsAt(editionRoot)) {
+    return editionRoot;
+  }
+
+  if (edition === "ebook" && hasCoverArtifactsAt(baseRoot)) {
+    return baseRoot;
+  }
+
+  return editionRoot;
 }
 
 function ensureDir(dirPath) {
@@ -80,6 +143,20 @@ function readJsonLines(filePath) {
       }
     })
     .filter(Boolean);
+}
+
+function listFilesByExtensions(dirPath, extensions) {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  const normalized = extensions.map((ext) => ext.toLowerCase());
+  return fs.readdirSync(dirPath)
+    .filter((name) => {
+      const ext = path.extname(name).toLowerCase();
+      return normalized.includes(ext);
+    })
+    .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
 }
 
 function parseFrontMatterMarkdown(filePath) {
@@ -145,6 +222,111 @@ function deriveSummary(output, fallbackMessage) {
   return lines.at(-1) || fallbackMessage;
 }
 
+function getCoverArtifacts(bookRoot) {
+  const coverRoot = resolveCoverRoot(bookRoot, "ebook");
+  const briefRoot = path.join(coverRoot, "brief");
+  const draftRoot = path.join(coverRoot, "drafts");
+  const reviewRoot = path.join(coverRoot, "reviews");
+  const layoutRoot = path.join(coverRoot, "layout");
+  const mockupRoot = path.join(coverRoot, "mockup");
+  const finalRoot = path.join(coverRoot, "final");
+
+  const reviewPath = path.join(reviewRoot, "cover_review.json");
+  const reportPath = path.join(finalRoot, "cover_report.md");
+
+  let review = null;
+  if (fs.existsSync(reviewPath)) {
+    try {
+      review = readJsonFile(reviewPath);
+    } catch {
+      review = null;
+    }
+  }
+
+  return {
+    hasBrief: fs.existsSync(path.join(briefRoot, "cover_brief.json")),
+    hasStrategy: fs.existsSync(path.join(briefRoot, "cover_strategy.json")),
+    draftFiles: listFilesByExtensions(draftRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    layoutFiles: listFilesByExtensions(layoutRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    mockupFiles: listFilesByExtensions(mockupRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    finalFiles: listFilesByExtensions(finalRoot, [".png", ".jpg", ".jpeg", ".webp", ".pdf"]),
+    selectedReviewFiles: Array.isArray(review?.selected_files) ? review.selected_files : [],
+    topCandidate: review?.summary?.top_candidate || "",
+    reportText: fs.existsSync(reportPath) ? fs.readFileSync(reportPath, "utf8") : ""
+  };
+}
+
+function getFrontmatterPayload(paths) {
+  const readText = (filePath) => (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "") : "");
+  let manifest = null;
+  if (fs.existsSync(paths.frontmatterManifestPath)) {
+    try {
+      manifest = readJsonFile(paths.frontmatterManifestPath);
+    } catch {
+      manifest = null;
+    }
+  }
+
+  return {
+    manifest,
+    coverPage: readText(paths.coverPagePath),
+    titlePage: readText(paths.titlePagePath),
+    copyrightPage: readText(paths.copyrightPagePath)
+  };
+}
+
+function buildCoverCopyMarkdown(copyData) {
+  const selected = copyData?.selected || {};
+  const candidates = copyData?.candidates || {};
+  const editorNotes = Array.isArray(copyData?.editor_notes) ? copyData.editor_notes : [];
+
+  const lines = [];
+  lines.push("# Cover Copy");
+  lines.push("");
+  lines.push("## Selected");
+  lines.push("");
+  lines.push(`- Subtitle: ${selected.subtitle || ""}`);
+  lines.push(`- Back cover hook: ${selected.back_cover_hook || ""}`);
+  lines.push(`- Obi copy: ${selected.obi_copy || ""}`);
+  lines.push(`- Marketing tagline: ${selected.marketing_tagline || ""}`);
+  lines.push(`- Spine text: ${selected.spine_text || ""}`);
+  lines.push("");
+  lines.push("## Back Cover Blurb");
+  lines.push("");
+  lines.push(selected.back_cover_blurb || "");
+  lines.push("");
+  lines.push("## Author Bio");
+  lines.push("");
+  lines.push(selected.author_bio || "");
+  lines.push("");
+  lines.push("## Candidate Pools");
+  lines.push("");
+
+  [
+    ["Subtitle", candidates.subtitle || []],
+    ["Back Cover Hook", candidates.back_cover_hook || []],
+    ["Obi Copy", candidates.obi_copy || []],
+    ["Marketing Tagline", candidates.marketing_tagline || []]
+  ].forEach(([title, items]) => {
+    lines.push(`### ${title}`);
+    if (Array.isArray(items) && items.length) {
+      items.forEach((item) => lines.push(`- ${item}`));
+    } else {
+      lines.push("- ");
+    }
+    lines.push("");
+  });
+
+  lines.push("## Editor Notes");
+  if (editorNotes.length) {
+    editorNotes.forEach((item) => lines.push(`- ${item}`));
+  } else {
+    lines.push("- ");
+  }
+
+  return lines.join("\r\n");
+}
+
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
@@ -205,6 +387,7 @@ function listWorkspaces() {
       const runLogPath = path.join(logRoot, "run_history.jsonl");
       const webRunIndexPath = path.join(logRoot, "webui_runs.jsonl");
       const editReportJsonPath = path.join(logRoot, "edit_report.json");
+      const coverArtifacts = getCoverArtifacts(bookRoot);
       const tocContent = fs.existsSync(tocPath)
         ? fs.readFileSync(tocPath, "utf8")
         : "";
@@ -262,6 +445,7 @@ function listWorkspaces() {
         chapterFiles,
         chapterCount,
         outputFiles: outputs,
+        coverArtifacts,
         status,
         recentRuns: mergedRuns,
         editReport
@@ -391,6 +575,33 @@ function validateOutputFileName(fileName) {
   }
   if (!/\.docx$/i.test(fileName)) {
     throw new Error("Only .docx output files can be opened.");
+  }
+}
+
+function validateAssetFileName(fileName) {
+  if (!fileName || typeof fileName !== "string") {
+    throw new Error("fileName is required.");
+  }
+  if (fileName !== path.basename(fileName)) {
+    throw new Error("Invalid fileName.");
+  }
+  if (!/\.(png|jpg|jpeg|webp|pdf)$/i.test(fileName)) {
+    throw new Error("Unsupported asset file type.");
+  }
+}
+
+function resolveCoverSectionRoot(paths, section) {
+  switch (section) {
+    case "drafts":
+      return paths.coverDraftRoot;
+    case "layout":
+      return paths.coverLayoutRoot;
+    case "mockup":
+      return paths.coverMockupRoot;
+    case "final":
+      return paths.coverFinalRoot;
+    default:
+      throw new Error("Invalid cover section.");
   }
 }
 
@@ -559,6 +770,19 @@ async function handleRun(route, body, res) {
         job = runScript("05-build.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
+        ], { route, bookName });
+        break;
+      case "cover":
+        job = runScript("08-cover.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Variants", value: body.variants || 4 },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) },
+          { flag: "-SkipLayout", type: "switch", enabled: Boolean(body.skipLayout) },
+          { flag: "-SkipMockup", type: "switch", enabled: Boolean(body.skipMockup) }
         ], { route, bookName });
         break;
       default:
@@ -922,6 +1146,302 @@ const server = http.createServer(async (req, res) => {
         reportText: fs.readFileSync(textPath, "utf8"),
         reportJson: json
       });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/cover-files") {
+    const bookName = url.searchParams.get("bookName");
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+      const artifacts = getCoverArtifacts(paths.bookRoot);
+      sendJson(res, 200, {
+        bookName,
+        coverArtifacts: artifacts
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/cover-copy") {
+    const bookName = url.searchParams.get("bookName");
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+
+      if (!fs.existsSync(paths.coverCopyJsonPath)) {
+        sendJson(res, 404, { error: "cover_copy.json not found." });
+        return;
+      }
+
+      const copyJson = readJsonFile(paths.coverCopyJsonPath);
+      const copyMarkdown = fs.existsSync(paths.coverCopyMdPath)
+        ? fs.readFileSync(paths.coverCopyMdPath, "utf8")
+        : buildCoverCopyMarkdown(copyJson);
+
+      sendJson(res, 200, {
+        bookName,
+        copyJson,
+        copyMarkdown
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/cover-copy") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const selected = body.selected || {};
+      const candidates = body.candidates || {};
+      const editorNotes = Array.isArray(body.editorNotes) ? body.editorNotes : [];
+
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+
+      if (!fs.existsSync(paths.coverCopyJsonPath)) {
+        sendJson(res, 404, { error: "cover_copy.json not found." });
+        return;
+      }
+
+      const existing = readJsonFile(paths.coverCopyJsonPath);
+      const nextData = {
+        ...existing,
+        selected: {
+          ...(existing.selected || {}),
+          subtitle: String(selected.subtitle || ""),
+          back_cover_hook: String(selected.back_cover_hook || ""),
+          obi_copy: String(selected.obi_copy || ""),
+          marketing_tagline: String(selected.marketing_tagline || ""),
+          back_cover_blurb: String(selected.back_cover_blurb || ""),
+          author_bio: String(selected.author_bio || ""),
+          spine_text: String(selected.spine_text || "")
+        },
+        candidates: {
+          ...(existing.candidates || {}),
+          subtitle: Array.isArray(candidates.subtitle) ? candidates.subtitle : (existing.candidates?.subtitle || []),
+          back_cover_hook: Array.isArray(candidates.back_cover_hook) ? candidates.back_cover_hook : (existing.candidates?.back_cover_hook || []),
+          obi_copy: Array.isArray(candidates.obi_copy) ? candidates.obi_copy : (existing.candidates?.obi_copy || []),
+          marketing_tagline: Array.isArray(candidates.marketing_tagline) ? candidates.marketing_tagline : (existing.candidates?.marketing_tagline || [])
+        },
+        editor_notes: editorNotes.map((item) => String(item || "")).filter(Boolean)
+      };
+
+      fs.writeFileSync(paths.coverCopyJsonPath, `${JSON.stringify(nextData, null, 2)}\n`, "utf8");
+      fs.writeFileSync(paths.coverCopyMdPath, buildCoverCopyMarkdown(nextData), "utf8");
+
+      sendJson(res, 200, {
+        bookName,
+        saved: true,
+        copyJson: nextData,
+        copyMarkdown: buildCoverCopyMarkdown(nextData)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/frontmatter") {
+    const bookName = url.searchParams.get("bookName");
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+      sendJson(res, 200, {
+        bookName,
+        frontmatter: getFrontmatterPayload(paths)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/frontmatter") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const coverPage = typeof body.coverPage === "string" ? body.coverPage : null;
+      const titlePage = typeof body.titlePage === "string" ? body.titlePage : null;
+      const copyrightPage = typeof body.copyrightPage === "string" ? body.copyrightPage : null;
+
+      if (!bookName) {
+        sendJson(res, 400, { error: "bookName is required." });
+        return;
+      }
+
+      if (coverPage === null || titlePage === null || copyrightPage === null) {
+        sendJson(res, 400, { error: "coverPage, titlePage, and copyrightPage are required." });
+        return;
+      }
+
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+
+      ensureDir(paths.frontmatterBaseRoot);
+      ensureDir(paths.frontmatterRoot);
+
+      fs.writeFileSync(paths.coverPagePath, coverPage, "utf8");
+      fs.writeFileSync(paths.titlePagePath, titlePage, "utf8");
+      fs.writeFileSync(paths.copyrightPagePath, copyrightPage, "utf8");
+
+      let manifest = null;
+      if (fs.existsSync(paths.frontmatterManifestPath)) {
+        try {
+          manifest = readJsonFile(paths.frontmatterManifestPath);
+        } catch {
+          manifest = null;
+        }
+      }
+
+      const nextManifest = {
+        ...(manifest || {}),
+        generated_at: formatLocalTimestamp(),
+        book_name: bookName,
+        edition: "ebook",
+        files: [
+          { role: "cover_page", file: "cover_page.md", path: paths.coverPagePath },
+          { role: "title_page", file: "title_page.md", path: paths.titlePagePath },
+          { role: "copyright_page", file: "copyright_page.md", path: paths.copyrightPagePath }
+        ]
+      };
+
+      fs.writeFileSync(paths.frontmatterManifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`, "utf8");
+
+      sendJson(res, 200, {
+        bookName,
+        saved: true,
+        frontmatter: {
+          manifest: nextManifest,
+          coverPage,
+          titlePage,
+          copyrightPage
+        }
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/cover-image") {
+    const bookName = url.searchParams.get("bookName");
+    const section = url.searchParams.get("section");
+    const fileName = url.searchParams.get("fileName");
+
+    if (!bookName || !section || !fileName) {
+      sendJson(res, 400, { error: "bookName, section, and fileName are required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      validateAssetFileName(fileName);
+      const paths = getWorkspacePaths(bookName);
+      const sectionRoot = resolveCoverSectionRoot(paths, section);
+      const safeFileName = path.basename(fileName);
+      const targetPath = path.join(sectionRoot, safeFileName);
+
+      if (!targetPath.startsWith(sectionRoot)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "Cover asset not found." });
+        return;
+      }
+
+      const ext = path.extname(targetPath).toLowerCase();
+      const mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf"
+      }[ext] || "application/octet-stream";
+
+      res.writeHead(200, {
+        "Content-Type": mime,
+        "Cache-Control": "no-store"
+      });
+      res.end(fs.readFileSync(targetPath));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-cover-folder") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const section = body.section;
+
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+      const sectionRoot = resolveCoverSectionRoot(paths, section);
+      if (!fs.existsSync(sectionRoot)) {
+        sendJson(res, 404, { error: "Cover folder not found." });
+        return;
+      }
+
+      openFolder(sectionRoot);
+      sendJson(res, 200, { opened: true, bookName, section });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/reveal-cover-file") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const section = body.section;
+      const fileName = body.fileName;
+
+      validateBookName(bookName);
+      validateAssetFileName(fileName);
+      const paths = getWorkspacePaths(bookName);
+      const sectionRoot = resolveCoverSectionRoot(paths, section);
+      const targetPath = path.join(sectionRoot, path.basename(fileName));
+
+      if (!targetPath.startsWith(sectionRoot)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "Cover file not found." });
+        return;
+      }
+
+      revealFileInExplorer(targetPath);
+      sendJson(res, 200, { opened: true, bookName, section, fileName });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }

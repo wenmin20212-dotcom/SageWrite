@@ -260,6 +260,165 @@
           </div>
         </section>
 
+        <section class="panel cover-panel">
+          <div class="panel-header">
+            <h2>08 封面系统</h2>
+          </div>
+          <form id="cover-form" class="form-grid">
+            <label class="field">
+              <span>封面标题</span>
+              <input name="title" placeholder="默认可留空，自动取 objective.md 中的标题">
+            </label>
+            <label class="field">
+              <span>副标题</span>
+              <input name="subtitle" placeholder="可选">
+            </label>
+            <label class="field">
+              <span>作者名</span>
+              <input name="author" placeholder="可选">
+            </label>
+            <label class="field">
+              <span>候选数量</span>
+              <input name="variants" type="number" min="1" max="20" value="4">
+            </label>
+            <label class="field">
+              <span>模式</span>
+              <select name="mode">
+                <option value="auto">auto</option>
+                <option value="fast">fast</option>
+                <option value="full">full</option>
+              </select>
+            </label>
+            <label class="checkbox-field">
+              <input name="force" type="checkbox">
+              <span>强制覆盖已有封面输出</span>
+            </label>
+            <label class="checkbox-field">
+              <input name="skipLayout" type="checkbox">
+              <span>跳过 layout</span>
+            </label>
+            <label class="checkbox-field">
+              <input name="skipMockup" type="checkbox">
+              <span>跳过 mockup</span>
+            </label>
+            <button class="primary-button" type="submit">运行 08-cover.ps1</button>
+          </form>
+
+          <div class="cover-browser">
+            <div class="cover-browser-header">
+              <div class="cover-browser-title">封面结果浏览</div>
+              <div class="cover-folder-actions">
+                <button class="ghost-button" id="open-cover-drafts" type="button">打开 drafts</button>
+                <button class="ghost-button" id="open-cover-layout" type="button">打开 layout</button>
+                <button class="ghost-button" id="open-cover-mockup" type="button">打开 mockup</button>
+                <button class="ghost-button" id="open-cover-final" type="button">打开 final</button>
+              </div>
+            </div>
+
+            <div id="cover-summary" class="cover-summary">
+              运行 08-cover.ps1 后，这里会显示封面系统的输出摘要。
+            </div>
+
+            <div class="cover-copy-editor-wrap">
+              <div class="cover-report-title">封面文案编辑</div>
+              <div class="cover-copy-grid">
+                <label class="field">
+                  <span>副标题</span>
+                  <input id="cover-copy-subtitle" type="text">
+                </label>
+                <label class="field">
+                  <span>封底短句</span>
+                  <input id="cover-copy-hook" type="text">
+                </label>
+                <label class="field">
+                  <span>腰封文案</span>
+                  <input id="cover-copy-obi" type="text">
+                </label>
+                <label class="field">
+                  <span>宣传语</span>
+                  <input id="cover-copy-tagline" type="text">
+                </label>
+                <label class="field">
+                  <span>书脊文案</span>
+                  <input id="cover-copy-spine" type="text">
+                </label>
+                <label class="field cover-copy-wide">
+                  <span>封底摘要</span>
+                  <textarea id="cover-copy-blurb" rows="5"></textarea>
+                </label>
+                <label class="field cover-copy-wide">
+                  <span>作者简介</span>
+                  <textarea id="cover-copy-author-bio" rows="4"></textarea>
+                </label>
+                <label class="field cover-copy-wide">
+                  <span>编辑备注</span>
+                  <textarea id="cover-copy-editor-notes" rows="4" placeholder="每行一条"></textarea>
+                </label>
+              </div>
+              <div class="cover-copy-actions">
+                <button id="save-cover-copy" class="ghost-button" type="button">保存封面文案</button>
+              </div>
+              <div class="cover-copy-candidates">
+                <div class="cover-report-title">文案候选池</div>
+                <textarea id="cover-copy-candidates" class="cover-report" readonly spellcheck="false">运行 08g-copy.ps1 后，这里会显示候选池。</textarea>
+              </div>
+            </div>
+
+            <div class="cover-frontmatter-wrap">
+              <div class="cover-report-title">前置三页（ebook）</div>
+              <div class="cover-frontmatter-grid">
+                <label class="field cover-frontmatter-wide">
+                  <span>封面页（cover_page.md）</span>
+                  <textarea id="frontmatter-cover-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示封面页 markdown。</textarea>
+                </label>
+                <label class="field cover-frontmatter-wide">
+                  <span>扉页（title_page.md）</span>
+                  <textarea id="frontmatter-title-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示扉页 markdown。</textarea>
+                </label>
+                <label class="field cover-frontmatter-wide">
+                  <span>版权页（copyright_page.md）</span>
+                  <textarea id="frontmatter-copyright-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示版权页 markdown。</textarea>
+                </label>
+              </div>
+              <div class="cover-copy-actions">
+                <button id="save-frontmatter" class="ghost-button" type="button">保存前置三页</button>
+              </div>
+            </div>
+
+            <div class="cover-gallery-grid">
+              <div class="cover-gallery-section">
+                <div class="cover-gallery-title">Drafts</div>
+                <div id="cover-drafts" class="cover-gallery-list">
+                  <div class="cover-gallery-empty">暂无 drafts 结果。</div>
+                </div>
+              </div>
+              <div class="cover-gallery-section">
+                <div class="cover-gallery-title">Layout</div>
+                <div id="cover-layout" class="cover-gallery-list">
+                  <div class="cover-gallery-empty">暂无 layout 结果。</div>
+                </div>
+              </div>
+              <div class="cover-gallery-section">
+                <div class="cover-gallery-title">Mockup</div>
+                <div id="cover-mockup" class="cover-gallery-list">
+                  <div class="cover-gallery-empty">暂无 mockup 结果。</div>
+                </div>
+              </div>
+              <div class="cover-gallery-section">
+                <div class="cover-gallery-title">Final</div>
+                <div id="cover-final" class="cover-gallery-list">
+                  <div class="cover-gallery-empty">暂无 final 结果。</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="cover-report-wrap">
+              <div class="cover-report-title">导出报告（cover_report.md）</div>
+              <textarea id="cover-report" class="cover-report" readonly spellcheck="false">运行 08-cover.ps1 后，这里会显示 final/cover_report.md 的内容。</textarea>
+            </div>
+          </div>
+        </section>
+
         <section class="panel log-panel">
           <div class="panel-header">
             <h2>运行日志</h2>
