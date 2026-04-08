@@ -122,6 +122,57 @@ function Write-Utf8Text {
     [System.IO.File]::WriteAllText($Path, $Content, $Utf8NoBom)
 }
 
+function Set-SectionHeaderFooter {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$SectPrNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs,
+
+        [Parameter(Mandatory=$true)]
+        [string]$DefaultHeaderRelId,
+
+        [Parameter(Mandatory=$true)]
+        [string]$FirstHeaderRelId,
+
+        [Parameter(Mandatory=$true)]
+        [string]$FooterRelId
+    )
+
+    @($SectPrNode.SelectNodes("w:headerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
+    @($SectPrNode.SelectNodes("w:footerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
+
+    $TitlePgNode = $SectPrNode.SelectSingleNode("w:titlePg", $DocNs)
+    if ($null -eq $TitlePgNode) {
+        $TitlePgNode = $DocumentDoc.CreateElement("w", "titlePg", $DocNs.LookupNamespace("w"))
+        [void]$SectPrNode.PrependChild($TitlePgNode)
+    }
+
+    $FirstHeaderRef = $DocumentDoc.CreateElement("w", "headerReference", $DocNs.LookupNamespace("w"))
+    [void]$FirstHeaderRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "first")
+    [void]$FirstHeaderRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FirstHeaderRelId)
+    [void]$SectPrNode.PrependChild($FirstHeaderRef)
+
+    $DefaultHeaderRef = $DocumentDoc.CreateElement("w", "headerReference", $DocNs.LookupNamespace("w"))
+    [void]$DefaultHeaderRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
+    [void]$DefaultHeaderRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $DefaultHeaderRelId)
+    [void]$SectPrNode.InsertAfter($DefaultHeaderRef, $FirstHeaderRef)
+
+    $FirstFooterRef = $DocumentDoc.CreateElement("w", "footerReference", $DocNs.LookupNamespace("w"))
+    [void]$FirstFooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "first")
+    [void]$FirstFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
+    [void]$SectPrNode.InsertAfter($FirstFooterRef, $DefaultHeaderRef)
+
+    $DefaultFooterRef = $DocumentDoc.CreateElement("w", "footerReference", $DocNs.LookupNamespace("w"))
+    [void]$DefaultFooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
+    [void]$DefaultFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
+    [void]$SectPrNode.InsertAfter($DefaultFooterRef, $FirstFooterRef)
+}
+
 function Update-DocxFormatting {
     param(
         [Parameter(Mandatory=$true)]
@@ -152,6 +203,7 @@ function Update-DocxFormatting {
     $DocumentRelsPath = Join-Path $ExtractRoot "word\_rels\document.xml.rels"
     $ContentTypesPath = Join-Path $ExtractRoot "[Content_Types].xml"
     $HeaderPath = Join-Path $ExtractRoot "word\header1.xml"
+    $FirstHeaderPath = Join-Path $ExtractRoot "word\header2.xml"
     $FooterPath = Join-Path $ExtractRoot "word\footer1.xml"
     if (!(Test-Path -LiteralPath $StylesPath)) {
         throw "word/styles.xml not found in generated document."
@@ -178,6 +230,11 @@ function Update-DocxFormatting {
         throw "Heading1 style not found in generated document."
     }
 
+    $NormalNode = $StylesDoc.SelectSingleNode("//w:style[@w:styleId='Normal']", $Ns)
+    if ($null -eq $NormalNode) {
+        throw "Normal style not found in generated document."
+    }
+
     $PPrNode = $Heading1Node.SelectSingleNode("w:pPr", $Ns)
     if ($null -eq $PPrNode) {
         $PPrNode = $StylesDoc.CreateElement("w", "pPr", $Ns.LookupNamespace("w"))
@@ -195,6 +252,19 @@ function Update-DocxFormatting {
         [void]$PPrNode.AppendChild($JcNode)
     }
     [void]$JcNode.SetAttribute("val", $Ns.LookupNamespace("w"), "center")
+
+    $NormalPPrNode = $NormalNode.SelectSingleNode("w:pPr", $Ns)
+    if ($null -eq $NormalPPrNode) {
+        $NormalPPrNode = $StylesDoc.CreateElement("w", "pPr", $Ns.LookupNamespace("w"))
+        [void]$NormalNode.PrependChild($NormalPPrNode)
+    }
+
+    $NormalIndNode = $NormalPPrNode.SelectSingleNode("w:ind", $Ns)
+    if ($null -eq $NormalIndNode) {
+        $NormalIndNode = $StylesDoc.CreateElement("w", "ind", $Ns.LookupNamespace("w"))
+        [void]$NormalPPrNode.AppendChild($NormalIndNode)
+    }
+    [void]$NormalIndNode.SetAttribute("firstLineChars", $Ns.LookupNamespace("w"), "200")
 
     Save-XmlUtf8 -Document $StylesDoc -Path $StylesPath
 
@@ -228,6 +298,18 @@ function Update-DocxFormatting {
     <w:r>
       <w:t xml:space="preserve">$EscapedTitle</w:t>
     </w:r>
+  </w:p>
+</w:hdr>
+"@
+
+    Write-Utf8Text -Path $FirstHeaderPath -Content @"
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header" />
+      <w:jc w:val="center" />
+    </w:pPr>
   </w:p>
 </w:hdr>
 "@
@@ -267,6 +349,13 @@ function Update-DocxFormatting {
         [void]$TypesRoot.AppendChild($HeaderOverride)
     }
 
+    if ($null -eq $ContentTypesDoc.SelectSingleNode("/ct:Types/ct:Override[@PartName='/word/header2.xml']", $CtNs)) {
+        $FirstHeaderOverride = $ContentTypesDoc.CreateElement("Override", $CtNs.LookupNamespace("ct"))
+        [void]$FirstHeaderOverride.SetAttribute("PartName", "/word/header2.xml")
+        [void]$FirstHeaderOverride.SetAttribute("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml")
+        [void]$TypesRoot.AppendChild($FirstHeaderOverride)
+    }
+
     if ($null -eq $ContentTypesDoc.SelectSingleNode("/ct:Types/ct:Override[@PartName='/word/footer1.xml']", $CtNs)) {
         $FooterOverride = $ContentTypesDoc.CreateElement("Override", $CtNs.LookupNamespace("ct"))
         [void]$FooterOverride.SetAttribute("PartName", "/word/footer1.xml")
@@ -285,6 +374,7 @@ function Update-DocxFormatting {
     }
 
     $HeaderRelId = "rIdSageHeader"
+    $FirstHeaderRelId = "rIdSageHeaderFirst"
     $FooterRelId = "rIdSageFooter"
     $HeaderRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
     $FooterRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
@@ -300,6 +390,19 @@ function Update-DocxFormatting {
     else {
         [void]$HeaderRel.SetAttribute("Type", $HeaderRelType)
         [void]$HeaderRel.SetAttribute("Target", "header1.xml")
+    }
+
+    $FirstHeaderRel = $DocRelsDoc.SelectSingleNode("/pr:Relationships/pr:Relationship[@Id='$FirstHeaderRelId']", $RelNs)
+    if ($null -eq $FirstHeaderRel) {
+        $FirstHeaderRel = $DocRelsDoc.CreateElement("Relationship", $RelNs.LookupNamespace("pr"))
+        [void]$FirstHeaderRel.SetAttribute("Id", $FirstHeaderRelId)
+        [void]$FirstHeaderRel.SetAttribute("Type", $HeaderRelType)
+        [void]$FirstHeaderRel.SetAttribute("Target", "header2.xml")
+        [void]$RelsRoot.AppendChild($FirstHeaderRel)
+    }
+    else {
+        [void]$FirstHeaderRel.SetAttribute("Type", $HeaderRelType)
+        [void]$FirstHeaderRel.SetAttribute("Target", "header2.xml")
     }
 
     $FooterRel = $DocRelsDoc.SelectSingleNode("/pr:Relationships/pr:Relationship[@Id='$FooterRelId']", $RelNs)
@@ -336,25 +439,50 @@ function Update-DocxFormatting {
         [void]$BodyNode.AppendChild($SectPrNode)
     }
 
-    @($SectPrNode.SelectNodes("w:headerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
-    @($SectPrNode.SelectNodes("w:footerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
-
-    $HeaderRef = $DocumentDoc.CreateElement("w", "headerReference", $DocNs.LookupNamespace("w"))
-    [void]$HeaderRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
-    [void]$HeaderRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $HeaderRelId)
-    [void]$SectPrNode.PrependChild($HeaderRef)
-
-    $FooterRef = $DocumentDoc.CreateElement("w", "footerReference", $DocNs.LookupNamespace("w"))
-    [void]$FooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
-    [void]$FooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
-    [void]$SectPrNode.InsertAfter($FooterRef, $HeaderRef)
-
     $PageNumTypeNode = $SectPrNode.SelectSingleNode("w:pgNumType", $DocNs)
     if ($null -eq $PageNumTypeNode) {
         $PageNumTypeNode = $DocumentDoc.CreateElement("w", "pgNumType", $DocNs.LookupNamespace("w"))
         [void]$SectPrNode.AppendChild($PageNumTypeNode)
     }
     [void]$PageNumTypeNode.SetAttribute("start", $DocNs.LookupNamespace("w"), "1")
+
+    Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -FooterRelId $FooterRelId
+
+    $HeadingParagraphs = @($BodyNode.SelectNodes("w:p[w:pPr/w:pStyle[@w:val='Heading1']]", $DocNs))
+    $ParagraphNodes = @($BodyNode.SelectNodes("w:p", $DocNs))
+    foreach ($HeadingParagraph in $HeadingParagraphs) {
+        $HeadingIndex = [Array]::IndexOf($ParagraphNodes, $HeadingParagraph)
+        if ($HeadingIndex -le 0) {
+            continue
+        }
+
+        $PrevParagraph = $ParagraphNodes[$HeadingIndex - 1]
+        $PrevParagraphPPr = $PrevParagraph.SelectSingleNode("w:pPr", $DocNs)
+        if ($null -eq $PrevParagraphPPr) {
+            $PrevParagraphPPr = $DocumentDoc.CreateElement("w", "pPr", $DocNs.LookupNamespace("w"))
+            [void]$PrevParagraph.PrependChild($PrevParagraphPPr)
+        }
+
+        $ExistingPrevSectPr = $PrevParagraphPPr.SelectSingleNode("w:sectPr", $DocNs)
+        if ($null -ne $ExistingPrevSectPr) {
+            [void]$PrevParagraphPPr.RemoveChild($ExistingPrevSectPr)
+        }
+
+        $SectionBreakSectPr = $DocumentDoc.ImportNode($SectPrNode.CloneNode($true), $true)
+        $TypeNode = $SectionBreakSectPr.SelectSingleNode("w:type", $DocNs)
+        if ($null -eq $TypeNode) {
+            $TypeNode = $DocumentDoc.CreateElement("w", "type", $DocNs.LookupNamespace("w"))
+            [void]$SectionBreakSectPr.PrependChild($TypeNode)
+        }
+        [void]$TypeNode.SetAttribute("val", $DocNs.LookupNamespace("w"), "nextPage")
+
+        $SectionPgNumType = $SectionBreakSectPr.SelectSingleNode("w:pgNumType", $DocNs)
+        if ($null -ne $SectionPgNumType) {
+            [void]$SectionBreakSectPr.RemoveChild($SectionPgNumType)
+        }
+
+        [void]$PrevParagraphPPr.AppendChild($SectionBreakSectPr)
+    }
 
     Save-XmlUtf8 -Document $DocumentDoc -Path $DocumentPath
 
