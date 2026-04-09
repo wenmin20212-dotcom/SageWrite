@@ -19,6 +19,8 @@ const state = {
   chapterContentLoadingKey: ""
 };
 
+const COVER_PANEL_STORAGE_KEY = "sagewrite-cover-panel-expanded";
+
 function $(selector) {
   return document.querySelector(selector);
 }
@@ -56,6 +58,24 @@ function setLog(text) {
 
 function getBookName() {
   return $("#bookName").value.trim();
+}
+
+function setCoverPanelExpanded(expanded) {
+  const panel = document.querySelector(".cover-panel");
+  const toggle = $("#toggle-cover-panel");
+  if (!panel || !toggle) {
+    return;
+  }
+
+  panel.classList.toggle("collapsed", !expanded);
+  toggle.textContent = expanded ? "收起" : "展开";
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  localStorage.setItem(COVER_PANEL_STORAGE_KEY, expanded ? "1" : "0");
+}
+
+function initCoverPanelState() {
+  const stored = localStorage.getItem(COVER_PANEL_STORAGE_KEY);
+  setCoverPanelExpanded(stored === "1");
 }
 
 function getWriteMode() {
@@ -180,6 +200,7 @@ function getIntakeFormSnapshot() {
   if (!form) {
     return {
       title: "",
+      author: "",
       audience: "",
       type: "",
       coreThesis: "",
@@ -191,6 +212,7 @@ function getIntakeFormSnapshot() {
   const data = formToObject(form);
   return {
     title: (data.title || "").trim(),
+    author: (data.author || "").trim(),
     audience: (data.audience || "").trim(),
     type: (data.type || "").trim(),
     coreThesis: (data.coreThesis || "").trim(),
@@ -203,6 +225,7 @@ function getIntakeBaseline(item) {
   const objective = item?.objectiveData || {};
   return {
     title: (objective.title || "").trim(),
+    author: (objective.author || "").trim(),
     audience: (objective.audience || "").trim(),
     type: (objective.type || "").trim(),
     coreThesis: (objective.core_thesis || "").trim(),
@@ -247,6 +270,7 @@ function updateIntakeActionState(item = getSelectedWorkspaceItem()) {
 function renderIntakePreview(item) {
   const objective = item?.objectiveData || {};
   setFormValue('#intake-form [name="title"]', objective.title || "");
+  setFormValue('#intake-form [name="author"]', objective.author || "");
   setFormValue('#intake-form [name="audience"]', objective.audience || "");
   setFormValue('#intake-form [name="type"]', objective.type || "");
   setFormValue('#intake-form [name="coreThesis"]', objective.core_thesis || "");
@@ -1153,21 +1177,30 @@ function renderBuildOutputs(item) {
   }
 
   if (!item) {
-    panel.innerHTML = '<div class="build-output-empty">选择一个 BookName 后，这里会显示生成的文档文件。</div>';
+    panel.innerHTML = '<div class="build-output-empty">选择一个 BookName 后，这里会显示生成的 DOCX / EPUB / PDF 文件。</div>';
     return;
   }
 
   const outputFiles = item.outputFiles || [];
   if (!outputFiles.length) {
-    panel.innerHTML = '<div class="build-output-empty">当前项目还没有生成可打开的文档文件。</div>';
+    panel.innerHTML = '<div class="build-output-empty">当前项目还没有生成可查看的 DOCX / EPUB / PDF 文件。</div>';
     return;
   }
+
+  const getFolderLabel = (fileName) => {
+    const normalized = String(fileName || "").replaceAll("\\", "/");
+    const parts = normalized.split("/");
+    if (parts.length <= 1) {
+      return "位于 04_output 目录";
+    }
+    return `位于 04_output/${escapeHtml(parts.slice(0, -1).join("/"))} 目录`;
+  };
 
   panel.innerHTML = outputFiles.map((fileName) => `
     <div class="build-output-item">
       <div class="build-output-meta">
         <strong>${escapeHtml(fileName)}</strong>
-        <span>位于 04_output 目录</span>
+        <span>${getFolderLabel(fileName)}</span>
       </div>
       <div class="build-output-actions">
         <button
@@ -1422,6 +1455,32 @@ function setupForms() {
     }
   });
 
+  $("#translate-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = formToObject(event.currentTarget);
+      payload.bookName = requireBookName();
+      payload.chapter = intOrEmpty(payload.chapter);
+      payload.startChapter = intOrEmpty(payload.startChapter);
+      payload.endChapter = intOrEmpty(payload.endChapter);
+
+      if (!payload.language) {
+        throw new Error("请选择目标语言。");
+      }
+      if (payload.mode === "chapter" && !payload.chapter) {
+        throw new Error("单章翻译需要填写章节编号。");
+      }
+      if (payload.mode === "range" && (!payload.startChapter || !payload.endChapter)) {
+        throw new Error("区间翻译需要同时填写开始和结束章节。");
+      }
+
+      await run("translate", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#edit-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -1439,7 +1498,32 @@ function setupForms() {
     try {
       const payload = formToObject(event.currentTarget);
       payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
       await run("build", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#build-epub-button").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#build-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      await run("build-epub", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#build-pdf-button").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#build-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      await run("build-pdf", payload);
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -1457,6 +1541,12 @@ function setupForms() {
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
+  });
+
+  $("#toggle-cover-panel").addEventListener("click", () => {
+    const panel = document.querySelector(".cover-panel");
+    const currentlyExpanded = panel ? !panel.classList.contains("collapsed") : false;
+    setCoverPanelExpanded(!currentlyExpanded);
   });
 
   $("#save-cover-copy").addEventListener("click", async () => {
@@ -1615,6 +1705,7 @@ function setupForms() {
 }
 
 async function init() {
+  initCoverPanelState();
   setupForms();
   setWriteNotesStatus();
   try {

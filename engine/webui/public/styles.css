@@ -229,6 +229,35 @@ textarea {
   flex: 1 1 240px;
 }
 
+.build-submit-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.build-submit-actions .primary-button,
+.build-submit-actions .ghost-button {
+  flex: 1 1 240px;
+}
+
+.translate-submit-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.translate-submit-actions .primary-button,
+.translate-submit-actions .ghost-button {
+  flex: 1 1 240px;
+}
+
+.translation-note {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
 .write-notes-status {
   color: var(--muted);
   font-size: 0.9rem;
@@ -554,8 +583,25 @@ textarea {
   grid-column: 1 / -1;
 }
 
-.cover-browser {
+.cover-panel-body {
   margin-top: 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.cover-panel.collapsed .cover-panel-body {
+  display: none;
+}
+
+.cover-panel.collapsed {
+  padding-bottom: 20px;
+}
+
+.cover-panel.collapsed .panel-header {
+  margin-bottom: 0;
+}
+
+.cover-browser {
   display: grid;
   gap: 14px;
 }

@@ -159,6 +159,41 @@ function listFilesByExtensions(dirPath, extensions) {
     .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
 }
 
+function listOutputDocuments(outputRoot) {
+  if (!fs.existsSync(outputRoot)) {
+    return [];
+  }
+
+  const results = [];
+  const stack = [outputRoot];
+  while (stack.length) {
+    const current = stack.pop();
+    const entries = fs.readdirSync(current, { withFileTypes: true });
+    entries.forEach((entry) => {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.toLowerCase() === "back") {
+          return;
+        }
+        stack.push(fullPath);
+        return;
+      }
+
+      const ext = path.extname(entry.name).toLowerCase();
+      if (entry.name.startsWith("~$")) {
+        return;
+      }
+      if (![".docx", ".epub", ".pdf"].includes(ext)) {
+        return;
+      }
+
+      results.push(path.relative(outputRoot, fullPath));
+    });
+  }
+
+  return results.sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+}
+
 function parseFrontMatterMarkdown(filePath) {
   if (!fs.existsSync(filePath)) {
     return null;
@@ -393,9 +428,7 @@ function listWorkspaces() {
         : "";
       const chapterFiles = getChapterMetadata(chapterRoot);
       const chapterCount = chapterFiles.length;
-      const outputs = fs.existsSync(outputRoot)
-        ? fs.readdirSync(outputRoot).filter((name) => name.endsWith(".docx") && !name.startsWith("~$"))
-        : [];
+      const outputs = listOutputDocuments(outputRoot);
       let status = null;
       let recentRuns = [];
       let webRuns = [];
@@ -570,12 +603,23 @@ function validateOutputFileName(fileName) {
   if (!fileName || typeof fileName !== "string") {
     throw new Error("fileName is required.");
   }
-  if (fileName !== path.basename(fileName)) {
+  const normalized = path.normalize(fileName);
+  if (path.isAbsolute(normalized) || normalized.startsWith("..") || normalized.includes("..\\")) {
     throw new Error("Invalid fileName.");
   }
-  if (!/\.docx$/i.test(fileName)) {
-    throw new Error("Only .docx output files can be opened.");
+  if (!/\.(docx|epub|pdf)$/i.test(fileName)) {
+    throw new Error("Only .docx, .epub, or .pdf output files are supported.");
   }
+}
+
+function resolveOutputDocumentPath(paths, fileName) {
+  validateOutputFileName(fileName);
+  const outputPath = path.resolve(paths.outputRoot, fileName);
+  const outputRootResolved = path.resolve(paths.outputRoot);
+  if (!outputPath.startsWith(outputRootResolved)) {
+    throw new Error("Invalid output file path.");
+  }
+  return outputPath;
 }
 
 function validateAssetFileName(fileName) {
@@ -706,6 +750,7 @@ async function handleRun(route, body, res) {
         job = runScript("01-intake.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Title", value: body.title },
+          { flag: "-Author", value: body.author || undefined },
           { flag: "-Audience", value: body.audience },
           { flag: "-Type", value: body.type },
           { flag: "-CoreThesis", value: body.coreThesis },
@@ -760,6 +805,26 @@ async function handleRun(route, body, res) {
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
         ], { route, bookName });
         break;
+      case "translate":
+        if (!body.language) {
+          throw new Error("Language is required.");
+        }
+        if (body.mode === "chapter" && !body.chapter) {
+          throw new Error("Chapter is required.");
+        }
+        if (body.mode === "range" && (!body.startChapter || !body.endChapter)) {
+          throw new Error("StartChapter and EndChapter are required.");
+        }
+        job = runScript("03t-translate.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language },
+          { flag: "-Chapter", value: body.mode === "chapter" ? body.chapter : undefined },
+          { flag: "-StartChapter", value: body.mode === "range" ? body.startChapter : undefined },
+          { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
+          { flag: "-All", type: "switch", enabled: body.mode === "all" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
       case "edit":
         job = runScript("04-edit.ps1", [
           { flag: "-BookName", value: bookName },
@@ -769,6 +834,21 @@ async function handleRun(route, body, res) {
       case "build":
         job = runScript("05-build.ps1", [
           { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
+        ], { route, bookName });
+        break;
+      case "build-epub":
+        job = runScript("05b-epub.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
+        ], { route, bookName });
+        break;
+      case "build-pdf":
+        job = runScript("05c-pdf.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
         ], { route, bookName });
         break;
@@ -816,15 +896,8 @@ const server = http.createServer(async (req, res) => {
       const fileName = body.fileName;
 
       validateBookName(bookName);
-      validateOutputFileName(fileName);
-
       const paths = getWorkspacePaths(bookName);
-      const outputPath = path.join(paths.outputRoot, fileName);
-
-      if (!outputPath.startsWith(paths.outputRoot)) {
-        sendJson(res, 400, { error: "Invalid output file path." });
-        return;
-      }
+      const outputPath = resolveOutputDocumentPath(paths, fileName);
 
       if (!fs.existsSync(outputPath)) {
         sendJson(res, 404, { error: "Output document not found." });
@@ -847,19 +920,25 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const bookName = body.bookName;
+      const fileName = body.fileName;
 
       validateBookName(bookName);
 
       const paths = getWorkspacePaths(bookName);
-      if (!fs.existsSync(paths.outputRoot)) {
+      const targetFolder = fileName
+        ? path.dirname(resolveOutputDocumentPath(paths, fileName))
+        : paths.outputRoot;
+
+      if (!fs.existsSync(targetFolder)) {
         sendJson(res, 404, { error: "Output folder not found." });
         return;
       }
 
-      openFolder(paths.outputRoot);
+      openFolder(targetFolder);
       sendJson(res, 200, {
         opened: true,
-        bookName
+        bookName,
+        fileName: fileName || ""
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -874,15 +953,8 @@ const server = http.createServer(async (req, res) => {
       const fileName = body.fileName;
 
       validateBookName(bookName);
-      validateOutputFileName(fileName);
-
       const paths = getWorkspacePaths(bookName);
-      const outputPath = path.join(paths.outputRoot, fileName);
-
-      if (!outputPath.startsWith(paths.outputRoot)) {
-        sendJson(res, 400, { error: "Invalid output file path." });
-        return;
-      }
+      const outputPath = resolveOutputDocumentPath(paths, fileName);
 
       if (!fs.existsSync(outputPath)) {
         sendJson(res, 404, { error: "Output document not found." });

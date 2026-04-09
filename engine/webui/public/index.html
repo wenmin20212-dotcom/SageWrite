@@ -65,6 +65,10 @@
               <input name="title" required>
             </label>
             <label class="field">
+              <span>作者</span>
+              <input name="author" placeholder="例如 文军">
+            </label>
+            <label class="field">
               <span>目标读者</span>
               <textarea name="audience" rows="3" required></textarea>
             </label>
@@ -208,6 +212,56 @@
           </div>
         </section>
 
+        <section class="panel">
+          <div class="panel-header">
+            <h2>03T 多语言翻译</h2>
+          </div>
+          <form id="translate-form" class="form-grid">
+            <label class="field">
+              <span>目标语言</span>
+              <select name="language">
+                <option value="en">英语 / en</option>
+                <option value="fr">法语 / fr</option>
+                <option value="de">德语 / de</option>
+                <option value="es">西班牙语 / es</option>
+                <option value="it">意大利语 / it</option>
+                <option value="pt">葡萄牙语 / pt</option>
+                <option value="ja">日语 / ja</option>
+                <option value="ko">韩语 / ko</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>模式</span>
+              <select name="mode">
+                <option value="all">全部翻译</option>
+                <option value="chapter">单章翻译</option>
+                <option value="range">区间翻译</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>单章编号</span>
+              <input name="chapter" type="number" min="1">
+            </label>
+            <label class="field split">
+              <span>章节区间</span>
+              <div class="split-row">
+                <input name="startChapter" type="number" min="1" placeholder="开始">
+                <input name="endChapter" type="number" min="1" placeholder="结束">
+              </div>
+            </label>
+            <label class="checkbox-field">
+              <input name="force" type="checkbox">
+              <span>覆盖已存在目标语言文件</span>
+            </label>
+            <div class="translate-submit-actions">
+              <button class="primary-button" type="submit">运行 03t-translate.ps1</button>
+            </div>
+          </form>
+          <div class="translation-note">
+            译文会输出到 `03_translation/&lt;语言代码&gt;/...`，不会覆盖原始中文 Markdown。
+          </div>
+        </section>
+
         <div id="write-notes-modal" class="modal-shell hidden" aria-hidden="true">
           <div class="modal-backdrop" data-close-write-notes="true"></div>
           <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="write-notes-title">
@@ -246,16 +300,31 @@
             <h2>05 构建文档</h2>
           </div>
           <form id="build-form">
+            <label class="field">
+              <span>语言版本</span>
+              <select name="language">
+                <option value="zh">中文（zh）</option>
+                <option value="en">English（en）</option>
+                <option value="fr">Français（fr）</option>
+                <option value="de">Deutsch（de）</option>
+                <option value="es">Español（es）</option>
+                <option value="ja">日本語（ja）</option>
+              </select>
+            </label>
             <label class="checkbox-field">
               <input name="autoNumber" type="checkbox">
               <span>自动编号</span>
             </label>
-            <button class="primary-button" type="submit">运行 05-build.ps1</button>
+            <div class="build-submit-actions">
+              <button class="primary-button" type="submit">运行 05-build.ps1</button>
+              <button id="build-epub-button" class="ghost-button" type="button">运行 05b-epub.ps1</button>
+              <button id="build-pdf-button" class="ghost-button" type="button">运行 05c-pdf.ps1</button>
+            </div>
           </form>
           <div class="build-output-wrap">
-            <div class="build-output-title">生成文件</div>
+            <div class="build-output-title">生成文件（DOCX / EPUB / PDF）</div>
             <div id="build-output-list" class="build-output-list">
-              <div class="build-output-empty">运行 05-build.ps1 后，这里会显示生成的文档文件。</div>
+              <div class="build-output-empty">运行 05-build.ps1、05b-epub.ps1 或 05c-pdf.ps1 后，这里会显示生成的文档文件。</div>
             </div>
           </div>
         </section>
@@ -263,7 +332,9 @@
         <section class="panel cover-panel">
           <div class="panel-header">
             <h2>08 封面系统</h2>
+            <button id="toggle-cover-panel" class="ghost-button" type="button" aria-expanded="false">展开</button>
           </div>
+          <div id="cover-panel-body" class="cover-panel-body">
           <form id="cover-form" class="form-grid">
             <label class="field">
               <span>封面标题</span>
@@ -416,6 +487,7 @@
               <div class="cover-report-title">导出报告（cover_report.md）</div>
               <textarea id="cover-report" class="cover-report" readonly spellcheck="false">运行 08-cover.ps1 后，这里会显示 final/cover_report.md 的内容。</textarea>
             </div>
+          </div>
           </div>
         </section>
 

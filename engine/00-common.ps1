@@ -190,9 +190,16 @@ function Add-SageArtifactSnapshot {
 
     $OutputFiles = @()
     if (Test-Path $OutputRoot) {
-        $OutputFiles = Get-ChildItem $OutputRoot -Filter *.docx |
-            Sort-Object Name |
-            Select-Object -ExpandProperty Name
+        $OutputFiles = Get-ChildItem $OutputRoot -Recurse -File |
+            Where-Object {
+                $_.FullName -notmatch '\\back\\' -and
+                $_.Name -notmatch '^~\$' -and
+                @('.docx', '.epub', '.pdf') -contains $_.Extension.ToLowerInvariant()
+            } |
+            Sort-Object FullName |
+            ForEach-Object {
+                $_.FullName.Substring($OutputRoot.Length).TrimStart('\')
+            }
     }
 
     $Status.artifacts = @{

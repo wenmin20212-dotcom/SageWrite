@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
+    [string]$Language = "zh",
+
     [switch]$AutoNumber
 )
 
@@ -16,17 +18,27 @@ $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-co
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
+$LanguageCode = $Language.Trim().ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
+    $LanguageCode = "zh"
+}
 Set-SageCurrentStep -Context $Context -Step "build" -Data @{
+    language = $LanguageCode
     auto_number = [bool]$AutoNumber
 }
 
 $WorkspaceRoot = $Context.WorkspaceRoot
 $BookRoot = $Context.BookRoot
-$ObjectivePath = Join-Path $BookRoot "00_brief\objective.md"
-$ChapterRoot = Join-Path $BookRoot "02_chapters"
-$OutputRoot = Join-Path $BookRoot "04_output"
+$SourceRoot = if ($LanguageCode -eq "zh") {
+    $BookRoot
+} else {
+    Join-Path $BookRoot ("03_translation\" + $LanguageCode)
+}
+$ObjectivePath = Join-Path $SourceRoot "00_brief\objective.md"
+$ChapterRoot = Join-Path $SourceRoot "02_chapters"
+$OutputRoot = Join-Path $BookRoot ("04_output\" + $LanguageCode)
 $LogRoot = $Context.LogRoot
-$BuildTempRoot = Join-Path $LogRoot "_build_tmp"
+$BuildTempRoot = Join-Path $LogRoot ("_build_tmp_" + $LanguageCode)
 
 function Get-FrontMatterValue {
     param(
@@ -71,6 +83,24 @@ function Get-MarkdownBodyText {
     }
 
     return $Normalized.Trim()
+}
+
+function Get-TitlePageTitle {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Title
+    )
+
+    $Normalized = $Title.Trim()
+    if ($Normalized -match "[`r`n]") {
+        return $Normalized
+    }
+
+    if ($Normalized.Length -ge 18 -and $Normalized -match "^(.*?[:：])\s*(.+)$") {
+        return "$($Matches[1].Trim())`r`n$($Matches[2].Trim())"
+    }
+
+    return $Normalized
 }
 
 function Save-XmlUtf8 {
@@ -171,6 +201,48 @@ function Set-SectionHeaderFooter {
     [void]$DefaultFooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
     [void]$DefaultFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
     [void]$SectPrNode.InsertAfter($DefaultFooterRef, $FirstFooterRef)
+}
+
+function Set-TitleParagraphText {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$ParagraphNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs,
+
+        [Parameter(Mandatory=$true)]
+        [string[]]$Lines
+    )
+
+    @($ParagraphNode.SelectNodes("w:r", $DocNs)) | ForEach-Object {
+        [void]$ParagraphNode.RemoveChild($_)
+    }
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $RunNode = $DocumentDoc.CreateElement("w", "r", $DocNs.LookupNamespace("w"))
+        $RunProps = $DocumentDoc.CreateElement("w", "rPr", $DocNs.LookupNamespace("w"))
+        $RunFonts = $DocumentDoc.CreateElement("w", "rFonts", $DocNs.LookupNamespace("w"))
+        [void]$RunFonts.SetAttribute("hint", $DocNs.LookupNamespace("w"), "eastAsia")
+        [void]$RunProps.AppendChild($RunFonts)
+        [void]$RunNode.AppendChild($RunProps)
+
+        $TextNode = $DocumentDoc.CreateElement("w", "t", $DocNs.LookupNamespace("w"))
+        [void]$TextNode.SetAttribute("space", "http://www.w3.org/XML/1998/namespace", "preserve")
+        $TextNode.InnerText = $Lines[$i]
+        [void]$RunNode.AppendChild($TextNode)
+        [void]$ParagraphNode.AppendChild($RunNode)
+
+        if ($i -lt ($Lines.Count - 1)) {
+            $BreakRun = $DocumentDoc.CreateElement("w", "r", $DocNs.LookupNamespace("w"))
+            $BreakNode = $DocumentDoc.CreateElement("w", "br", $DocNs.LookupNamespace("w"))
+            [void]$BreakRun.AppendChild($BreakNode)
+            [void]$ParagraphNode.AppendChild($BreakRun)
+        }
+    }
 }
 
 function Update-DocxFormatting {
@@ -430,6 +502,15 @@ function Update-DocxFormatting {
         throw "document body node not found in generated document."
     }
 
+    $TitlePageText = Get-TitlePageTitle -Title $DocumentTitle
+    $TitleLines = @(($TitlePageText -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($TitleLines.Count -gt 1) {
+        $TitleParagraph = $BodyNode.SelectSingleNode("w:p[w:pPr/w:pStyle[@w:val='Title']][1]", $DocNs)
+        if ($null -ne $TitleParagraph) {
+            Set-TitleParagraphText -DocumentDoc $DocumentDoc -ParagraphNode $TitleParagraph -DocNs $DocNs -Lines $TitleLines
+        }
+    }
+
     $SectPrNode = $BodyNode.SelectSingleNode("w:sectPr", $DocNs)
     if ($null -eq $SectPrNode) {
         $SectPrNode = $DocumentDoc.SelectSingleNode("//w:sectPr", $DocNs)
@@ -491,13 +572,19 @@ function Update-DocxFormatting {
 }
 
 if (!(Test-Path $WorkspaceRoot)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Workspace not found." -Data @{ workspace = $WorkspaceRoot }
+    Fail-SageStep -Context $Context -Step "build" -Message "Workspace not found." -Data @{ workspace = $WorkspaceRoot; language = $LanguageCode }
     Write-Error "Workspace not found: $WorkspaceRoot"
     exit 1
 }
 
+if (!(Test-Path $SourceRoot)) {
+    Fail-SageStep -Context $Context -Step "build" -Message "Language source root not found." -Data @{ source_root = $SourceRoot; language = $LanguageCode }
+    Write-Error "Language source root not found: $SourceRoot"
+    exit 1
+}
+
 if (!(Test-Path $ChapterRoot)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Chapter folder not found." -Data @{ chapter_root = $ChapterRoot }
+    Fail-SageStep -Context $Context -Step "build" -Message "Chapter folder not found." -Data @{ chapter_root = $ChapterRoot; language = $LanguageCode }
     Write-Error "Chapter folder not found: $ChapterRoot"
     exit 1
 }
@@ -511,7 +598,7 @@ if (!(Test-Path $LogRoot)) {
 }
 
 if (!(Get-Command pandoc -ErrorAction SilentlyContinue)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Pandoc not found." -Data @{}
+    Fail-SageStep -Context $Context -Step "build" -Message "Pandoc not found." -Data @{ language = $LanguageCode }
     Write-Error "Pandoc not found."
     exit 1
 }
@@ -528,7 +615,7 @@ $mdFiles = Get-ChildItem $ChapterRoot -Filter *.md |
     }
 
 if ($mdFiles.Count -eq 0) {
-    Fail-SageStep -Context $Context -Step "build" -Message "No markdown files found." -Data @{ chapter_root = $ChapterRoot }
+    Fail-SageStep -Context $Context -Step "build" -Message "No markdown files found." -Data @{ chapter_root = $ChapterRoot; language = $LanguageCode }
     Write-Error "No markdown files found."
     exit 1
 }
@@ -541,13 +628,27 @@ foreach ($file in $mdFiles) {
 }
 
 $DocumentTitle = $BookName
+$DocumentAuthor = "Generated by SageWrite"
 if (Test-Path $ObjectivePath) {
     $ObjectiveRaw = Get-Content -LiteralPath $ObjectivePath -Raw
     $ObjectiveTitle = Get-FrontMatterValue -Content $ObjectiveRaw -Key "title"
+    $ObjectiveAuthor = Get-FrontMatterValue -Content $ObjectiveRaw -Key "author"
     if (-not [string]::IsNullOrWhiteSpace($ObjectiveTitle)) {
         $DocumentTitle = $ObjectiveTitle
     }
+    if (-not [string]::IsNullOrWhiteSpace($ObjectiveAuthor)) {
+        $DocumentAuthor = $ObjectiveAuthor
+    }
 }
+
+$TitlePageTitle = Get-TitlePageTitle -Title $DocumentTitle
+$TitleYamlLines = @("title: |")
+$TitleYamlLines += ($TitlePageTitle -split "`r?`n" | ForEach-Object { "  $_" })
+$MetaContent = @(
+    $TitleYamlLines
+    "author: ""$DocumentAuthor"""
+    "date: ""$(Get-Date -Format yyyy-MM-dd)"""
+) -join "`r`n"
 
 if (Test-Path $BuildTempRoot) {
     Remove-Item $BuildTempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -563,13 +664,9 @@ foreach ($file in $mdFiles) {
     $BuildFiles += $TempPath
 }
 
-$MetaFile = Join-Path $ChapterRoot "_metadata.yaml"
+$MetaFile = Join-Path $BuildTempRoot "_metadata.yaml"
 
-@"
-title: "$DocumentTitle"
-author: "Generated by SageWrite"
-date: "$(Get-Date -Format yyyy-MM-dd)"
-"@ | Set-Content $MetaFile -Encoding utf8
+$MetaContent | Set-Content $MetaFile -Encoding utf8
 
 $OutputFile = Join-Path $OutputRoot "$BookName`_full.docx"
 $BackupRoot = Join-Path $OutputRoot "back"
@@ -592,6 +689,7 @@ if (Test-Path $OutputFile) {
             output = $OutputFile
             backup_output = $BackupFile
             error = $_.Exception.Message
+            language = $LanguageCode
         }
         Write-Error "Existing output file is locked. Please close the Word document and try again: $OutputFile"
         exit 1
@@ -638,6 +736,7 @@ catch {
     Fail-SageStep -Context $Context -Step "build" -Message "Build failed." -Data @{
         output = $OutputFile
         error = $_.Exception.Message
+        language = $LanguageCode
     }
     Write-Error "Build failed: $_"
     exit 1
@@ -648,9 +747,12 @@ finally {
 }
 
 Complete-SageStep -Context $Context -Step "build" -State "success" -Message "Document build completed." -Data @{
+    language = $LanguageCode
+    source_root = $SourceRoot
     output = $OutputFile
     backup_output = $BackupFile
     chapter_count = $mdFiles.Count
     document_title = $DocumentTitle
+    document_author = $DocumentAuthor
     auto_number = [bool]$AutoNumber
 }

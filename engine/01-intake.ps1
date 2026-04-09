@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$Title,
 
+    [string]$Author = "",
+
     [Parameter(Mandatory=$true)]
     [string]$Audience,
 
@@ -28,6 +30,7 @@ $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $B
 Initialize-SageObservability -Context $Context
 Set-SageCurrentStep -Context $Context -Step "intake" -Data @{
     title = $Title
+    author = $Author
     audience = $Audience
     type = $Type
 }
@@ -59,6 +62,7 @@ $ObjectiveContent = @"
 file_role: objective
 layer: constitution
 title: $Title
+author: $Author
 audience: $Audience
 type: $Type
 core_thesis: $CoreThesis
@@ -70,6 +74,7 @@ created_at: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 # 书籍定义
 
 - 书名标题：$Title
+- 作者：$Author
 - 目标读者：$Audience
 - 作品类型：$Type
 - 核心论点：$CoreThesis
@@ -93,6 +98,7 @@ created_at: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Complete-SageStep -Context $Context -Step "intake" -State "success" -Message "Workspace initialized." -Data @{
     workspace = $WorkspaceRoot
     objective = $ObjectivePath
+    author = $Author
 }
 
 Write-Host "SageWrite intake initialization completed."
