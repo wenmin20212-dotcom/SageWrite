@@ -30,6 +30,7 @@ function Get-LanguageProfile {
     $Normalized = $LanguageCode.Trim().ToLowerInvariant()
     switch ($Normalized) {
         "en"      { return @{ code = "en";      name = "English";           native_name = "English" } }
+        "ms"      { return @{ code = "ms";      name = "Malay";             native_name = "Bahasa Melayu" } }
         "fr"      { return @{ code = "fr";      name = "French";            native_name = "Francais" } }
         "de"      { return @{ code = "de";      name = "German";            native_name = "Deutsch" } }
         "es"      { return @{ code = "es";      name = "Spanish";           native_name = "Espanol" } }
