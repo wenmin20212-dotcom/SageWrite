@@ -13,6 +13,8 @@ const state = {
   coverCopyLoadingBook: "",
   frontmatterCache: {},
   frontmatterLoadingBook: "",
+  publishCache: {},
+  publishLoadingKey: "",
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -81,6 +83,16 @@ function initCoverPanelState() {
 function getWriteMode() {
   const field = $('#write-form [name="mode"]');
   return field ? field.value : "all";
+}
+
+function getPublishLanguage() {
+  const field = $('#publish-form [name="language"]');
+  return field ? field.value : "zh";
+}
+
+function getPublishPreviewPlatform() {
+  const field = $("#publish-preview-platform");
+  return field ? field.value : "amazon";
 }
 
 function requireBookName() {
@@ -1110,7 +1122,7 @@ function renderProjectStatus(item) {
     <div class="status-item">
       <span>章节和输出</span>
       <strong>${item.chapterCount || 0} 个章节文件</strong>
-      <em>${item.outputFiles.length || 0} 个输出文档</em>
+      <em>${item.outputFiles.length || 0} 个输出文档 · ${(item.publishLanguages || []).length} 个上架语言包</em>
     </div>
     <div class="status-item wide">
       <span>最近运行记录</span>
@@ -1258,6 +1270,175 @@ function renderBuildOutputs(item) {
   });
 }
 
+async function loadPublishArtifacts(item, language = getPublishLanguage()) {
+  if (!item) {
+    return;
+  }
+
+  const cacheKey = `${item.bookName}:${language}`;
+  state.publishLoadingKey = cacheKey;
+  renderPublishPanel(item);
+
+  try {
+    const result = await api(`/api/publish?bookName=${encodeURIComponent(item.bookName)}&language=${encodeURIComponent(language)}&t=${Date.now()}`);
+    state.publishCache[cacheKey] = result.publish || null;
+  } catch (error) {
+    state.publishCache[cacheKey] = {
+      exists: false,
+      language,
+      availableLanguages: [],
+      root: "",
+      rootFiles: [],
+      metadataMarkdown: `读取上架数据失败：${error.message}`,
+      reportText: "",
+      platforms: {}
+    };
+  } finally {
+    state.publishLoadingKey = "";
+    renderPublishPanel(item);
+  }
+}
+
+function renderPublishFiles(bookName, language, platformName, platformData) {
+  const panel = $("#publish-file-list");
+  if (!panel) {
+    return;
+  }
+
+  if (!platformData || !platformData.exists) {
+    panel.innerHTML = '<div class="build-output-empty">当前平台还没有生成上架包文件。</div>';
+    return;
+  }
+
+  const files = platformData.files || [];
+  if (!files.length) {
+    panel.innerHTML = '<div class="build-output-empty">当前平台目录存在，但还没有可显示的文件。</div>';
+    return;
+  }
+
+  panel.innerHTML = files.map((fileName) => `
+    <div class="build-output-item">
+      <div class="build-output-meta">
+        <strong>${escapeHtml(fileName)}</strong>
+        <span>位于 09_publish/${escapeHtml(language)}/${escapeHtml(platformName)} 目录</span>
+      </div>
+      <div class="build-output-actions">
+        <button
+          type="button"
+          class="ghost-button build-open-button"
+          data-reveal-publish-file="${escapeHtml(fileName)}"
+          data-publish-platform="${escapeHtml(platformName)}"
+        >
+          定位文件
+        </button>
+      </div>
+    </div>
+  `).join("");
+
+  panel.querySelectorAll("[data-reveal-publish-file]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await api("/api/reveal-publish-file", {
+          method: "POST",
+          body: JSON.stringify({
+            bookName,
+            language,
+            platform: button.dataset.publishPlatform || "",
+            fileName: button.dataset.revealPublishFile || ""
+          })
+        });
+        setStatusBadge("已定位", "success");
+        setLog(`已在资源管理器中定位上架文件：${button.dataset.revealPublishFile}`);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
+  });
+}
+
+function renderPublishPanel(item) {
+  const summary = $("#publish-summary");
+  const metadataPanel = $("#publish-metadata-preview");
+  const reportPanel = $("#publish-report-preview");
+  const platformPanel = $("#publish-platform-preview");
+
+  if (!summary || !metadataPanel || !reportPanel || !platformPanel) {
+    return;
+  }
+
+  if (!item) {
+    summary.textContent = "选择一个 BookName 后，这里会显示 09 上架包。";
+    metadataPanel.value = "运行 09-publish.ps1 后，这里会显示统一出版元数据。";
+    reportPanel.value = "运行 09-publish.ps1 后，这里会显示 publish_report.md。";
+    platformPanel.value = "选择平台后，这里会显示对应平台的提交清单。";
+    renderPublishFiles("", getPublishLanguage(), getPublishPreviewPlatform(), null);
+    return;
+  }
+
+  const language = getPublishLanguage();
+  const previewPlatform = getPublishPreviewPlatform();
+  const cacheKey = `${item.bookName}:${language}`;
+  const publish = state.publishCache[cacheKey] || null;
+
+  if (!publish) {
+    summary.textContent = state.publishLoadingKey === cacheKey
+      ? "正在读取 09 上架数据，请稍候..."
+      : "当前语言还没有加载 09 上架数据。";
+    metadataPanel.value = "正在读取统一出版元数据...";
+    reportPanel.value = "正在读取 publish_report.md ...";
+    platformPanel.value = "正在读取平台提交清单...";
+    renderPublishFiles(item.bookName, language, previewPlatform, null);
+    if (state.publishLoadingKey !== cacheKey) {
+      loadPublishArtifacts(item, language);
+    }
+    return;
+  }
+
+  const availableLanguages = publish.availableLanguages || item.publishLanguages || [];
+  const platformData = publish.platforms?.[previewPlatform] || null;
+
+  summary.textContent =
+    `语言: ${language} · ` +
+    `可用语言: ${availableLanguages.length ? availableLanguages.join(", ") : "暂无"} · ` +
+    `publish 根目录: ${publish.exists ? publish.root || `09_publish/${language}` : "尚未生成"} · ` +
+    `root files: ${(publish.rootFiles || []).length}`;
+
+  metadataPanel.value = publish.metadataMarkdown || "当前语言还没有 publish_metadata.md。";
+  reportPanel.value = publish.reportText || "当前语言还没有 publish_report.md。";
+
+  if (!platformData || !platformData.exists) {
+    platformPanel.value = `当前语言还没有 ${previewPlatform} 平台的上架包。`;
+  } else {
+    const packageText = platformData.packageJson
+      ? JSON.stringify(platformData.packageJson, null, 2)
+      : "";
+    const checklistText = platformData.checklistText || "";
+    const descriptionText = platformData.descriptionText || "";
+    const keywordsText = platformData.keywordsText || "";
+
+    platformPanel.value = [
+      `# ${previewPlatform} package`,
+      "",
+      packageText,
+      "",
+      "# checklist",
+      "",
+      checklistText,
+      "",
+      "# description",
+      "",
+      descriptionText,
+      "",
+      "# keywords",
+      "",
+      keywordsText
+    ].join("\n").trim();
+  }
+
+  renderPublishFiles(item.bookName, language, previewPlatform, platformData);
+}
+
 function renderWorkspaceSelection(item) {
   renderIntakePreview(item);
   renderProjectStatus(item);
@@ -1265,6 +1446,7 @@ function renderWorkspaceSelection(item) {
   renderPreflightReport(item);
   renderChapterBrowser(item);
   renderBuildOutputs(item);
+  renderPublishPanel(item);
   renderCoverPanel(item);
   renderCoverCopyEditor(item);
   renderFrontmatterEditor(item);
@@ -1289,6 +1471,7 @@ function renderWorkspaces(workspaces) {
       <strong>${escapeHtml(item.bookName)}</strong>
       <span>${item.chapterCount} 个章节文件</span>
       <span>${item.outputFiles.length} 个输出文档</span>
+      <span>${(item.publishLanguages || []).length ? `09 上架语言: ${escapeHtml(item.publishLanguages.join(", "))}` : "09 上架包未生成"}</span>
     `;
     button.addEventListener("click", () => {
       $("#bookName").value = item.bookName;
@@ -1333,6 +1516,13 @@ async function pollJob(jobId) {
     delete state.coverCopyCache[job.meta.bookName];
     delete state.frontmatterCache[job.meta.bookName];
   }
+  if (job.meta?.route === "publish" && job.meta?.bookName) {
+    Object.keys(state.publishCache).forEach((key) => {
+      if (key.startsWith(`${job.meta.bookName}:`)) {
+        delete state.publishCache[key];
+      }
+    });
+  }
   await refreshStatus();
   if (job.meta?.route === "edit" && job.meta?.bookName) {
     const selected = state.workspaces.find((item) => item.bookName === job.meta.bookName) || null;
@@ -1346,6 +1536,12 @@ async function pollJob(jobId) {
       loadCoverArtifacts(selected);
       loadCoverCopy(selected);
       loadFrontmatter(selected);
+    }
+  }
+  if (job.meta?.route === "publish" && job.meta?.bookName) {
+    const selected = state.workspaces.find((item) => item.bookName === job.meta.bookName) || null;
+    if (selected) {
+      loadPublishArtifacts(selected, getPublishLanguage());
     }
   }
 }
@@ -1524,6 +1720,65 @@ function setupForms() {
       payload.bookName = requireBookName();
       payload.language = payload.language || "zh";
       await run("build-pdf", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#publish-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = formToObject(event.currentTarget);
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      payload.platform = payload.platform || "all";
+      await run("publish", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#publish-language").addEventListener("change", () => {
+    const selected = state.workspaces.find((item) => item.bookName === getBookName()) || null;
+    renderPublishPanel(selected);
+  });
+
+  $("#publish-preview-platform").addEventListener("change", () => {
+    const selected = state.workspaces.find((item) => item.bookName === getBookName()) || null;
+    renderPublishPanel(selected);
+  });
+
+  $("#open-publish-root").addEventListener("click", async () => {
+    try {
+      await api("/api/open-publish-folder", {
+        method: "POST",
+        body: JSON.stringify({
+          bookName: requireBookName(),
+          language: getPublishLanguage()
+        })
+      });
+      setStatusBadge("已打开", "success");
+      setLog(`已打开 09_publish/${getPublishLanguage()} 目录。`);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#open-publish-platform").addEventListener("click", async () => {
+    try {
+      await api("/api/open-publish-folder", {
+        method: "POST",
+        body: JSON.stringify({
+          bookName: requireBookName(),
+          language: getPublishLanguage(),
+          platform: getPublishPreviewPlatform()
+        })
+      });
+      setStatusBadge("已打开", "success");
+      setLog(`已打开 ${getPublishPreviewPlatform()} 平台目录。`);
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);

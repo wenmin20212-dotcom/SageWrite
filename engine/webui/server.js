@@ -310,6 +310,110 @@ function getFrontmatterPayload(paths) {
   };
 }
 
+function listDirectories(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  return fs.readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+}
+
+function listDirectFiles(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  return fs.readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+}
+
+function readTextIfExists(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return "";
+  }
+  return fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+}
+
+function readJsonFileSafe(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    return readJsonFile(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function getPublishLanguageRoot(bookRoot, languageCode) {
+  return path.join(bookRoot, "09_publish", languageCode);
+}
+
+function getPublishArtifacts(bookRoot, languageCode = "zh") {
+  const publishBaseRoot = path.join(bookRoot, "09_publish");
+  const publishRoot = getPublishLanguageRoot(bookRoot, languageCode);
+  const availableLanguages = listDirectories(publishBaseRoot);
+  const manifestPath = path.join(publishRoot, "publish_manifest.json");
+  const metadataJsonPath = path.join(publishRoot, "publish_metadata.json");
+  const metadataMdPath = path.join(publishRoot, "publish_metadata.md");
+  const reportPath = path.join(publishRoot, "publish_report.md");
+
+  const platformConfig = {
+    amazon: {
+      packageFile: "amazon_kdp_package.json",
+      checklistFile: "amazon_submission_checklist.md",
+      descriptionFile: "amazon_description.txt",
+      keywordsFile: "amazon_keywords.txt"
+    },
+    apple: {
+      packageFile: "apple_books_package.json",
+      checklistFile: "apple_submission_checklist.md",
+      descriptionFile: "apple_store_description.txt",
+      keywordsFile: "apple_keywords.txt"
+    },
+    google: {
+      packageFile: "google_play_books_package.json",
+      checklistFile: "google_submission_checklist.md",
+      descriptionFile: "google_store_description.txt",
+      keywordsFile: "google_keywords.txt"
+    }
+  };
+
+  const platforms = Object.fromEntries(
+    Object.entries(platformConfig).map(([platformName, config]) => {
+      const platformRoot = path.join(publishRoot, platformName);
+      return [platformName, {
+        exists: fs.existsSync(platformRoot),
+        folder: fs.existsSync(platformRoot) ? path.relative(bookRoot, platformRoot) : "",
+        files: listDirectFiles(platformRoot),
+        packageJson: readJsonFileSafe(path.join(platformRoot, config.packageFile)),
+        checklistText: readTextIfExists(path.join(platformRoot, config.checklistFile)),
+        descriptionText: readTextIfExists(path.join(platformRoot, config.descriptionFile)),
+        keywordsText: readTextIfExists(path.join(platformRoot, config.keywordsFile))
+      }];
+    })
+  );
+
+  return {
+    exists: fs.existsSync(publishRoot),
+    language: languageCode,
+    availableLanguages,
+    root: fs.existsSync(publishRoot) ? path.relative(bookRoot, publishRoot) : "",
+    rootFiles: listDirectFiles(publishRoot),
+    manifest: readJsonFileSafe(manifestPath),
+    metadataJson: readJsonFileSafe(metadataJsonPath),
+    metadataMarkdown: readTextIfExists(metadataMdPath),
+    reportText: readTextIfExists(reportPath),
+    platforms
+  };
+}
+
 function buildCoverCopyMarkdown(copyData) {
   const selected = copyData?.selected || {};
   const candidates = copyData?.candidates || {};
@@ -417,6 +521,7 @@ function listWorkspaces() {
       const toc2Path = path.join(bookRoot, "01_outline", "toc2.md");
       const chapterRoot = path.join(bookRoot, "02_chapters");
       const outputRoot = path.join(bookRoot, "04_output");
+      const publishRoot = path.join(bookRoot, "09_publish");
       const logRoot = path.join(bookRoot, "logs");
       const statusPath = path.join(logRoot, "status.json");
       const runLogPath = path.join(logRoot, "run_history.jsonl");
@@ -429,6 +534,7 @@ function listWorkspaces() {
       const chapterFiles = getChapterMetadata(chapterRoot);
       const chapterCount = chapterFiles.length;
       const outputs = listOutputDocuments(outputRoot);
+      const publishLanguages = listDirectories(publishRoot);
       let status = null;
       let recentRuns = [];
       let webRuns = [];
@@ -478,6 +584,7 @@ function listWorkspaces() {
         chapterFiles,
         chapterCount,
         outputFiles: outputs,
+        publishLanguages,
         coverArtifacts,
         status,
         recentRuns: mergedRuns,
@@ -634,6 +741,36 @@ function validateAssetFileName(fileName) {
   }
 }
 
+function validateLanguageCode(languageCode) {
+  if (!languageCode || typeof languageCode !== "string") {
+    throw new Error("language is required.");
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(languageCode)) {
+    throw new Error("Invalid language.");
+  }
+}
+
+function validatePublishPlatform(platform) {
+  if (!platform) {
+    return;
+  }
+  if (!["amazon", "apple", "google"].includes(platform)) {
+    throw new Error("Invalid publish platform.");
+  }
+}
+
+function validatePublishFileName(fileName) {
+  if (!fileName || typeof fileName !== "string") {
+    throw new Error("fileName is required.");
+  }
+  if (fileName !== path.basename(fileName)) {
+    throw new Error("Invalid fileName.");
+  }
+  if (!/\.(json|md|txt|png|jpg|jpeg|webp|pdf|epub|docx)$/i.test(fileName)) {
+    throw new Error("Unsupported publish file type.");
+  }
+}
+
 function resolveCoverSectionRoot(paths, section) {
   switch (section) {
     case "drafts":
@@ -647,6 +784,14 @@ function resolveCoverSectionRoot(paths, section) {
     default:
       throw new Error("Invalid cover section.");
   }
+}
+
+function resolvePublishSectionRoot(paths, languageCode, platform) {
+  validateLanguageCode(languageCode);
+  validatePublishPlatform(platform);
+
+  const publishRoot = getPublishLanguageRoot(paths.bookRoot, languageCode);
+  return platform ? path.join(publishRoot, platform) : publishRoot;
 }
 
 function openFileWithDefaultApp(filePath) {
@@ -865,6 +1010,14 @@ async function handleRun(route, body, res) {
           { flag: "-SkipMockup", type: "switch", enabled: Boolean(body.skipMockup) }
         ], { route, bookName });
         break;
+      case "publish":
+        job = runScript("09-publish.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-Platform", value: body.platform || "all" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
       default:
         sendJson(res, 404, { error: "Unknown route." });
         return;
@@ -965,6 +1118,103 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         opened: true,
         bookName,
+        fileName
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/publish") {
+    const bookName = url.searchParams.get("bookName");
+    const language = url.searchParams.get("language") || "zh";
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      validateLanguageCode(language);
+      const paths = getWorkspacePaths(bookName);
+      sendJson(res, 200, {
+        bookName,
+        language,
+        publish: getPublishArtifacts(paths.bookRoot, language)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-publish-folder") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const language = body.language || "zh";
+      const platform = body.platform || "";
+
+      validateBookName(bookName);
+      validateLanguageCode(language);
+      validatePublishPlatform(platform);
+
+      const paths = getWorkspacePaths(bookName);
+      const targetFolder = resolvePublishSectionRoot(paths, language, platform || "");
+
+      if (!fs.existsSync(targetFolder)) {
+        sendJson(res, 404, { error: "Publish folder not found." });
+        return;
+      }
+
+      openFolder(targetFolder);
+      sendJson(res, 200, {
+        opened: true,
+        bookName,
+        language,
+        platform
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/reveal-publish-file") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const language = body.language || "zh";
+      const platform = body.platform || "";
+      const fileName = body.fileName;
+
+      validateBookName(bookName);
+      validateLanguageCode(language);
+      validatePublishPlatform(platform);
+      validatePublishFileName(fileName);
+
+      const paths = getWorkspacePaths(bookName);
+      const targetRoot = resolvePublishSectionRoot(paths, language, platform || "");
+      const targetPath = path.join(targetRoot, path.basename(fileName));
+
+      if (!targetPath.startsWith(targetRoot)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "Publish file not found." });
+        return;
+      }
+
+      revealFileInExplorer(targetPath);
+      sendJson(res, 200, {
+        opened: true,
+        bookName,
+        language,
+        platform,
         fileName
       });
     } catch (error) {

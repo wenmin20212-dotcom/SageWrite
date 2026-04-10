@@ -583,6 +583,10 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.publish-panel {
+  grid-column: 1 / -1;
+}
+
 .cover-panel-body {
   margin-top: 18px;
   display: grid;
@@ -604,6 +608,47 @@ textarea {
 .cover-browser {
   display: grid;
   gap: 14px;
+}
+
+.publish-browser {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.publish-header-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.publish-submit-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.publish-submit-actions .primary-button,
+.publish-submit-actions .ghost-button {
+  flex: 1 1 240px;
+}
+
+.publish-preview-controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.publish-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.publish-preview-section,
+.publish-platform-detail {
+  display: grid;
+  gap: 10px;
 }
 
 .cover-browser-header {
@@ -1127,8 +1172,14 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .publish-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
   .cover-browser-header,
-  .cover-folder-actions {
+  .cover-folder-actions,
+  .publish-header-actions,
+  .publish-preview-controls {
     align-items: stretch;
     flex-direction: column;
   }
