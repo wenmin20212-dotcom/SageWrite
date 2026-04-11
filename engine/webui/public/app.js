@@ -1793,7 +1793,7 @@ function renderPublishFiles(bookName, language, platformName, platformData) {
   }
 
   if (!platformData || !platformData.exists) {
-    panel.innerHTML = '<div class="build-output-empty">当前平台还没有生成上架包文件。</div>';
+    panel.innerHTML = "";
     if (summary) {
       summary.textContent = "当前平台文件 0 个";
     }
@@ -1802,7 +1802,7 @@ function renderPublishFiles(bookName, language, platformName, platformData) {
 
   const files = platformData.files || [];
   if (!files.length) {
-    panel.innerHTML = '<div class="build-output-empty">当前平台目录存在，但还没有可显示的文件。</div>';
+    panel.innerHTML = "";
     if (summary) {
       summary.textContent = `当前平台文件 0 个 · ${platformData.folder || ""}`.trim();
     }
@@ -1812,46 +1812,7 @@ function renderPublishFiles(bookName, language, platformName, platformData) {
   if (summary) {
     summary.textContent = `当前平台文件 ${files.length} 个 · ${platformData.folder || `09_publish/${language}/${platformName}`}`;
   }
-
-  panel.innerHTML = files.map((fileName) => `
-    <div class="build-output-item">
-      <div class="build-output-meta">
-        <strong>${escapeHtml(fileName)}</strong>
-        <span>位于 09_publish/${escapeHtml(language)}/${escapeHtml(platformName)} 目录</span>
-      </div>
-      <div class="build-output-actions">
-        <button
-          type="button"
-          class="ghost-button build-open-button"
-          data-reveal-publish-file="${escapeHtml(fileName)}"
-          data-publish-platform="${escapeHtml(platformName)}"
-        >
-          定位文件
-        </button>
-      </div>
-    </div>
-  `).join("");
-
-  panel.querySelectorAll("[data-reveal-publish-file]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        await api("/api/reveal-publish-file", {
-          method: "POST",
-          body: JSON.stringify({
-            bookName,
-            language,
-            platform: button.dataset.publishPlatform || "",
-            fileName: button.dataset.revealPublishFile || ""
-          })
-        });
-        setStatusBadge("已定位", "success");
-        setLog(`已在资源管理器中定位上架文件：${button.dataset.revealPublishFile}`);
-      } catch (error) {
-        setStatusBadge("失败", "failed");
-        setLog(error.message);
-      }
-    });
-  });
+  panel.innerHTML = "";
 }
 
 function renderPublishPlatformDetail(language, platformName, platformData, rawText) {
@@ -2343,10 +2304,19 @@ function setupForms() {
   $("#publish-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      const submitterId = event.submitter?.id || "";
       const payload = formToObject(event.currentTarget);
       payload.bookName = requireBookName();
       payload.language = payload.language || "zh";
       payload.platform = payload.platform || "all";
+      if (submitterId === "run-publish-submit") {
+        if (payload.platform === "all") {
+          throw new Error("要提交到平台时，请先把“生成范围”改成一个具体平台。");
+        }
+        payload.mode = "assist";
+        await run("submit", payload);
+        return;
+      }
       await run("publish", payload);
     } catch (error) {
       setStatusBadge("失败", "failed");

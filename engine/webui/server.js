@@ -1629,6 +1629,19 @@ async function handleRun(route, body, res) {
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
         ], { route, bookName });
         break;
+      case "submit":
+        if (!body.platform || body.platform === "all") {
+          throw new Error("A specific platform is required for submit.");
+        }
+        job = runScript("09f-submit.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-Platform", value: body.platform },
+          { flag: "-Mode", value: body.mode || "assist" },
+          { flag: "-ReuseSession", type: "switch", enabled: Boolean(body.reuseSession) },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
       default:
         sendJson(res, 404, { error: "Unknown route." });
         return;

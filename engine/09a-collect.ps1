@@ -95,6 +95,102 @@ function Get-OutputLanguageRoot {
     return $LanguageRoot
 }
 
+function Get-LanguageSourceRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BookRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode
+    )
+
+    if ($LanguageCode -eq "zh") {
+        return $null
+    }
+
+    $TranslationRoot = Join-Path $BookRoot ("03_translation\" + $LanguageCode)
+    if (Test-Path -LiteralPath $TranslationRoot) {
+        return $TranslationRoot
+    }
+
+    return $null
+}
+
+function Get-LocalizedSourcePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BookRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RelativePath
+    )
+
+    $LanguageRoot = Get-LanguageSourceRoot -BookRoot $BookRoot -LanguageCode $LanguageCode
+    if ($null -ne $LanguageRoot) {
+        $LocalizedPath = Join-Path $LanguageRoot $RelativePath
+        if (Test-Path -LiteralPath $LocalizedPath) {
+            return $LocalizedPath
+        }
+    }
+
+    return Join-Path $BookRoot $RelativePath
+}
+
+function Get-ChapterTitlesFromRoot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ChapterRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $ChapterRoot)) {
+        return @()
+    }
+
+    $Files = Get-ChildItem -LiteralPath $ChapterRoot -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '^\d+\.md$'
+    } | Sort-Object Name
+
+    $Titles = New-Object System.Collections.Generic.List[string]
+    foreach ($File in $Files) {
+        $Raw = Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8
+        $Title = Get-FrontMatterValue -Content $Raw -Key "title"
+        if ([string]::IsNullOrWhiteSpace($Title)) {
+            $Title = [System.IO.Path]::GetFileNameWithoutExtension($File.Name)
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($Title)) {
+            $Titles.Add($Title.Trim())
+        }
+    }
+
+    return @($Titles)
+}
+
+function Get-FirstSentence {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $Value = "$Text".Trim()
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    $Parts = [regex]::Split($Value, '[\u3002\uFF01\uFF1F.!?]+')
+    foreach ($Part in $Parts) {
+        $Candidate = "$Part".Trim()
+        if (-not [string]::IsNullOrWhiteSpace($Candidate)) {
+            return $Candidate
+        }
+    }
+
+    return $Value
+}
+
 function Get-PrimaryOutputFile {
     param(
         [Parameter(Mandatory = $true)]
@@ -182,8 +278,9 @@ Set-SageCurrentStep -Context $Context -Step "publish_collect" -Data @{
 }
 
 $BookRoot = $Context.BookRoot
-$BriefRoot = Join-Path $BookRoot "00_brief"
-$ObjectivePath = Join-Path $BriefRoot "objective.md"
+$ObjectivePath = Get-LocalizedSourcePath -BookRoot $BookRoot -LanguageCode $LanguageCode -RelativePath "00_brief\objective.md"
+$LocalizedTocPath = Get-LocalizedSourcePath -BookRoot $BookRoot -LanguageCode $LanguageCode -RelativePath "01_outline\toc.md"
+$LocalizedChapterRoot = Get-LocalizedSourcePath -BookRoot $BookRoot -LanguageCode $LanguageCode -RelativePath "02_chapters"
 $CoverRoot = Get-CoverRoot -BookRoot $BookRoot -Edition "ebook"
 $CoverBriefRoot = Join-Path $CoverRoot "brief"
 $CoverFinalRoot = Join-Path $CoverRoot "final"
@@ -247,26 +344,36 @@ if (Test-Path -LiteralPath $CoverCopyJsonPath) {
 }
 
 $SelectedCopy = if ($null -ne $CoverCopy) { $CoverCopy.selected } else { $null }
-$BriefKeywords = if ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
+$BriefKeywords = if (($LanguageCode -eq "zh") -and $null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
     @($CoverBrief.metadata.top_keywords | ForEach-Object { "$_" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 } else {
     @()
 }
-$CoreThesis = if ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
+$CoreThesis = if (-not [string]::IsNullOrWhiteSpace((Get-FrontMatterValue -Content $ObjectiveRaw -Key "core_thesis"))) {
+    (Get-FrontMatterValue -Content $ObjectiveRaw -Key "core_thesis")
+} elseif ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
     "$($CoverBrief.metadata.core_thesis)"
 } else {
     ""
 }
-$ChapterCount = if ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
+$ChapterCount = if ((Test-Path -LiteralPath $LocalizedChapterRoot) -and $ChapterTitles.Count -gt 0) {
+    $ChapterTitles.Count
+} elseif ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
     [int]$CoverBrief.metadata.chapter_count
 } else {
     0
 }
-$ChapterTitles = if ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
+$ChapterTitles = if (Test-Path -LiteralPath $LocalizedChapterRoot) {
+    Get-ChapterTitlesFromRoot -ChapterRoot $LocalizedChapterRoot
+} elseif ($null -ne $CoverBrief -and $null -ne $CoverBrief.metadata) {
     @($CoverBrief.metadata.chapter_titles | ForEach-Object { "$_" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 } else {
     @()
 }
+
+$FallbackHook = if ($CoreThesis) { Get-FirstSentence -Text $CoreThesis } else { "" }
+$FallbackBlurb = if ($CoreThesis) { $CoreThesis } else { "$Scope" }
+$FallbackSpine = if ($Title) { $Title } else { $BookName }
 
 $Assets = [ordered]@{
     generated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -293,13 +400,13 @@ $Assets = [ordered]@{
         cover = Get-RelativePathOrNull -BasePath $BookRoot -TargetPath $CoverPath
     }
     marketing = [ordered]@{
-        subtitle = if ($SelectedCopy) { "$($SelectedCopy.subtitle)" } else { "" }
-        tagline = if ($SelectedCopy) { "$($SelectedCopy.marketing_tagline)" } else { "" }
-        hook = if ($SelectedCopy) { "$($SelectedCopy.back_cover_hook)" } else { "" }
-        blurb = if ($SelectedCopy) { "$($SelectedCopy.back_cover_blurb)" } else { "" }
-        obi_copy = if ($SelectedCopy) { "$($SelectedCopy.obi_copy)" } else { "" }
-        author_bio = if ($SelectedCopy) { "$($SelectedCopy.author_bio)" } else { "" }
-        spine_text = if ($SelectedCopy) { "$($SelectedCopy.spine_text)" } else { "" }
+        subtitle = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.subtitle)" } else { "" }
+        tagline = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.marketing_tagline)" } else { "" }
+        hook = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.back_cover_hook)" } else { $FallbackHook }
+        blurb = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.back_cover_blurb)" } else { $FallbackBlurb }
+        obi_copy = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.obi_copy)" } else { "" }
+        author_bio = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.author_bio)" } else { "" }
+        spine_text = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.spine_text)" } else { $FallbackSpine }
     }
     discovery = [ordered]@{
         keywords = @($BriefKeywords)

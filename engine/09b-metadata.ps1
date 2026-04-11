@@ -49,9 +49,74 @@ function Get-LanguageLabel {
         "de" { return "German" }
         "es" { return "Spanish" }
         "ms" { return "Malay" }
-        "ja" { return "Japanese" }
+        "ja" { return (New-TextFromCodePoints @(0x65E5, 0x672C, 0x8A9E)) }
         "ko" { return "Korean" }
         default { return $LanguageCode }
+    }
+}
+
+function Get-LanguageProfile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$ZhLexicon
+    )
+
+    switch ($LanguageCode.Trim().ToLowerInvariant()) {
+        "zh" {
+            return [ordered]@{
+                publisher = $ZhLexicon.publisher
+                imprint = $ZhLexicon.imprint
+                edition_type = $ZhLexicon.edition_type
+                territory = $ZhLexicon.territory
+                distribution_rights = $ZhLexicon.distribution_rights
+                rights_prefix = $ZhLexicon.copyright_reserved
+                rights_suffix = $ZhLexicon.all_rights_reserved
+                target_readers = $ZhLexicon.target_readers
+                writing_scope = $ZhLexicon.writing_scope
+            }
+        }
+        "ja" {
+            return [ordered]@{
+                publisher = "SageWrite Digital Publishing"
+                imprint = "SageWrite"
+                edition_type = New-TextFromCodePoints @(0x96FB, 0x5B50, 0x7248)
+                territory = New-TextFromCodePoints @(0x4E16, 0x754C, 0x914D, 0x4FE1)
+                distribution_rights = New-TextFromCodePoints @(0x30C7, 0x30B8, 0x30BF, 0x30EB, 0x914D, 0x4FE1, 0x6A29)
+                rights_prefix = New-TextFromCodePoints @(0x8457, 0x4F5C, 0x6A29)
+                rights_suffix = New-TextFromCodePoints @(0x7121, 0x65AD, 0x8EE2, 0x8F09, 0x7981, 0x6B62)
+                target_readers = New-TextFromCodePoints @(0x60F3, 0x5B9A, 0x8AAD, 0x8005, 0xFF1A)
+                writing_scope = New-TextFromCodePoints @(0x57F7, 0x7B46, 0x7BC4, 0x56F2, 0xFF1A)
+            }
+        }
+        "ms" {
+            return [ordered]@{
+                publisher = "Penerbitan Digital SageWrite"
+                imprint = "SageWrite"
+                edition_type = "Edisi digital"
+                territory = "Edaran global"
+                distribution_rights = "Hak edaran digital"
+                rights_prefix = "Hak cipta"
+                rights_suffix = "Semua hak terpelihara"
+                target_readers = "Pembaca sasaran:"
+                writing_scope = "Skop penulisan:"
+            }
+        }
+        default {
+            return [ordered]@{
+                publisher = "SageWrite Digital Publishing"
+                imprint = "SageWrite"
+                edition_type = "digital"
+                territory = "Worldwide"
+                distribution_rights = "Global digital distribution"
+                rights_prefix = "Copyright"
+                rights_suffix = "All rights reserved."
+                target_readers = "Target readers:"
+                writing_scope = "Edition scope:"
+            }
+        }
     }
 }
 
@@ -87,7 +152,7 @@ function Get-ZhLexicon {
 
 function Get-UniqueList {
     param(
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$Items
     )
 
@@ -110,7 +175,7 @@ function Get-UniqueList {
 
 function Get-ChineseFragments {
     param(
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string[]]$Texts,
 
         [Parameter(Mandatory = $true)]
@@ -153,6 +218,66 @@ function Get-ChineseFragments {
             }
 
             if ($Value -match '^[\u7B2C\u4E00-\u9FFF0-9]{1,8}\u7AE0$') {
+                continue
+            }
+
+            $Output.Add($Value)
+        }
+    }
+
+    return Get-UniqueList -Items @($Output)
+}
+
+function Get-GenericKeywordCandidates {
+    param(
+        [AllowEmptyString()]
+        [string[]]$Texts
+    )
+
+    $Output = New-Object System.Collections.Generic.List[string]
+    foreach ($Text in $Texts) {
+        $RawValue = "$Text".Trim()
+        if ([string]::IsNullOrWhiteSpace($RawValue)) {
+            continue
+        }
+
+        $Candidates = New-Object System.Collections.Generic.List[string]
+        $Candidates.Add($RawValue)
+
+        if ($RawValue -match '[\uFF1A:]') {
+            $Candidates.Add(($RawValue -replace '^[^:\uFF1A]{1,30}[\uFF1A:]\s*', ''))
+        }
+
+        foreach ($Candidate in $Candidates) {
+            $Value = "$Candidate".Trim()
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+                continue
+            }
+
+            $Value = $Value -replace '(?i)^(chapter|part|section|bab)\s+([0-9ivxlcdm]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|pertama|kedua|ketiga|keempat|kelima|keenam|ketujuh|kelapan|kesembilan|kesepuluh)[:.\-]?\s*', ''
+            $Value = $Value -replace '^\d+(\.\d+)*\s*', ''
+            $Value = $Value -replace '^[\u7B2C][0-9\u4E00-\u9FFF]{1,8}[\u7AE0][\uFF1A:]?\s*', ''
+            $Value = $Value -replace '\s+', ' '
+            $Value = "$Value".Trim()
+
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+                continue
+            }
+
+            if ($Value.Length -gt 40) {
+                $PrimarySegment = ([regex]::Split($Value, '\s*[,;.!?]\s*|\s+-\s+')[0]).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($PrimarySegment)) {
+                    $Value = $PrimarySegment
+                }
+            }
+
+            if ($Value.Length -gt 40) {
+                $Value = $Value.Substring(0, 40).Trim()
+                $Value = $Value -replace '\s+\S*$', ''
+                $Value = "$Value".Trim()
+            }
+
+            if ($Value.Length -lt 2 -or $Value.Length -gt 40) {
                 continue
             }
 
@@ -260,31 +385,31 @@ function Get-KeywordSuggestions {
         [Parameter(Mandatory = $true)]
         [string]$Title,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Subtitle,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$BookType,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Audience,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Scope,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$CoreThesis,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Hook,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Blurb,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$ChapterTitles,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [string[]]$ExistingKeywords,
 
         [Parameter(Mandatory = $true)]
@@ -293,20 +418,50 @@ function Get-KeywordSuggestions {
 
     $NormalizedLanguage = "$LanguageCode".Trim().ToLowerInvariant()
     if ($NormalizedLanguage -ne "zh") {
-        return Get-UniqueList -Items @(
-            $Title,
-            $Subtitle,
-            $BookType,
-            "SageWrite",
-            "AI writing",
-            "artificial intelligence",
-            "knowledge creation",
-            "knowledge production",
-            "human-AI collaboration",
-            "structured writing",
-            "digital publishing",
-            "writing methodology"
-        ) | Select-Object -First 12
+        $Localized = @()
+        $Localized += Get-GenericKeywordCandidates -Texts @($Title, $Subtitle, $BookType)
+        $Localized += Get-GenericKeywordCandidates -Texts $ExistingKeywords
+        $Localized += Get-GenericKeywordCandidates -Texts @($Hook, $Blurb, $Audience, $Scope, $CoreThesis)
+        $Localized += Get-GenericKeywordCandidates -Texts $ChapterTitles
+        $Keywords = Get-UniqueList -Items $Localized
+
+        if ($Keywords.Count -lt 9) {
+            $FallbackKeywords = @()
+            switch ($NormalizedLanguage) {
+                "ms" {
+                    $FallbackKeywords = @(
+                        "penulisan AI",
+                        "penciptaan pengetahuan",
+                        "kolaborasi manusia mesin",
+                        "aliran kerja penulisan",
+                        "falsafah teknologi",
+                        "pendidikan digital",
+                        "struktur penulisan",
+                        "inovasi pengetahuan",
+                        "SageWrite"
+                    )
+                }
+                "en" {
+                    $FallbackKeywords = @(
+                        "AI writing",
+                        "knowledge creation",
+                        "human AI collaboration",
+                        "writing workflow",
+                        "technology philosophy",
+                        "digital publishing",
+                        "structured writing",
+                        "knowledge innovation",
+                        "SageWrite"
+                    )
+                }
+            }
+
+            if ($FallbackKeywords.Count -gt 0) {
+                $Keywords = Get-UniqueList -Items (@($Keywords) + @($FallbackKeywords))
+            }
+        }
+
+        return @($Keywords | Select-Object -First 12)
     }
 
     $Preferred = @()
@@ -360,7 +515,7 @@ function Get-SourceCategories {
     )
 
     if ("$LanguageCode".Trim().ToLowerInvariant() -ne "zh") {
-        return Get-UniqueList -Items @($BookType, "Nonfiction", "Technology", "Writing")
+        return @((Get-UniqueList -Items (@($BookType) + @($Keywords | Select-Object -First 4))) | Select-Object -First 6)
     }
 
     $Categories = Get-UniqueList -Items @(
@@ -381,16 +536,16 @@ function Build-LongDescription {
         [Parameter(Mandatory = $true)]
         [string]$LanguageCode,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Hook,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Blurb,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Audience,
 
-        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$Scope,
 
         [Parameter(Mandatory = $true)]
@@ -410,7 +565,7 @@ function Build-LongDescription {
         if ("$LanguageCode".Trim().ToLowerInvariant() -eq "zh") {
             $Parts.Add(($Lexicon.target_readers + $Audience.Trim()))
         } else {
-            $Parts.Add("Target readers: " + $Audience.Trim())
+            $Parts.Add($Audience.Trim())
         }
     }
 
@@ -418,7 +573,7 @@ function Build-LongDescription {
         if ("$LanguageCode".Trim().ToLowerInvariant() -eq "zh") {
             $Parts.Add(($Lexicon.writing_scope + $Scope.Trim()))
         } else {
-            $Parts.Add("Edition scope: " + $Scope.Trim())
+            $Parts.Add($Scope.Trim())
         }
     }
 
@@ -559,8 +714,9 @@ $CoreThesis = "$($Book.core_thesis)"
 $Hook = "$($Marketing.hook)"
 $Blurb = "$($Marketing.blurb)"
 $LanguageLabel = Get-LanguageLabel -LanguageCode $LanguageCode
-$Publisher = if ($LanguageCode -eq "zh") { $Lexicon.publisher } else { "SageWrite Digital Publishing" }
-$Imprint = if ($LanguageCode -eq "zh") { $Lexicon.imprint } else { "SageWrite" }
+$LanguageProfile = Get-LanguageProfile -LanguageCode $LanguageCode -ZhLexicon $Lexicon
+$Publisher = "$($LanguageProfile.publisher)"
+$Imprint = "$($LanguageProfile.imprint)"
 $PublicationDate = (Get-Date).ToString("yyyy-MM-dd")
 $Formats = Get-FormatAvailability -Files $Assets.files
 $ChapterCount = if ($null -ne $Discovery.chapter_count) { [int]$Discovery.chapter_count } else { 0 }
@@ -577,14 +733,10 @@ $PlatformSelectedCategories = [ordered]@{
 $LongDescription = Build-LongDescription -LanguageCode $LanguageCode -Hook $Hook -Blurb $Blurb -Audience $Audience -Scope $Scope -Lexicon $Lexicon
 $RightsHolder = if ($Author) { $Author } else { $BookName }
 $CopyrightYear = (Get-Date).Year
-$RightsStatement = if ($LanguageCode -eq "zh") {
-    "{0} (C) {1} {2} {3}" -f $Lexicon.copyright_reserved, $CopyrightYear, $RightsHolder, $Lexicon.all_rights_reserved
-} else {
-    "Copyright (c) $CopyrightYear $RightsHolder. All rights reserved."
-}
-$EditionType = if ($LanguageCode -eq "zh") { $Lexicon.edition_type } else { "digital" }
-$Territory = if ($LanguageCode -eq "zh") { $Lexicon.territory } else { "Worldwide" }
-$DistributionRights = if ($LanguageCode -eq "zh") { $Lexicon.distribution_rights } else { "Global digital distribution" }
+$RightsStatement = "{0} (C) {1} {2} {3}" -f $LanguageProfile.rights_prefix, $CopyrightYear, $RightsHolder, $LanguageProfile.rights_suffix
+$EditionType = "$($LanguageProfile.edition_type)"
+$Territory = "$($LanguageProfile.territory)"
+$DistributionRights = "$($LanguageProfile.distribution_rights)"
 
 $Metadata = [ordered]@{
     generated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
