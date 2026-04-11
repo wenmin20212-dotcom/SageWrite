@@ -11,3 +11,5 @@ engine/02-structurebak.ps1
 engine/03-writebak.txt
 engine/webui/node_modules/
 engine/webui/.cache/
+engine/automation/node_modules/
+engine/automation/.cache/

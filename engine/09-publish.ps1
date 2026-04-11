@@ -58,6 +58,35 @@ function Write-TextUtf8 {
     Set-Content -LiteralPath $Path -Value $Content -Encoding UTF8
 }
 
+function Clear-DirectoryContents {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [string[]]$ExcludeNames = @()
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $ExcludeSet = @{}
+    foreach ($Name in $ExcludeNames) {
+        if (-not [string]::IsNullOrWhiteSpace($Name)) {
+            $ExcludeSet[$Name.ToLowerInvariant()] = $true
+        }
+    }
+
+    Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        $ItemName = $_.Name.ToLowerInvariant()
+        if ($ExcludeSet.ContainsKey($ItemName)) {
+            return
+        }
+
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+    }
+}
+
 function Get-RelativePathSafe {
     param(
         [Parameter(Mandatory = $true)]
@@ -111,52 +140,78 @@ function Invoke-PublishModule {
     }
 }
 
-$Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
-Initialize-SageObservability -Context $Context
+function Get-AvailablePublishLanguages {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BookRoot
+    )
 
-$LanguageCode = $Language.Trim().ToLowerInvariant()
-if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
-    $LanguageCode = "zh"
-}
+    $OutputRoot = Join-Path $BookRoot "04_output"
+    $Languages = New-Object System.Collections.Generic.List[string]
 
-Set-SageCurrentStep -Context $Context -Step "publish" -Data @{
-    language = $LanguageCode
-    platform = $Platform
-}
+    if (Test-Path -LiteralPath $OutputRoot) {
+        $DirectOutputFiles = Get-ChildItem -LiteralPath $OutputRoot -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -notmatch '^~\$' -and @(".docx", ".epub", ".pdf") -contains $_.Extension.ToLowerInvariant()
+        }
+        if ($DirectOutputFiles.Count -gt 0) {
+            $Languages.Add("zh")
+        }
 
-$BookRoot = $Context.BookRoot
-$PublishRoot = Join-Path $BookRoot ("09_publish\" + $LanguageCode)
-$AssetsPath = Join-Path $PublishRoot "publish_assets.json"
-$MetadataJsonPath = Join-Path $PublishRoot "publish_metadata.json"
-$MetadataMdPath = Join-Path $PublishRoot "publish_metadata.md"
-$ManifestPath = Join-Path $PublishRoot "publish_manifest.json"
-$ReportPath = Join-Path $PublishRoot "publish_report.md"
-$CollectScriptPath = Join-Path $Context.EnginePath "09a-collect.ps1"
-$MetadataScriptPath = Join-Path $Context.EnginePath "09b-metadata.ps1"
-$AmazonScriptPath = Join-Path $Context.EnginePath "09c-amazon.ps1"
-$AppleScriptPath = Join-Path $Context.EnginePath "09d-apple.ps1"
-$GoogleScriptPath = Join-Path $Context.EnginePath "09e-google.ps1"
-$Platforms = if ($Platform -eq "all") { @("amazon", "apple", "google") } else { @($Platform) }
+        $LanguageDirs = Get-ChildItem -LiteralPath $OutputRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -ne "back"
+        } | Sort-Object Name
 
-if (-not (Test-Path -LiteralPath $BookRoot)) {
-    Fail-SageStep -Context $Context -Step "publish" -Message "Book root not found." -Data @{
-        book_root = $BookRoot
-        language = $LanguageCode
+        foreach ($Dir in $LanguageDirs) {
+            if (-not [string]::IsNullOrWhiteSpace($Dir.Name)) {
+                $Languages.Add($Dir.Name.Trim().ToLowerInvariant())
+            }
+        }
     }
-    Write-Error "Book root not found: $BookRoot"
-    exit 1
+
+    return @($Languages | Select-Object -Unique)
 }
 
-Ensure-Directory -Path $PublishRoot
+function Process-PublishLanguage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BookName,
 
-try {
-    Invoke-PublishModule -ScriptPath $CollectScriptPath -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Platform,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$ModulePaths,
+
+        [switch]$Force,
+
+        [Parameter(Mandatory = $true)]
+        $Context
+    )
+
+    $BookRoot = $Context.BookRoot
+    $PublishRoot = Join-Path $BookRoot ("09_publish\" + $LanguageCode)
+    $AssetsPath = Join-Path $PublishRoot "publish_assets.json"
+    $MetadataJsonPath = Join-Path $PublishRoot "publish_metadata.json"
+    $MetadataMdPath = Join-Path $PublishRoot "publish_metadata.md"
+    $ManifestPath = Join-Path $PublishRoot "publish_manifest.json"
+    $ReportPath = Join-Path $PublishRoot "publish_report.md"
+    $Platforms = if ($Platform -eq "all") { @("amazon", "apple", "google") } else { @($Platform) }
+
+    Ensure-Directory -Path $PublishRoot
+    if ($Force) {
+        Clear-DirectoryContents -Path $PublishRoot -ExcludeNames @("amazon", "apple", "google", "submit_runs")
+    }
+
+    Invoke-PublishModule -ScriptPath $ModulePaths.Collect -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
 
     if (-not (Test-Path -LiteralPath $AssetsPath)) {
         throw "publish_assets.json not found after 09a-collect."
     }
 
-    Invoke-PublishModule -ScriptPath $MetadataScriptPath -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
+    Invoke-PublishModule -ScriptPath $ModulePaths.Metadata -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
     if (-not (Test-Path -LiteralPath $MetadataJsonPath)) {
         throw "publish_metadata.json not found after 09b-metadata."
     }
@@ -165,7 +220,6 @@ try {
     $PublishMetadata = Get-Content -LiteralPath $MetadataJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
     $BookInfo = $Assets.book
-    $Marketing = $Assets.marketing
     $RelativeEpub = "$($Assets.files.epub)"
     $RelativePdf = "$($Assets.files.pdf)"
     $RelativeDocx = "$($Assets.files.docx)"
@@ -194,10 +248,10 @@ try {
 
     foreach ($PlatformName in $Platforms) {
         $PlatformRoot = Join-Path $PublishRoot $PlatformName
-        if ((Test-Path -LiteralPath $PlatformRoot) -and $Force) {
-            Remove-Item -LiteralPath $PlatformRoot -Recurse -Force
-        }
         Ensure-Directory -Path $PlatformRoot
+        if ($Force) {
+            Clear-DirectoryContents -Path $PlatformRoot -ExcludeNames @(".automation")
+        }
 
         $Metadata = [ordered]@{
             platform = $PlatformName
@@ -229,6 +283,7 @@ try {
             spine_text = "$($PublishMetadata.spine_text)"
             keywords = @($PublishMetadata.keywords | ForEach-Object { "$_" })
             categories = @($PublishMetadata.categories | ForEach-Object { "$_" })
+            platform_recommended_categories = $PublishMetadata.platform_recommended_categories
             formats = @($PublishMetadata.formats | ForEach-Object { "$_" })
             identification = $PublishMetadata.identification
             marketing = $PublishMetadata.marketing
@@ -282,8 +337,8 @@ try {
             }
         }
 
-        $MetadataPath = Join-Path $PlatformRoot "metadata.json"
-        $Metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $MetadataPath -Encoding UTF8
+        $PlatformMetadataPath = Join-Path $PlatformRoot "metadata.json"
+        $Metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $PlatformMetadataPath -Encoding UTF8
 
         $ReadmeLines = @(
             "SageWrite 09 Publish Package",
@@ -316,21 +371,21 @@ try {
         $Manifest.platforms += [ordered]@{
             name = $PlatformName
             folder = Get-RelativePathSafe -BasePath $BookRoot -TargetPath $PlatformRoot
-            metadata = Get-RelativePathSafe -BasePath $BookRoot -TargetPath $MetadataPath
+            metadata = Get-RelativePathSafe -BasePath $BookRoot -TargetPath $PlatformMetadataPath
             copied_files = $CopiedFiles
         }
     }
 
     if ($Platforms -contains "amazon") {
-        Invoke-PublishModule -ScriptPath $AmazonScriptPath -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
+        Invoke-PublishModule -ScriptPath $ModulePaths.Amazon -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
     }
 
     if ($Platforms -contains "apple") {
-        Invoke-PublishModule -ScriptPath $AppleScriptPath -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
+        Invoke-PublishModule -ScriptPath $ModulePaths.Apple -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
     }
 
     if ($Platforms -contains "google") {
-        Invoke-PublishModule -ScriptPath $GoogleScriptPath -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
+        Invoke-PublishModule -ScriptPath $ModulePaths.Google -BookName $BookName -LanguageCode $LanguageCode -Force:$Force
     }
 
     $Manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
@@ -391,14 +446,8 @@ try {
 
     Write-TextUtf8 -Path $ReportPath -Content ($ReportLines -join "`r`n")
 
-    Write-Host ""
-    Write-Host "09-publish completed successfully."
-    Write-Host ("Manifest: " + $ManifestPath)
-    Write-Host ("Report:   " + $ReportPath)
-
-    Complete-SageStep -Context $Context -Step "publish" -State "success" -Message "Publish package prepared." -Data @{
+    return [ordered]@{
         language = $LanguageCode
-        platform = $Platform
         publish_root = $PublishRoot
         manifest = $ManifestPath
         metadata_json = $MetadataJsonPath
@@ -408,11 +457,82 @@ try {
         missing_item_count = $MissingItems.Count
     }
 }
+
+$Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
+Initialize-SageObservability -Context $Context
+
+$LanguageCode = $Language.Trim().ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
+    $LanguageCode = "auto"
+}
+
+Set-SageCurrentStep -Context $Context -Step "publish" -Data @{
+    language = $LanguageCode
+    platform = $Platform
+}
+
+$BookRoot = $Context.BookRoot
+$CollectScriptPath = Join-Path $Context.EnginePath "09a-collect.ps1"
+$MetadataScriptPath = Join-Path $Context.EnginePath "09b-metadata.ps1"
+$AmazonScriptPath = Join-Path $Context.EnginePath "09c-amazon.ps1"
+$AppleScriptPath = Join-Path $Context.EnginePath "09d-apple.ps1"
+$GoogleScriptPath = Join-Path $Context.EnginePath "09e-google.ps1"
+$ModulePaths = @{
+    Collect = $CollectScriptPath
+    Metadata = $MetadataScriptPath
+    Amazon = $AmazonScriptPath
+    Apple = $AppleScriptPath
+    Google = $GoogleScriptPath
+}
+
+if (-not (Test-Path -LiteralPath $BookRoot)) {
+    Fail-SageStep -Context $Context -Step "publish" -Message "Book root not found." -Data @{
+        book_root = $BookRoot
+        language = $LanguageCode
+    }
+    Write-Error "Book root not found: $BookRoot"
+    exit 1
+}
+
+try {
+    $RequestedLanguages = if ($LanguageCode -in @("all", "auto", "*")) {
+        @(Get-AvailablePublishLanguages -BookRoot $BookRoot)
+    } else {
+        @($LanguageCode)
+    }
+
+    if ($RequestedLanguages.Count -eq 0) {
+        throw "No publish languages were discovered from 04_output."
+    }
+
+    $Results = @()
+    foreach ($ResolvedLanguage in $RequestedLanguages) {
+        $Result = Process-PublishLanguage -BookName $BookName -LanguageCode $ResolvedLanguage -Platform $Platform -ModulePaths $ModulePaths -Force:$Force -Context $Context
+        $Results += $Result
+    }
+
+    Write-Host ""
+    Write-Host "09-publish completed successfully."
+    foreach ($Result in $Results) {
+        Write-Host ("Language: " + $Result.language)
+        Write-Host ("Manifest: " + $Result.manifest)
+        Write-Host ("Report:   " + $Result.report)
+        Write-Host ""
+    }
+
+    Complete-SageStep -Context $Context -Step "publish" -State "success" -Message "Publish package prepared." -Data @{
+        language = $LanguageCode
+        platform = $Platform
+        processed_languages = @($Results | ForEach-Object { $_.language })
+        processed_language_count = $Results.Count
+        publish_roots = @($Results | ForEach-Object { $_.publish_root })
+    }
+}
 catch {
     Fail-SageStep -Context $Context -Step "publish" -Message "Publish packaging failed." -Data @{
         language = $LanguageCode
         platform = $Platform
-        publish_root = $PublishRoot
+        publish_root = $BookRoot
         error = $_.Exception.Message
     }
     Write-Error "09-publish failed: $($_.Exception.Message)"

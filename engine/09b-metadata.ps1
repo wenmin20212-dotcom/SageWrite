@@ -72,6 +72,95 @@ function Get-CategorySuggestions {
     return @("Nonfiction", "General", "Digital Publishing")
 }
 
+function Get-PlatformRecommendedCategories {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BookType,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Audience,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ScopeText,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CoreThesis
+    )
+
+    $Combined = @($BookType, $Audience, $ScopeText, $CoreThesis) -join " "
+    $CombinedLower = $Combined.ToLowerInvariant()
+
+    if ($Combined -match "小说|fiction|novel") {
+        return [ordered]@{
+            amazon = @(
+                [ordered]@{ priority = 1; path = "Kindle Books > Literature & Fiction > Literary Fiction"; note = "Primary fiction placement" },
+                [ordered]@{ priority = 2; path = "Kindle Books > Literature & Fiction > Contemporary Fiction"; note = "Secondary fiction placement" }
+            )
+            apple = @(
+                [ordered]@{ priority = 1; path = "Fiction & Literature"; note = "Primary Apple Books fiction category" },
+                [ordered]@{ priority = 2; path = "Literary Fiction"; note = "Secondary Apple Books fiction category" }
+            )
+            google = @(
+                [ordered]@{ priority = 1; path = "Fiction / Literary"; note = "Primary Google Play Books fiction category" },
+                [ordered]@{ priority = 2; path = "Fiction / General"; note = "Secondary Google Play Books fiction category" }
+            )
+        }
+    }
+
+    if ($Combined -match "教育|教材|teaching|education") {
+        return [ordered]@{
+            amazon = @(
+                [ordered]@{ priority = 1; path = "Kindle Books > Education & Teaching > General"; note = "Primary education placement" },
+                [ordered]@{ priority = 2; path = "Kindle Books > Education & Teaching > Schools & Teaching"; note = "Secondary education placement" },
+                [ordered]@{ priority = 3; path = "Kindle Books > Reference > Writing, Research & Publishing Guides"; note = "Useful when the book includes method instruction" }
+            )
+            apple = @(
+                [ordered]@{ priority = 1; path = "Education"; note = "Primary Apple Books education category" },
+                [ordered]@{ priority = 2; path = "Professional & Technical"; note = "Secondary Apple Books technical education category" }
+            )
+            google = @(
+                [ordered]@{ priority = 1; path = "Education / General"; note = "Primary Google Play Books education category" },
+                [ordered]@{ priority = 2; path = "Study Aids / General"; note = "Secondary Google Play Books education category" }
+            )
+        }
+    }
+
+    if ($CombinedLower -match "ai|artificial intelligence|technology|digital|computer|sagewrite|writing") {
+        return [ordered]@{
+            amazon = @(
+                [ordered]@{ priority = 1; path = "Kindle Books > Computers & Technology > Computer Science > General"; note = "Best primary fit for this AI and knowledge-production title" },
+                [ordered]@{ priority = 2; path = "Kindle Books > Computers & Technology > Applications & Software"; note = "Useful when emphasizing system workflow and tooling" },
+                [ordered]@{ priority = 3; path = "Kindle Books > Reference > Writing, Research & Publishing Guides"; note = "Useful when emphasizing writing method and publishing workflow" }
+            )
+            apple = @(
+                [ordered]@{ priority = 1; path = "Computers & Internet"; note = "Primary Apple Books technology category" },
+                [ordered]@{ priority = 2; path = "Professional & Technical"; note = "Secondary Apple Books technical nonfiction category" },
+                [ordered]@{ priority = 3; path = "Education"; note = "Optional Apple Books category when emphasizing learning and pedagogy" }
+            )
+            google = @(
+                [ordered]@{ priority = 1; path = "Computers / Artificial Intelligence / General"; note = "Primary Google Play Books AI category" },
+                [ordered]@{ priority = 2; path = "Language Arts & Disciplines / Writing / General"; note = "Secondary Google Play Books writing-method category" },
+                [ordered]@{ priority = 3; path = "Education / General"; note = "Optional Google Play Books category when emphasizing educational use" }
+            )
+        }
+    }
+
+    return [ordered]@{
+        amazon = @(
+            [ordered]@{ priority = 1; path = "Kindle Books > Nonfiction > General"; note = "Fallback Amazon placement" },
+            [ordered]@{ priority = 2; path = "Kindle Books > Reference > Writing, Research & Publishing Guides"; note = "Fallback Amazon writing-method placement" }
+        )
+        apple = @(
+            [ordered]@{ priority = 1; path = "Nonfiction"; note = "Fallback Apple Books category" },
+            [ordered]@{ priority = 2; path = "Professional & Technical"; note = "Fallback Apple Books technical category" }
+        )
+        google = @(
+            [ordered]@{ priority = 1; path = "Nonfiction / General"; note = "Fallback Google Play Books category" },
+            [ordered]@{ priority = 2; path = "Language Arts & Disciplines / Writing / General"; note = "Fallback Google Play Books writing category" }
+        )
+    }
+}
+
 function Get-UniqueKeywords {
     param(
         [Parameter(Mandatory = $true)]
@@ -291,6 +380,7 @@ $Imprint = "SageWrite"
 $PublicationDate = (Get-Date).ToString("yyyy-MM-dd")
 $Keywords = Get-KeywordSuggestions -Title $Title -Subtitle $Subtitle -BookType $BookType -Audience $Audience -Scope $Scope -CoreThesis $CoreThesis -ExistingKeywords @($Discovery.keywords | ForEach-Object { "$_" })
 $Categories = Get-CategorySuggestions -BookType $BookType -ScopeText $Scope
+$PlatformRecommendedCategories = Get-PlatformRecommendedCategories -BookType $BookType -Audience $Audience -ScopeText $Scope -CoreThesis $CoreThesis
 $LongDescription = Build-LongDescription -Hook $Hook -Blurb $Blurb -Audience $Audience -Scope $Scope
 $RightsHolder = if ($Author) { $Author } else { $BookName }
 $CopyrightYear = (Get-Date).Year
@@ -334,6 +424,7 @@ $Metadata = [ordered]@{
     spine_text = "$($Marketing.spine_text)"
     keywords = @($Keywords)
     categories = @($Categories)
+    platform_recommended_categories = $PlatformRecommendedCategories
     formats = @($Formats)
     identification = [ordered]@{
         title = $Title
@@ -370,6 +461,7 @@ $Metadata = [ordered]@{
     discovery = [ordered]@{
         keywords = @($Keywords)
         categories = @($Categories)
+        platform_recommended_categories = $PlatformRecommendedCategories
         audience = $Audience
         book_type = $BookType
         core_thesis = $CoreThesis
@@ -433,6 +525,20 @@ $MdLines += ""
 $MdLines += "## Categories"
 $MdLines += ""
 $Categories | ForEach-Object { $MdLines += "- $_" }
+$MdLines += ""
+$MdLines += "## Platform Recommended Categories"
+$MdLines += ""
+$MdLines += "### Amazon"
+$MdLines += ""
+$PlatformRecommendedCategories.amazon | ForEach-Object { $MdLines += ("- [{0}] {1} - {2}" -f $_.priority, $_.path, $_.note) }
+$MdLines += ""
+$MdLines += "### Apple"
+$MdLines += ""
+$PlatformRecommendedCategories.apple | ForEach-Object { $MdLines += ("- [{0}] {1} - {2}" -f $_.priority, $_.path, $_.note) }
+$MdLines += ""
+$MdLines += "### Google"
+$MdLines += ""
+$PlatformRecommendedCategories.google | ForEach-Object { $MdLines += ("- [{0}] {1} - {2}" -f $_.priority, $_.path, $_.note) }
 $MdLines += ""
 $MdLines += "## Formats"
 $MdLines += ""

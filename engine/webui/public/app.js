@@ -15,6 +15,8 @@ const state = {
   frontmatterLoadingBook: "",
   publishCache: {},
   publishLoadingKey: "",
+  publishEditorKey: "",
+  publishEditorDirty: false,
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -93,6 +95,14 @@ function getPublishLanguage() {
 function getPublishPreviewPlatform() {
   const field = $("#publish-preview-platform");
   return field ? field.value : "amazon";
+}
+
+function updatePublishEditorStatus() {
+  const status = $("#publish-editor-status");
+  if (!status) {
+    return;
+  }
+  status.textContent = state.publishEditorDirty ? "09 元数据有未保存修改" : "09 元数据已同步";
 }
 
 function requireBookName() {
@@ -1299,21 +1309,122 @@ async function loadPublishArtifacts(item, language = getPublishLanguage()) {
   }
 }
 
+function setPublishEditorFields(metadata, cacheKey, force = false) {
+  if (!metadata) {
+    return;
+  }
+
+  if (!force && state.publishEditorKey === cacheKey && state.publishEditorDirty) {
+    return;
+  }
+
+  setFormValue("#publish-title", metadata.title || "");
+  setFormValue("#publish-subtitle", metadata.subtitle || "");
+  setFormValue("#publish-author", metadata.author || "");
+  setFormValue("#publish-publisher", metadata.publisher || "");
+  setFormValue("#publish-imprint", metadata.imprint || "");
+  setFormValue("#publish-date", metadata.publication_date || "");
+  setFormValue("#publish-rights", metadata.rights || "");
+  setFormValue("#publish-territory", metadata.territory || "");
+  setFormValue("#publish-distribution-rights", metadata.distribution_rights || "");
+  setFormValue("#publish-tagline", metadata.marketing_tagline || "");
+  setFormValue("#publish-cover-hook", metadata.cover_hook || "");
+  setFormValue("#publish-obi-copy", metadata.obi_copy || "");
+  setFormValue("#publish-spine-text", metadata.spine_text || "");
+  setFormValue("#publish-short-description", metadata.short_description || "");
+  setFormValue("#publish-long-description", metadata.long_description || "");
+  setFormValue("#publish-back-cover-blurb", metadata.back_cover_blurb || "");
+  setFormValue("#publish-author-bio", metadata.author_bio || "");
+  setFormValue("#publish-keywords", (metadata.keywords || []).join("\n"));
+  setFormValue("#publish-categories", (metadata.categories || []).join("\n"));
+
+  state.publishEditorKey = cacheKey;
+  state.publishEditorDirty = false;
+  updatePublishEditorStatus();
+}
+
+function getPublishEditorPayload() {
+  return {
+    title: ($("#publish-title")?.value || "").trim(),
+    subtitle: ($("#publish-subtitle")?.value || "").trim(),
+    author: ($("#publish-author")?.value || "").trim(),
+    publisher: ($("#publish-publisher")?.value || "").trim(),
+    imprint: ($("#publish-imprint")?.value || "").trim(),
+    publicationDate: ($("#publish-date")?.value || "").trim(),
+    rights: ($("#publish-rights")?.value || "").trim(),
+    territory: ($("#publish-territory")?.value || "").trim(),
+    distributionRights: ($("#publish-distribution-rights")?.value || "").trim(),
+    marketingTagline: ($("#publish-tagline")?.value || "").trim(),
+    coverHook: ($("#publish-cover-hook")?.value || "").trim(),
+    obiCopy: ($("#publish-obi-copy")?.value || "").trim(),
+    spineText: ($("#publish-spine-text")?.value || "").trim(),
+    shortDescription: ($("#publish-short-description")?.value || "").trim(),
+    longDescription: ($("#publish-long-description")?.value || "").trim(),
+    backCoverBlurb: ($("#publish-back-cover-blurb")?.value || "").trim(),
+    authorBio: ($("#publish-author-bio")?.value || "").trim(),
+    keywords: ($("#publish-keywords")?.value || "")
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    categories: ($("#publish-categories")?.value || "")
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  };
+}
+
+async function savePublishMetadata() {
+  const bookName = requireBookName();
+  const language = getPublishLanguage();
+  const payload = {
+    bookName,
+    language,
+    ...getPublishEditorPayload()
+  };
+
+  const result = await api("/api/publish-metadata", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  const cacheKey = `${bookName}:${language}`;
+  state.publishCache[cacheKey] = result.publish || null;
+  state.publishEditorKey = cacheKey;
+  state.publishEditorDirty = false;
+  updatePublishEditorStatus();
+
+  const selected = getSelectedWorkspaceItem();
+  renderPublishPanel(selected);
+  setStatusBadge("已保存", "success");
+  setLog(`09 元数据已保存，并同步刷新 ${language} 语言下的平台上架包。`);
+}
+
 function renderPublishFiles(bookName, language, platformName, platformData) {
   const panel = $("#publish-file-list");
+  const summary = $("#publish-file-summary");
   if (!panel) {
     return;
   }
 
   if (!platformData || !platformData.exists) {
     panel.innerHTML = '<div class="build-output-empty">当前平台还没有生成上架包文件。</div>';
+    if (summary) {
+      summary.textContent = "当前平台文件 0 个";
+    }
     return;
   }
 
   const files = platformData.files || [];
   if (!files.length) {
     panel.innerHTML = '<div class="build-output-empty">当前平台目录存在，但还没有可显示的文件。</div>';
+    if (summary) {
+      summary.textContent = `当前平台文件 0 个 · ${platformData.folder || ""}`.trim();
+    }
     return;
+  }
+
+  if (summary) {
+    summary.textContent = `当前平台文件 ${files.length} 个 · ${platformData.folder || `09_publish/${language}/${platformName}`}`;
   }
 
   panel.innerHTML = files.map((fileName) => `
@@ -1357,6 +1468,99 @@ function renderPublishFiles(bookName, language, platformName, platformData) {
   });
 }
 
+function renderPublishPlatformDetail(language, platformName, platformData, rawText) {
+  const rawPanel = $("#publish-platform-preview");
+  const folderLabel = $("#publish-platform-folder");
+  const statsPanel = $("#publish-platform-stats");
+  const cardsPanel = $("#publish-platform-cards");
+
+  if (!rawPanel || !folderLabel || !statsPanel || !cardsPanel) {
+    return;
+  }
+
+  rawPanel.value = rawText || "选择平台后，这里会显示对应平台的提交清单。";
+
+  if (!platformData || !platformData.exists) {
+    folderLabel.textContent = `当前语言还没有 ${platformName} 平台目录。`;
+    statsPanel.innerHTML = '<div class="build-output-empty">当前平台尚未生成。</div>';
+    cardsPanel.innerHTML = '<div class="build-output-empty">当前平台还没有可显示的 package / checklist / description / keywords。</div>';
+    return;
+  }
+
+  const pkg = platformData.packageJson || {};
+  const details = pkg.book_details || {};
+  const checks = pkg.quality_checks || {};
+  const assets = pkg.upload_assets || {};
+  const keywords = Array.isArray(details.keywords) ? details.keywords : [];
+  const categories = Array.isArray(details.categories) ? details.categories : [];
+  const description = (platformData.descriptionText || details.description || "").trim();
+
+  folderLabel.textContent = platformData.folder || `09_publish/${language}/${platformName}`;
+
+  const statItems = [
+    { label: "状态", value: pkg.package_ready ? "Ready" : "Draft" },
+    { label: "类型", value: pkg.submission_type || "ebook" },
+    { label: "文件", value: String((platformData.files || []).length) },
+    { label: "关键词", value: String(checks.keyword_box_count || keywords.length || 0) },
+    { label: "分类", value: String(checks.category_count || categories.length || 0) }
+  ];
+
+  statsPanel.innerHTML = statItems.map((item) => `
+    <div class="publish-platform-stat">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(item.value)}</strong>
+    </div>
+  `).join("");
+
+  const qualityList = Object.entries(checks)
+    .filter(([key]) => key.startsWith("has_"))
+    .map(([key, value]) => `<li>${escapeHtml(key.replace(/^has_/, "").replaceAll("_", " "))}: ${value ? "yes" : "no"}</li>`)
+    .join("");
+
+  const assetList = Object.entries(assets)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `<li>${escapeHtml(key)}: ${escapeHtml(value)}</li>`)
+    .join("");
+
+  const keywordList = keywords.length
+    ? `<ul>${keywords.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul>`
+    : '<div>当前没有关键词。</div>';
+
+  const categoryList = categories.length
+    ? `<ul>${categories.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul>`
+    : '<div>当前没有分类。</div>';
+
+  cardsPanel.innerHTML = `
+    <div class="publish-platform-card">
+      <h4>提交包概览</h4>
+      <div>Title: ${escapeHtml(details.title || "")}</div>
+      <div>Author: ${escapeHtml(details.author || "")}</div>
+      <div>Language: ${escapeHtml(details.language || language)}</div>
+      <div>Publisher: ${escapeHtml(details.publisher || "")}</div>
+    </div>
+    <div class="publish-platform-card">
+      <h4>上传素材</h4>
+      ${assetList ? `<ul>${assetList}</ul>` : "<div>当前没有素材清单。</div>"}
+    </div>
+    <div class="publish-platform-card">
+      <h4>质量检查</h4>
+      ${qualityList ? `<ul>${qualityList}</ul>` : "<div>当前没有质量检查结果。</div>"}
+    </div>
+    <div class="publish-platform-card">
+      <h4>商店简介</h4>
+      <p>${escapeHtml(description || "当前没有商店简介。").replaceAll("\n", "<br>")}</p>
+    </div>
+    <div class="publish-platform-card">
+      <h4>关键词</h4>
+      ${keywordList}
+    </div>
+    <div class="publish-platform-card">
+      <h4>分类</h4>
+      ${categoryList}
+    </div>
+  `;
+}
+
 function renderPublishPanel(item) {
   const summary = $("#publish-summary");
   const metadataPanel = $("#publish-metadata-preview");
@@ -1369,9 +1573,30 @@ function renderPublishPanel(item) {
 
   if (!item) {
     summary.textContent = "选择一个 BookName 后，这里会显示 09 上架包。";
+    setPublishEditorFields({
+      title: "",
+      subtitle: "",
+      author: "",
+      publisher: "",
+      imprint: "",
+      publication_date: "",
+      rights: "",
+      territory: "",
+      distribution_rights: "",
+      marketing_tagline: "",
+      cover_hook: "",
+      obi_copy: "",
+      spine_text: "",
+      short_description: "",
+      long_description: "",
+      back_cover_blurb: "",
+      author_bio: "",
+      keywords: [],
+      categories: []
+    }, "", true);
     metadataPanel.value = "运行 09-publish.ps1 后，这里会显示统一出版元数据。";
     reportPanel.value = "运行 09-publish.ps1 后，这里会显示 publish_report.md。";
-    platformPanel.value = "选择平台后，这里会显示对应平台的提交清单。";
+    renderPublishPlatformDetail(getPublishLanguage(), getPublishPreviewPlatform(), null, "选择平台后，这里会显示对应平台的提交清单。");
     renderPublishFiles("", getPublishLanguage(), getPublishPreviewPlatform(), null);
     return;
   }
@@ -1387,7 +1612,7 @@ function renderPublishPanel(item) {
       : "当前语言还没有加载 09 上架数据。";
     metadataPanel.value = "正在读取统一出版元数据...";
     reportPanel.value = "正在读取 publish_report.md ...";
-    platformPanel.value = "正在读取平台提交清单...";
+    renderPublishPlatformDetail(language, previewPlatform, null, "正在读取平台提交清单...");
     renderPublishFiles(item.bookName, language, previewPlatform, null);
     if (state.publishLoadingKey !== cacheKey) {
       loadPublishArtifacts(item, language);
@@ -1404,11 +1629,13 @@ function renderPublishPanel(item) {
     `publish 根目录: ${publish.exists ? publish.root || `09_publish/${language}` : "尚未生成"} · ` +
     `root files: ${(publish.rootFiles || []).length}`;
 
+  setPublishEditorFields(publish.metadataJson || {}, cacheKey);
   metadataPanel.value = publish.metadataMarkdown || "当前语言还没有 publish_metadata.md。";
   reportPanel.value = publish.reportText || "当前语言还没有 publish_report.md。";
 
+  let rawPlatformText = "";
   if (!platformData || !platformData.exists) {
-    platformPanel.value = `当前语言还没有 ${previewPlatform} 平台的上架包。`;
+    rawPlatformText = `当前语言还没有 ${previewPlatform} 平台的上架包。`;
   } else {
     const packageText = platformData.packageJson
       ? JSON.stringify(platformData.packageJson, null, 2)
@@ -1417,7 +1644,7 @@ function renderPublishPanel(item) {
     const descriptionText = platformData.descriptionText || "";
     const keywordsText = platformData.keywordsText || "";
 
-    platformPanel.value = [
+    rawPlatformText = [
       `# ${previewPlatform} package`,
       "",
       packageText,
@@ -1436,6 +1663,7 @@ function renderPublishPanel(item) {
     ].join("\n").trim();
   }
 
+  renderPublishPlatformDetail(language, previewPlatform, platformData, rawPlatformText);
   renderPublishFiles(item.bookName, language, previewPlatform, platformData);
 }
 
@@ -1740,8 +1968,23 @@ function setupForms() {
     }
   });
 
+  $("#publish-editor-form").addEventListener("input", () => {
+    state.publishEditorDirty = true;
+    updatePublishEditorStatus();
+  });
+
+  $("#save-publish-metadata").addEventListener("click", async () => {
+    try {
+      await savePublishMetadata();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#publish-language").addEventListener("change", () => {
     const selected = state.workspaces.find((item) => item.bookName === getBookName()) || null;
+    state.publishEditorDirty = false;
     renderPublishPanel(selected);
   });
 

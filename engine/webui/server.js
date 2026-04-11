@@ -3,7 +3,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const { URL } = require("node:url");
 
@@ -412,6 +412,232 @@ function getPublishArtifacts(bookRoot, languageCode = "zh") {
     reportText: readTextIfExists(reportPath),
     platforms
   };
+}
+
+function writeJsonFile(filePath, payload) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+function sanitizeText(value) {
+  return String(value || "").trim();
+}
+
+function sanitizeList(input) {
+  const items = Array.isArray(input)
+    ? input
+    : String(input || "").split(/\r?\n|,/);
+
+  return [...new Set(items
+    .map((item) => String(item || "").trim())
+    .filter(Boolean))];
+}
+
+function buildPublishMetadataMarkdown(metadata) {
+  const lines = [];
+  lines.push("# Publish Metadata");
+  lines.push("");
+  lines.push(`- Title: ${metadata.title || ""}`);
+  lines.push(`- Subtitle: ${metadata.subtitle || ""}`);
+  lines.push(`- Author: ${metadata.author || ""}`);
+  lines.push(`- Language: ${metadata.language || ""} (${metadata.language_name || ""})`);
+  lines.push(`- Publisher: ${metadata.publisher || ""}`);
+  lines.push(`- Imprint: ${metadata.imprint || ""}`);
+  lines.push(`- Edition type: ${metadata.edition_type || ""}`);
+  lines.push(`- Publication date: ${metadata.publication_date || ""}`);
+  lines.push("");
+  lines.push("## Rights");
+  lines.push("");
+  lines.push(metadata.rights || "");
+  lines.push("");
+  lines.push(`- Copyright holder: ${metadata.copyright_holder || ""}`);
+  lines.push(`- Territory: ${metadata.territory || ""}`);
+  lines.push(`- Distribution rights: ${metadata.distribution_rights || ""}`);
+  lines.push("");
+  lines.push("## Marketing");
+  lines.push("");
+  lines.push(`- Tagline: ${metadata.marketing_tagline || ""}`);
+  lines.push(`- OBI copy: ${metadata.obi_copy || ""}`);
+  lines.push(`- Spine text: ${metadata.spine_text || ""}`);
+  lines.push("");
+  lines.push("## Short Description");
+  lines.push("");
+  lines.push(metadata.short_description || "");
+  lines.push("");
+  lines.push("## Long Description");
+  lines.push("");
+  lines.push(metadata.long_description || "");
+  lines.push("");
+  lines.push("## Keywords");
+  lines.push("");
+  (metadata.keywords || []).forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+  lines.push("## Categories");
+  lines.push("");
+  (metadata.categories || []).forEach((item) => lines.push(`- ${item}`));
+  lines.push("");
+  lines.push("## Formats");
+  lines.push("");
+  (metadata.formats || []).forEach((item) => lines.push(`- ${item}`));
+  return lines.join("\r\n");
+}
+
+function buildPublishReportMarkdown(metadata, manifest) {
+  const lines = [];
+  const platforms = Array.isArray(manifest?.platforms) ? manifest.platforms : [];
+
+  lines.push("# Publish Report");
+  lines.push("");
+  lines.push(`- Generated at: ${formatLocalTimestamp()}`);
+  lines.push(`- BookName: ${metadata.book_name || ""}`);
+  lines.push(`- Language: ${metadata.language || ""}`);
+  lines.push(`- Ready: ${manifest?.ready ? "Yes" : "No"}`);
+  lines.push("");
+  lines.push("## Book");
+  lines.push("");
+  lines.push(`- Title: ${metadata.title || ""}`);
+  lines.push(`- Subtitle: ${metadata.subtitle || ""}`);
+  lines.push(`- Author: ${metadata.author || ""}`);
+  lines.push(`- Type: ${metadata.book_type || ""}`);
+  lines.push(`- Publisher: ${metadata.publisher || ""}`);
+  lines.push(`- Imprint: ${metadata.imprint || ""}`);
+  lines.push(`- Rights: ${metadata.rights || ""}`);
+  lines.push(`- Edition type: ${metadata.edition_type || ""}`);
+  lines.push("");
+  lines.push("## Discovery");
+  lines.push("");
+  lines.push(`- Keywords: ${(metadata.keywords || []).join(", ")}`);
+  lines.push(`- Categories: ${(metadata.categories || []).join(", ")}`);
+  lines.push(`- Formats: ${(metadata.formats || []).join(", ")}`);
+  lines.push("");
+  lines.push("## Platforms");
+  lines.push("");
+
+  if (!platforms.length) {
+    lines.push("- None");
+  } else {
+    platforms.forEach((platform) => {
+      lines.push(`### ${platform.name || ""}`);
+      lines.push(`- Folder: ${platform.folder || ""}`);
+      lines.push(`- Metadata: ${platform.metadata || ""}`);
+      lines.push(`- EPUB: ${platform.copied_files?.epub || ""}`);
+      lines.push(`- PDF: ${platform.copied_files?.pdf || ""}`);
+      lines.push(`- DOCX: ${platform.copied_files?.docx || ""}`);
+      lines.push(`- Cover: ${platform.copied_files?.cover || ""}`);
+      lines.push("");
+    });
+  }
+
+  return lines.join("\r\n");
+}
+
+function buildPlatformMetadataFromPublish(metadata, platformName) {
+  return {
+    platform: platformName,
+    book_name: metadata.book_name || "",
+    language: metadata.language || "",
+    language_name: metadata.language_name || "",
+    title: metadata.title || "",
+    subtitle: metadata.subtitle || "",
+    author: metadata.author || "",
+    audience: metadata.audience || "",
+    type: metadata.book_type || "",
+    style: metadata.style || "",
+    publisher: metadata.publisher || "",
+    imprint: metadata.imprint || "",
+    publication_date: metadata.publication_date || "",
+    rights: metadata.rights || "",
+    copyright_holder: metadata.copyright_holder || "",
+    copyright_year: String(metadata.copyright_year || ""),
+    territory: metadata.territory || "",
+    distribution_rights: metadata.distribution_rights || "",
+    edition_type: metadata.edition_type || "",
+    short_description: metadata.short_description || "",
+    long_description: metadata.long_description || "",
+    marketing_tagline: metadata.marketing_tagline || "",
+    cover_hook: metadata.cover_hook || "",
+    back_cover_blurb: metadata.back_cover_blurb || "",
+    obi_copy: metadata.obi_copy || "",
+    author_bio: metadata.author_bio || "",
+    spine_text: metadata.spine_text || "",
+    keywords: Array.isArray(metadata.keywords) ? metadata.keywords : [],
+    categories: Array.isArray(metadata.categories) ? metadata.categories : [],
+    formats: Array.isArray(metadata.formats) ? metadata.formats : [],
+    identification: metadata.identification || {},
+    marketing: metadata.marketing || {},
+    rights_metadata: metadata.rights_metadata || {},
+    discovery: metadata.discovery || {},
+    distribution: metadata.distribution || {},
+    source_files: {
+      epub: metadata.source_files?.epub || "",
+      pdf: metadata.source_files?.pdf || "",
+      docx: metadata.source_files?.docx || "",
+      cover: metadata.source_files?.cover || ""
+    }
+  };
+}
+
+function runEngineScriptSync(scriptName, args = []) {
+  const scriptPath = path.join(ENGINE_ROOT, scriptName);
+  const psArgs = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+    ...args
+  ];
+
+  const result = spawnSync("powershell.exe", psArgs, {
+    cwd: ENGINE_ROOT,
+    env: process.env,
+    encoding: "utf8"
+  });
+
+  if ((result.status ?? -1) !== 0) {
+    const message = [result.stderr, result.stdout]
+      .filter(Boolean)
+      .join("\n")
+      .trim() || `${scriptName} failed.`;
+    throw new Error(message);
+  }
+
+  return result;
+}
+
+function syncPublishMetadataFiles(bookRoot, languageCode, nextMetadata) {
+  const publishRoot = getPublishLanguageRoot(bookRoot, languageCode);
+  const metadataJsonPath = path.join(publishRoot, "publish_metadata.json");
+  const metadataMdPath = path.join(publishRoot, "publish_metadata.md");
+  const manifestPath = path.join(publishRoot, "publish_manifest.json");
+  const reportPath = path.join(publishRoot, "publish_report.md");
+
+  writeJsonFile(metadataJsonPath, nextMetadata);
+  fs.writeFileSync(metadataMdPath, buildPublishMetadataMarkdown(nextMetadata), "utf8");
+
+  const manifest = readJsonFileSafe(manifestPath);
+  fs.writeFileSync(reportPath, buildPublishReportMarkdown(nextMetadata, manifest), "utf8");
+
+  const platformScripts = {
+    amazon: "09c-amazon.ps1",
+    apple: "09d-apple.ps1",
+    google: "09e-google.ps1"
+  };
+
+  Object.entries(platformScripts).forEach(([platformName, scriptName]) => {
+    const platformRoot = path.join(publishRoot, platformName);
+    if (!fs.existsSync(platformRoot)) {
+      return;
+    }
+
+    const platformMetadataPath = path.join(platformRoot, "metadata.json");
+    writeJsonFile(platformMetadataPath, buildPlatformMetadataFromPublish(nextMetadata, platformName));
+    runEngineScriptSync(scriptName, [
+      "-BookName", nextMetadata.book_name || "",
+      "-Language", languageCode,
+      "-Force"
+    ]);
+  });
 }
 
 function buildCoverCopyMarkdown(copyData) {
@@ -1140,6 +1366,117 @@ const server = http.createServer(async (req, res) => {
       validateLanguageCode(language);
       const paths = getWorkspacePaths(bookName);
       sendJson(res, 200, {
+        bookName,
+        language,
+        publish: getPublishArtifacts(paths.bookRoot, language)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/publish-metadata") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const language = body.language || "zh";
+
+      validateBookName(bookName);
+      validateLanguageCode(language);
+
+      const paths = getWorkspacePaths(bookName);
+      const publishRoot = getPublishLanguageRoot(paths.bookRoot, language);
+      const metadataPath = path.join(publishRoot, "publish_metadata.json");
+
+      if (!fs.existsSync(metadataPath)) {
+        sendJson(res, 404, { error: "publish_metadata.json not found." });
+        return;
+      }
+
+      const existing = readJsonFile(metadataPath);
+      const keywords = sanitizeList(body.keywords);
+      const categories = sanitizeList(body.categories);
+
+      const title = sanitizeText(body.title || existing.title);
+      const subtitle = sanitizeText(body.subtitle || existing.subtitle);
+      const author = sanitizeText(body.author || existing.author);
+      const publisher = sanitizeText(body.publisher || existing.publisher);
+      const imprint = sanitizeText(body.imprint || existing.imprint);
+      const publicationDate = sanitizeText(body.publicationDate || existing.publication_date);
+      const rights = sanitizeText(body.rights || existing.rights);
+      const territory = sanitizeText(body.territory || existing.territory);
+      const distributionRights = sanitizeText(body.distributionRights || existing.distribution_rights);
+      const shortDescription = sanitizeText(body.shortDescription || existing.short_description);
+      const longDescription = sanitizeText(body.longDescription || existing.long_description);
+      const marketingTagline = sanitizeText(body.marketingTagline || existing.marketing_tagline);
+      const coverHook = sanitizeText(body.coverHook || existing.cover_hook);
+      const backCoverBlurb = sanitizeText(body.backCoverBlurb || existing.back_cover_blurb);
+      const obiCopy = sanitizeText(body.obiCopy || existing.obi_copy);
+      const authorBio = sanitizeText(body.authorBio || existing.author_bio);
+      const spineText = sanitizeText(body.spineText || existing.spine_text);
+
+      const nextMetadata = {
+        ...existing,
+        title,
+        subtitle,
+        author,
+        publisher,
+        imprint,
+        publication_date: publicationDate,
+        rights,
+        territory,
+        distribution_rights: distributionRights,
+        short_description: shortDescription,
+        long_description: longDescription,
+        marketing_tagline: marketingTagline,
+        cover_hook: coverHook,
+        back_cover_blurb: backCoverBlurb,
+        obi_copy: obiCopy,
+        author_bio: authorBio,
+        spine_text: spineText,
+        keywords,
+        categories,
+        identification: {
+          ...(existing.identification || {}),
+          title,
+          subtitle,
+          author,
+          publication_date: publicationDate,
+          publisher,
+          imprint
+        },
+        marketing: {
+          ...(existing.marketing || {}),
+          tagline: marketingTagline,
+          subtitle,
+          short_description: shortDescription,
+          long_description: longDescription,
+          cover_hook: coverHook,
+          back_cover_blurb: backCoverBlurb,
+          obi_copy: obiCopy,
+          author_bio: authorBio,
+          spine_text: spineText
+        },
+        rights_metadata: {
+          ...(existing.rights_metadata || {}),
+          rights_statement: rights,
+          territory,
+          distribution_rights: distributionRights,
+          publisher,
+          imprint
+        },
+        discovery: {
+          ...(existing.discovery || {}),
+          keywords,
+          categories
+        }
+      };
+
+      syncPublishMetadataFiles(paths.bookRoot, language, nextMetadata);
+
+      sendJson(res, 200, {
+        saved: true,
         bookName,
         language,
         publish: getPublishArtifacts(paths.bookRoot, language)

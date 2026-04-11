@@ -183,7 +183,12 @@ $GoogleMetadata = if (Test-Path -LiteralPath $GoogleMetadataPath) {
 }
 
 $GoogleKeywords = Get-GoogleKeywords -Keywords @($PublishMetadata.keywords | ForEach-Object { "$_" })
-$GoogleCategories = Get-GoogleCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
+$GoogleRecommended = @($PublishMetadata.platform_recommended_categories.google | ForEach-Object { "$($_.path)" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$GoogleCategories = if ($GoogleRecommended.Count -gt 0) {
+    $GoogleRecommended
+} else {
+    Get-GoogleCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
+}
 $BookFilePath = Get-PrimaryGoogleBookFile -GoogleRoot $GoogleRoot
 $CoverPath = Join-Path $GoogleRoot "cover.png"
 if (-not (Test-Path -LiteralPath $CoverPath)) {

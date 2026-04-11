@@ -1,0 +1,13 @@
+{
+  "name": "sagewrite-automation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser automation helpers for SageWrite publishing workflows",
+  "type": "module",
+  "scripts": {
+    "amazon": "node submit-amazon.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.54.1"
+  }
+}

@@ -183,7 +183,12 @@ $AppleMetadata = if (Test-Path -LiteralPath $AppleMetadataPath) {
 }
 
 $AppleKeywords = Get-AppleKeywords -Keywords @($PublishMetadata.keywords | ForEach-Object { "$_" })
-$AppleCategories = Get-AppleCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
+$AppleRecommended = @($PublishMetadata.platform_recommended_categories.apple | ForEach-Object { "$($_.path)" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$AppleCategories = if ($AppleRecommended.Count -gt 0) {
+    $AppleRecommended
+} else {
+    Get-AppleCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
+}
 $ManuscriptPath = Get-PrimaryEpubFile -AppleRoot $AppleRoot
 $CoverPath = Join-Path $AppleRoot "cover.png"
 if (-not (Test-Path -LiteralPath $CoverPath)) {

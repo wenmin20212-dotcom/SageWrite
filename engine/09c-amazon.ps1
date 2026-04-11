@@ -190,7 +190,12 @@ $AmazonMetadata = if (Test-Path -LiteralPath $AmazonMetadataPath) {
 }
 
 $KeywordBoxes = Get-AmazonKeywordBoxes -Keywords @($PublishMetadata.keywords | ForEach-Object { "$_" })
-$AmazonCategories = Get-AmazonCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
+$AmazonRecommended = @($PublishMetadata.platform_recommended_categories.amazon | ForEach-Object { "$($_.path)" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$AmazonCategories = if ($AmazonRecommended.Count -gt 0) {
+    $AmazonRecommended
+} else {
+    Get-AmazonCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
+}
 $ManuscriptPath = Get-PrimaryManuscriptFile -AmazonRoot $AmazonRoot
 $CoverPath = Join-Path $AmazonRoot "cover.png"
 if (-not (Test-Path -LiteralPath $CoverPath)) {
