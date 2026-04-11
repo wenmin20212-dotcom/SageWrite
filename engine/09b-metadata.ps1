@@ -7,7 +7,7 @@ param(
     [switch]$Force
 )
 
-[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
@@ -21,9 +21,19 @@ function Ensure-Directory {
         [Parameter(Mandatory = $true)]
         [string]$Path
     )
+
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
+}
+
+function New-TextFromCodePoints {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int[]]$CodePoints
+    )
+
+    return (-join ($CodePoints | ForEach-Object { [char]$_ }))
 }
 
 function Get-LanguageLabel {
@@ -33,7 +43,7 @@ function Get-LanguageLabel {
     )
 
     switch ($LanguageCode.Trim().ToLowerInvariant()) {
-        "zh" { return "Chinese" }
+        "zh" { return (New-TextFromCodePoints @(0x4E2D, 0x6587)) }
         "en" { return "English" }
         "fr" { return "French" }
         "de" { return "German" }
@@ -45,31 +55,112 @@ function Get-LanguageLabel {
     }
 }
 
-function Get-CategorySuggestions {
+function Get-ZhLexicon {
+    return [ordered]@{
+        target_readers = New-TextFromCodePoints @(0x76EE, 0x6807, 0x8BFB, 0x8005, 0xFF1A)
+        writing_scope = New-TextFromCodePoints @(0x5199, 0x4F5C, 0x8303, 0x56F4, 0xFF1A)
+        copyright_reserved = New-TextFromCodePoints @(0x7248, 0x6743, 0x6240, 0x6709)
+        all_rights_reserved = New-TextFromCodePoints @(0x4FDD, 0x7559, 0x6240, 0x6709, 0x6743, 0x5229)
+        publisher = "SageWrite" + (New-TextFromCodePoints @(0x6570, 0x5B57, 0x51FA, 0x7248))
+        imprint = "SageWrite"
+        edition_type = New-TextFromCodePoints @(0x6570, 0x5B57, 0x7248)
+        territory = New-TextFromCodePoints @(0x5168, 0x7403, 0x53D1, 0x884C)
+        distribution_rights = New-TextFromCodePoints @(0x6570, 0x5B57, 0x53D1, 0x884C, 0x6743)
+        keyword_1 = New-TextFromCodePoints @(0x4EBA, 0x5DE5, 0x667A, 0x80FD, 0x5199, 0x4F5C)
+        keyword_2 = New-TextFromCodePoints @(0x77E5, 0x8BC6, 0x521B, 0x4F5C)
+        keyword_3 = New-TextFromCodePoints @(0x77E5, 0x8BC6, 0x751F, 0x4EA7)
+        keyword_4 = New-TextFromCodePoints @(0x4EBA, 0x673A, 0x534F, 0x540C, 0x5199, 0x4F5C)
+        keyword_5 = New-TextFromCodePoints @(0x7ED3, 0x6784, 0x5316, 0x5199, 0x4F5C)
+        keyword_6 = New-TextFromCodePoints @(0x6570, 0x5B57, 0x51FA, 0x7248)
+        keyword_7 = New-TextFromCodePoints @(0x5199, 0x4F5C, 0x65B9, 0x6CD5)
+        keyword_8 = New-TextFromCodePoints @(0x5185, 0x5BB9, 0x751F, 0x6210)
+        keyword_9 = New-TextFromCodePoints @(0x77E5, 0x8BC6, 0x5DE5, 0x4F5C)
+        category_1 = New-TextFromCodePoints @(0x975E, 0x865A, 0x6784)
+        category_2 = New-TextFromCodePoints @(0x4EBA, 0x5DE5, 0x667A, 0x80FD)
+        category_3 = New-TextFromCodePoints @(0x5199, 0x4F5C, 0x65B9, 0x6CD5)
+        category_4 = New-TextFromCodePoints @(0x6570, 0x5B57, 0x51FA, 0x7248)
+        stop_preface = New-TextFromCodePoints @(0x524D, 0x8A00)
+        stop_epilogue = New-TextFromCodePoints @(0x7ED3, 0x8BED)
+        stop_length = New-TextFromCodePoints @(0x7BC7, 0x5E45, 0x7EA6)
+    }
+}
+
+function Get-UniqueList {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$BookType,
-
-        [Parameter(Mandatory = $true)]
-        [string]$ScopeText
+        [string[]]$Items
     )
 
-    $TypeText = $BookType.ToLowerInvariant()
-    $Scope = $ScopeText.ToLowerInvariant()
+    $Seen = @{}
+    $Output = New-Object System.Collections.Generic.List[string]
+    foreach ($Item in $Items) {
+        $Value = "$Item".Trim()
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            continue
+        }
 
-    if ($TypeText -match "小说" -or $TypeText -match "fiction" -or $Scope -match "novel") {
-        return @("Fiction", "Literary Fiction", "Contemporary")
+        if (-not $Seen.ContainsKey($Value)) {
+            $Seen[$Value] = $true
+            $Output.Add($Value)
+        }
     }
 
-    if ($TypeText -match "教材" -or $TypeText -match "manual" -or $TypeText -match "guide") {
-        return @("Education", "Reference", "Professional")
+    return @($Output)
+}
+
+function Get-ChineseFragments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Texts,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Lexicon
+    )
+
+    $Output = New-Object System.Collections.Generic.List[string]
+    foreach ($Text in $Texts) {
+        $Raw = "$Text".Trim()
+        if ([string]::IsNullOrWhiteSpace($Raw)) {
+            continue
+        }
+
+        $Normalized = $Raw -replace '^[^:]{1,24}[\uFF1A:]\s*', ''
+        $Parts = [regex]::Split($Normalized, '[^\u3400-\u9FFF]+')
+        foreach ($Part in $Parts) {
+            $Value = "$Part".Trim()
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+                continue
+            }
+
+            $Value = $Value -replace '^[\u7684\u4E0E\u53CA\u548C\u5411\u4E3A\u5176]+', ''
+            $Value = $Value -replace '[\u7684\u4E0E\u53CA\u548C\u4EEC\u8005]+$', ''
+            $Value = "$Value".Trim()
+
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+                continue
+            }
+
+            if ($Value.Length -lt 2 -or $Value.Length -gt 16) {
+                continue
+            }
+
+            if (@(
+                    $Lexicon.stop_preface,
+                    $Lexicon.stop_epilogue,
+                    $Lexicon.stop_length
+                ) -contains $Value) {
+                continue
+            }
+
+            if ($Value -match '^[\u7B2C\u4E00-\u9FFF0-9]{1,8}\u7AE0$') {
+                continue
+            }
+
+            $Output.Add($Value)
+        }
     }
 
-    if ($TypeText -match "科普" -or $TypeText -match "nonfiction" -or $TypeText -match "思想") {
-        return @("Nonfiction", "Technology & Society", "Writing & Publishing")
-    }
-
-    return @("Nonfiction", "General", "Digital Publishing")
+    return Get-UniqueList -Items @($Output)
 }
 
 function Get-PlatformRecommendedCategories {
@@ -90,7 +181,7 @@ function Get-PlatformRecommendedCategories {
     $Combined = @($BookType, $Audience, $ScopeText, $CoreThesis) -join " "
     $CombinedLower = $Combined.ToLowerInvariant()
 
-    if ($Combined -match "小说|fiction|novel") {
+    if ($CombinedLower -match "fiction|novel") {
         return [ordered]@{
             amazon = @(
                 [ordered]@{ priority = 1; path = "Kindle Books > Literature & Fiction > Literary Fiction"; note = "Primary fiction placement" },
@@ -107,16 +198,16 @@ function Get-PlatformRecommendedCategories {
         }
     }
 
-    if ($Combined -match "教育|教材|teaching|education") {
+    if ($CombinedLower -match "education|teaching") {
         return [ordered]@{
             amazon = @(
                 [ordered]@{ priority = 1; path = "Kindle Books > Education & Teaching > General"; note = "Primary education placement" },
                 [ordered]@{ priority = 2; path = "Kindle Books > Education & Teaching > Schools & Teaching"; note = "Secondary education placement" },
-                [ordered]@{ priority = 3; path = "Kindle Books > Reference > Writing, Research & Publishing Guides"; note = "Useful when the book includes method instruction" }
+                [ordered]@{ priority = 3; path = "Kindle Books > Reference > Writing, Research & Publishing Guides"; note = "Method-oriented fallback" }
             )
             apple = @(
                 [ordered]@{ priority = 1; path = "Education"; note = "Primary Apple Books education category" },
-                [ordered]@{ priority = 2; path = "Professional & Technical"; note = "Secondary Apple Books technical education category" }
+                [ordered]@{ priority = 2; path = "Professional & Technical"; note = "Secondary Apple Books technical category" }
             )
             google = @(
                 [ordered]@{ priority = 1; path = "Education / General"; note = "Primary Google Play Books education category" },
@@ -161,71 +252,11 @@ function Get-PlatformRecommendedCategories {
     }
 }
 
-function Get-UniqueKeywords {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Seeds
-    )
-
-    $Seen = @{}
-    $Output = @()
-    foreach ($Seed in $Seeds) {
-        $Value = "$Seed".Trim()
-        if ([string]::IsNullOrWhiteSpace($Value)) {
-            continue
-        }
-        if (-not $Seen.ContainsKey($Value)) {
-            $Seen[$Value] = $true
-            $Output += $Value
-        }
-        if ($Output.Count -ge 12) {
-            break
-        }
-    }
-    return $Output
-}
-
-function Get-CleanKeywords {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Seeds
-    )
-
-    $Raw = Get-UniqueKeywords -Seeds $Seeds
-    $Output = @()
-    foreach ($Item in $Raw) {
-        $Value = "$Item".Trim()
-        if ([string]::IsNullOrWhiteSpace($Value)) {
-            continue
-        }
-
-        $Value = $Value -replace '[\r\n\t]+', ' '
-        $Value = $Value -replace '^[\s\p{P}\p{S}]+', ''
-        $Value = $Value -replace '[\s\p{P}\p{S}]+$', ''
-
-        if ([string]::IsNullOrWhiteSpace($Value)) {
-            continue
-        }
-
-        if ($Value -match '^第.+章$' -or $Value -match '^第.+章[:：]') {
-            continue
-        }
-
-        if ($Value.Length -lt 2 -or $Value.Length -gt 28) {
-            continue
-        }
-
-        $Output += $Value
-        if ($Output.Count -ge 12) {
-            break
-        }
-    }
-
-    return Get-UniqueKeywords -Seeds $Output
-}
-
 function Get-KeywordSuggestions {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
         [Parameter(Mandatory = $true)]
         [string]$Title,
 
@@ -245,43 +276,111 @@ function Get-KeywordSuggestions {
         [string]$CoreThesis,
 
         [Parameter(Mandatory = $true)]
-        [string[]]$ExistingKeywords
+        [string]$Hook,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Blurb,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ChapterTitles,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$ExistingKeywords,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Lexicon
     )
 
-    $Seeds = @(
-        $Title,
-        $Subtitle,
+    $NormalizedLanguage = "$LanguageCode".Trim().ToLowerInvariant()
+    if ($NormalizedLanguage -ne "zh") {
+        return Get-UniqueList -Items @(
+            $Title,
+            $Subtitle,
+            $BookType,
+            "SageWrite",
+            "AI writing",
+            "artificial intelligence",
+            "knowledge creation",
+            "knowledge production",
+            "human-AI collaboration",
+            "structured writing",
+            "digital publishing",
+            "writing methodology"
+        ) | Select-Object -First 12
+    }
+
+    $Preferred = @()
+    $Preferred += Get-ChineseFragments -Texts @($Title, $Subtitle, $BookType) -Lexicon $Lexicon
+    $Preferred += @(
+        $Lexicon.keyword_1,
+        $Lexicon.keyword_2,
+        $Lexicon.keyword_3,
+        $Lexicon.keyword_4,
+        $Lexicon.keyword_5,
+        $Lexicon.keyword_6,
+        $Lexicon.keyword_7,
+        $Lexicon.keyword_8,
+        $Lexicon.keyword_9
+    )
+    $Preferred += Get-ChineseFragments -Texts @($Hook, $Blurb, $Audience, $Scope, $CoreThesis) -Lexicon $Lexicon
+    $Preferred += Get-ChineseFragments -Texts $ChapterTitles -Lexicon $Lexicon
+    $Preferred += Get-ChineseFragments -Texts $ExistingKeywords -Lexicon $Lexicon
+
+    $Keywords = Get-UniqueList -Items $Preferred
+    if ($Keywords.Count -lt 9) {
+        $Keywords = Get-UniqueList -Items (@($Keywords) + @(
+                $Lexicon.keyword_1,
+                $Lexicon.keyword_2,
+                $Lexicon.keyword_3,
+                $Lexicon.keyword_4,
+                $Lexicon.keyword_5,
+                $Lexicon.keyword_6,
+                $Lexicon.keyword_7,
+                $Lexicon.keyword_8,
+                $Lexicon.keyword_9
+            ))
+    }
+
+    return @($Keywords | Select-Object -First 12)
+}
+
+function Get-SourceCategories {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BookType,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Keywords,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Lexicon
+    )
+
+    if ("$LanguageCode".Trim().ToLowerInvariant() -ne "zh") {
+        return Get-UniqueList -Items @($BookType, "Nonfiction", "Technology", "Writing")
+    }
+
+    $Categories = Get-UniqueList -Items @(
         $BookType,
-        "SageWrite",
-        "AI writing",
-        "artificial intelligence",
-        "knowledge creation",
-        "knowledge production",
-        "human-AI collaboration",
-        "structured writing",
-        "digital publishing",
-        "writing methodology"
+        $Lexicon.category_1,
+        $Lexicon.category_2,
+        $Lexicon.category_3,
+        $Lexicon.category_4,
+        $Keywords[0],
+        $Keywords[1]
     )
 
-    $CleanExisting = @($ExistingKeywords | Where-Object {
-        $Value = "$_".Trim()
-        (-not [string]::IsNullOrWhiteSpace($Value)) -and
-        ($Value.Length -ge 2) -and
-        ($Value.Length -le 16) -and
-        ($Value -notmatch '^第.+章') -and
-        ($Value -notmatch '^第[一二三四五六七八九十0-9]+章') -and
-        ($Value -notmatch '^的') -and
-        ($Value -notmatch '^[0-9]+') -and
-        ($Value -notmatch '篇幅') -and
-        ($Value -notmatch '结语')
-    })
-    $Seeds += $CleanExisting
-
-    return Get-CleanKeywords -Seeds $Seeds
+    return @($Categories | Select-Object -First 6)
 }
 
 function Build-LongDescription {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
         [Parameter(Mandatory = $true)]
         [string]$Hook,
 
@@ -292,24 +391,38 @@ function Build-LongDescription {
         [string]$Audience,
 
         [Parameter(Mandatory = $true)]
-        [string]$Scope
+        [string]$Scope,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Lexicon
     )
 
-    $Parts = @()
-    if ($Hook) {
-        $Parts += $Hook.Trim()
-    }
-    if ($Blurb) {
-        $Parts += $Blurb.Trim()
-    }
-    if ($Audience) {
-        $Parts += ("Target readers: " + $Audience.Trim())
-    }
-    if ($Scope) {
-        $Parts += ("Edition scope: " + $Scope.Trim())
+    $Parts = New-Object System.Collections.Generic.List[string]
+
+    foreach ($Value in @($Hook, $Blurb)) {
+        $Text = "$Value".Trim()
+        if (-not [string]::IsNullOrWhiteSpace($Text)) {
+            $Parts.Add($Text)
+        }
     }
 
-    return ($Parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`r`n`r`n"
+    if ([string]::IsNullOrWhiteSpace($Audience) -eq $false) {
+        if ("$LanguageCode".Trim().ToLowerInvariant() -eq "zh") {
+            $Parts.Add(($Lexicon.target_readers + $Audience.Trim()))
+        } else {
+            $Parts.Add("Target readers: " + $Audience.Trim())
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Scope) -eq $false) {
+        if ("$LanguageCode".Trim().ToLowerInvariant() -eq "zh") {
+            $Parts.Add(($Lexicon.writing_scope + $Scope.Trim()))
+        } else {
+            $Parts.Add("Edition scope: " + $Scope.Trim())
+        }
+    }
+
+    return (($Parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`r`n`r`n")
 }
 
 function Get-FormatAvailability {
@@ -323,6 +436,76 @@ function Get-FormatAvailability {
     if ("$($Files.pdf)") { $Formats += "PDF" }
     if ("$($Files.docx)") { $Formats += "DOCX" }
     return $Formats
+}
+
+function Build-PublishMetadataMarkdown {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Metadata
+    )
+
+    $Lines = @()
+    $Lines += "# Publish Metadata"
+    $Lines += ""
+    $Lines += "- Title: $($Metadata.title)"
+    $Lines += "- Subtitle: $($Metadata.subtitle)"
+    $Lines += "- Author: $($Metadata.author)"
+    $Lines += "- Language: $($Metadata.language)"
+    $Lines += "- Publication Date: $($Metadata.publication_date)"
+    $Lines += "- Publisher: $($Metadata.publisher)"
+    $Lines += "- Imprint: $($Metadata.imprint)"
+    $Lines += "- Edition Type: $($Metadata.edition_type)"
+    $Lines += ""
+    $Lines += "## Rights"
+    $Lines += ""
+    $Lines += "$($Metadata.rights)"
+    $Lines += ""
+    $Lines += "- Copyright Holder: $($Metadata.copyright_holder)"
+    $Lines += "- Territory: $($Metadata.territory)"
+    $Lines += "- Distribution Rights: $($Metadata.distribution_rights)"
+    $Lines += ""
+    $Lines += "## Marketing"
+    $Lines += ""
+    $Lines += "- Tagline: $($Metadata.marketing_tagline)"
+    $Lines += "- Cover Hook: $($Metadata.cover_hook)"
+    $Lines += "- OBI Copy: $($Metadata.obi_copy)"
+    $Lines += "- Spine Text: $($Metadata.spine_text)"
+    $Lines += ""
+    $Lines += "## Short Description"
+    $Lines += ""
+    $Lines += "$($Metadata.short_description)"
+    $Lines += ""
+    $Lines += "## Long Description"
+    $Lines += ""
+    $Lines += "$($Metadata.long_description)"
+    $Lines += ""
+    $Lines += "## Back Cover Blurb"
+    $Lines += ""
+    $Lines += "$($Metadata.back_cover_blurb)"
+    $Lines += ""
+    $Lines += "## Author Bio"
+    $Lines += ""
+    $Lines += "$($Metadata.author_bio)"
+    $Lines += ""
+    $Lines += "## Keywords"
+    $Lines += ""
+    foreach ($Keyword in @($Metadata.keywords)) {
+        $Lines += "- $Keyword"
+    }
+    $Lines += ""
+    $Lines += "## Categories"
+    $Lines += ""
+    foreach ($Category in @($Metadata.categories)) {
+        $Lines += "- $Category"
+    }
+    $Lines += ""
+    $Lines += "## Formats"
+    $Lines += ""
+    foreach ($Format in @($Metadata.formats)) {
+        $Lines += "- $Format"
+    }
+
+    return ($Lines -join "`r`n")
 }
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
@@ -342,6 +525,7 @@ $PublishRoot = Join-Path $BookRoot ("09_publish\" + $LanguageCode)
 $AssetsPath = Join-Path $PublishRoot "publish_assets.json"
 $MetadataJsonPath = Join-Path $PublishRoot "publish_metadata.json"
 $MetadataMdPath = Join-Path $PublishRoot "publish_metadata.md"
+$Lexicon = Get-ZhLexicon
 
 if (-not (Test-Path -LiteralPath $AssetsPath)) {
     Fail-SageStep -Context $Context -Step "publish_metadata" -Message "publish_assets.json not found." -Data @{
@@ -375,22 +559,32 @@ $CoreThesis = "$($Book.core_thesis)"
 $Hook = "$($Marketing.hook)"
 $Blurb = "$($Marketing.blurb)"
 $LanguageLabel = Get-LanguageLabel -LanguageCode $LanguageCode
-$Publisher = "SageWrite Digital Publishing"
-$Imprint = "SageWrite"
+$Publisher = if ($LanguageCode -eq "zh") { $Lexicon.publisher } else { "SageWrite Digital Publishing" }
+$Imprint = if ($LanguageCode -eq "zh") { $Lexicon.imprint } else { "SageWrite" }
 $PublicationDate = (Get-Date).ToString("yyyy-MM-dd")
-$Keywords = Get-KeywordSuggestions -Title $Title -Subtitle $Subtitle -BookType $BookType -Audience $Audience -Scope $Scope -CoreThesis $CoreThesis -ExistingKeywords @($Discovery.keywords | ForEach-Object { "$_" })
-$Categories = Get-CategorySuggestions -BookType $BookType -ScopeText $Scope
-$PlatformRecommendedCategories = Get-PlatformRecommendedCategories -BookType $BookType -Audience $Audience -ScopeText $Scope -CoreThesis $CoreThesis
-$LongDescription = Build-LongDescription -Hook $Hook -Blurb $Blurb -Audience $Audience -Scope $Scope
-$RightsHolder = if ($Author) { $Author } else { $BookName }
-$CopyrightYear = (Get-Date).Year
-$RightsStatement = "Copyright (c) $((Get-Date).Year) $RightsHolder. All rights reserved."
-$EditionType = "digital"
-$Territory = "Worldwide"
-$DistributionRights = "Global digital distribution"
 $Formats = Get-FormatAvailability -Files $Assets.files
 $ChapterCount = if ($null -ne $Discovery.chapter_count) { [int]$Discovery.chapter_count } else { 0 }
 $ChapterTitles = @($Discovery.chapter_titles | ForEach-Object { "$_" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$ExistingKeywords = @($Discovery.keywords | ForEach-Object { "$_" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$Keywords = Get-KeywordSuggestions -LanguageCode $LanguageCode -Title $Title -Subtitle $Subtitle -BookType $BookType -Audience $Audience -Scope $Scope -CoreThesis $CoreThesis -Hook $Hook -Blurb $Blurb -ChapterTitles $ChapterTitles -ExistingKeywords $ExistingKeywords -Lexicon $Lexicon
+$Categories = Get-SourceCategories -LanguageCode $LanguageCode -BookType $BookType -Keywords $Keywords -Lexicon $Lexicon
+$PlatformRecommendedCategories = Get-PlatformRecommendedCategories -BookType $BookType -Audience $Audience -ScopeText $Scope -CoreThesis $CoreThesis
+$PlatformSelectedCategories = [ordered]@{
+    amazon = if ($PlatformRecommendedCategories.amazon.Count -gt 0) { "$($PlatformRecommendedCategories.amazon[0].path)" } else { "" }
+    apple = if ($PlatformRecommendedCategories.apple.Count -gt 0) { "$($PlatformRecommendedCategories.apple[0].path)" } else { "" }
+    google = if ($PlatformRecommendedCategories.google.Count -gt 0) { "$($PlatformRecommendedCategories.google[0].path)" } else { "" }
+}
+$LongDescription = Build-LongDescription -LanguageCode $LanguageCode -Hook $Hook -Blurb $Blurb -Audience $Audience -Scope $Scope -Lexicon $Lexicon
+$RightsHolder = if ($Author) { $Author } else { $BookName }
+$CopyrightYear = (Get-Date).Year
+$RightsStatement = if ($LanguageCode -eq "zh") {
+    "{0} (C) {1} {2} {3}" -f $Lexicon.copyright_reserved, $CopyrightYear, $RightsHolder, $Lexicon.all_rights_reserved
+} else {
+    "Copyright (c) $CopyrightYear $RightsHolder. All rights reserved."
+}
+$EditionType = if ($LanguageCode -eq "zh") { $Lexicon.edition_type } else { "digital" }
+$Territory = if ($LanguageCode -eq "zh") { $Lexicon.territory } else { "Worldwide" }
+$DistributionRights = if ($LanguageCode -eq "zh") { $Lexicon.distribution_rights } else { "Global digital distribution" }
 
 $Metadata = [ordered]@{
     generated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -425,6 +619,7 @@ $Metadata = [ordered]@{
     keywords = @($Keywords)
     categories = @($Categories)
     platform_recommended_categories = $PlatformRecommendedCategories
+    platform_selected_categories = $PlatformSelectedCategories
     formats = @($Formats)
     identification = [ordered]@{
         title = $Title
@@ -462,6 +657,7 @@ $Metadata = [ordered]@{
         keywords = @($Keywords)
         categories = @($Categories)
         platform_recommended_categories = $PlatformRecommendedCategories
+        platform_selected_categories = $PlatformSelectedCategories
         audience = $Audience
         book_type = $BookType
         core_thesis = $CoreThesis
@@ -483,68 +679,8 @@ $Metadata = [ordered]@{
 }
 
 $Metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $MetadataJsonPath -Encoding UTF8
-
-$MdLines = @()
-$MdLines += "# Publish Metadata"
-$MdLines += ""
-$MdLines += "- Title: $Title"
-$MdLines += "- Subtitle: $Subtitle"
-$MdLines += "- Author: $Author"
-$MdLines += "- Language: $LanguageCode ($LanguageLabel)"
-$MdLines += "- Publisher: $Publisher"
-$MdLines += "- Imprint: $Imprint"
-$MdLines += "- Edition type: $EditionType"
-$MdLines += "- Publication date: $PublicationDate"
-$MdLines += ""
-$MdLines += "## Rights"
-$MdLines += ""
-$MdLines += $RightsStatement
-$MdLines += ""
-$MdLines += "- Copyright holder: $RightsHolder"
-$MdLines += "- Territory: $Territory"
-$MdLines += "- Distribution rights: $DistributionRights"
-$MdLines += ""
-$MdLines += "## Marketing"
-$MdLines += ""
-$MdLines += "- Tagline: $($Marketing.tagline)"
-$MdLines += "- OBI copy: $($Marketing.obi_copy)"
-$MdLines += "- Spine text: $($Marketing.spine_text)"
-$MdLines += ""
-$MdLines += "## Short Description"
-$MdLines += ""
-$MdLines += $Hook
-$MdLines += ""
-$MdLines += "## Long Description"
-$MdLines += ""
-$MdLines += $LongDescription
-$MdLines += ""
-$MdLines += "## Keywords"
-$MdLines += ""
-$Keywords | ForEach-Object { $MdLines += "- $_" }
-$MdLines += ""
-$MdLines += "## Categories"
-$MdLines += ""
-$Categories | ForEach-Object { $MdLines += "- $_" }
-$MdLines += ""
-$MdLines += "## Platform Recommended Categories"
-$MdLines += ""
-$MdLines += "### Amazon"
-$MdLines += ""
-$PlatformRecommendedCategories.amazon | ForEach-Object { $MdLines += ("- [{0}] {1} - {2}" -f $_.priority, $_.path, $_.note) }
-$MdLines += ""
-$MdLines += "### Apple"
-$MdLines += ""
-$PlatformRecommendedCategories.apple | ForEach-Object { $MdLines += ("- [{0}] {1} - {2}" -f $_.priority, $_.path, $_.note) }
-$MdLines += ""
-$MdLines += "### Google"
-$MdLines += ""
-$PlatformRecommendedCategories.google | ForEach-Object { $MdLines += ("- [{0}] {1} - {2}" -f $_.priority, $_.path, $_.note) }
-$MdLines += ""
-$MdLines += "## Formats"
-$MdLines += ""
-$Formats | ForEach-Object { $MdLines += "- $_" }
-
-$MdLines -join "`r`n" | Set-Content -LiteralPath $MetadataMdPath -Encoding UTF8
+$MetadataMarkdown = Build-PublishMetadataMarkdown -Metadata $Metadata
+$MetadataMarkdown | Set-Content -LiteralPath $MetadataMdPath -Encoding UTF8
 
 Write-Host ""
 Write-Host "09b-metadata completed successfully."

@@ -497,8 +497,8 @@
           <div class="panel-header">
             <h2>09 上架中心</h2>
             <div class="publish-header-actions">
-              <button id="open-publish-root" class="ghost-button" type="button">打开语言目录</button>
-              <button id="open-publish-platform" class="ghost-button" type="button">打开平台目录</button>
+              <button id="open-publish-root" class="ghost-button" type="button">在资源管理器中打开语言目录</button>
+              <button id="open-publish-platform" class="ghost-button" type="button">在资源管理器中打开平台目录</button>
             </div>
           </div>
           <form id="publish-form" class="form-grid">
@@ -513,6 +513,7 @@
                 <option value="es">Español（es）</option>
                 <option value="ja">日本語（ja）</option>
               </select>
+              <div id="publish-language-hint" class="publish-inline-hint">09 会跟随当前项目实际存在的语言版本生成独立上架包。</div>
             </label>
             <label class="field">
               <span>生成范围</span>
@@ -537,135 +538,51 @@
               运行 09-publish.ps1 后，这里会显示统一上架包摘要。
             </div>
 
+            <div id="publish-review-note" class="publish-review-note">
+              09 的元数据应由系统根据当前语种书稿自动生成，人工主要负责审校与少量微调。
+            </div>
+
+            <div id="publish-save-feedback" class="publish-save-feedback hidden" aria-live="polite"></div>
+
+            <div class="publish-open-paths">
+              <div class="publish-open-card">
+                <div class="cover-report-title">语言目录路径</div>
+                <div id="publish-root-path" class="publish-open-path">选择一个 BookName 后，这里会显示语言目录的真实路径。</div>
+                <button id="copy-publish-root-path" class="ghost-button" type="button">复制语言目录路径</button>
+              </div>
+              <div class="publish-open-card">
+                <div class="cover-report-title">平台目录路径</div>
+                <div id="publish-platform-path" class="publish-open-path">选择平台后，这里会显示平台目录的真实路径。</div>
+                <button id="copy-publish-platform-path" class="ghost-button" type="button">复制平台目录路径</button>
+              </div>
+            </div>
+
+            <div class="publish-insight-grid is-hidden">
+              <div class="publish-insight-card">
+                <div class="cover-report-title">自动生成来源</div>
+                <div id="publish-source-summary" class="publish-source-summary">
+                  选择一个 BookName 后，这里会显示当前语言版本的生成来源、输出文件和发布目录。
+                </div>
+              </div>
+              <div class="publish-insight-card">
+                <div class="cover-report-title">平台推荐分类</div>
+                <div id="publish-recommended-categories" class="publish-recommended-categories">
+                  运行 09-publish.ps1 后，这里会显示 Amazon / Apple / Google 的推荐分类路径。
+                </div>
+              </div>
+            </div>
+
             <div class="publish-workbench">
               <div class="publish-editor-column">
                 <div class="publish-metadata-editor-wrap">
-                  <div class="cover-report-title">统一出版字段编辑</div>
-                  <div class="publish-editor-summary">
-                    <div class="publish-summary-chip">
-                      <strong>01</strong>
-                      <span>基础识别</span>
-                    </div>
-                    <div class="publish-summary-chip">
-                      <strong>02</strong>
-                      <span>营销文案</span>
-                    </div>
-                    <div class="publish-summary-chip">
-                      <strong>03</strong>
-                      <span>发行检索</span>
-                    </div>
-                  </div>
-                  <form id="publish-editor-form" class="publish-editor-grid">
-                    <section class="publish-editor-section">
-                      <div class="publish-section-header">
-                        <div class="publish-section-kicker">01 / FOUNDATION</div>
-                        <h3>基础信息</h3>
-                        <p>决定书的识别信息与出版主体。</p>
-                      </div>
-                      <div class="publish-section-fields">
-                        <label class="field">
-                          <span>书名</span>
-                          <input id="publish-title" type="text">
-                        </label>
-                        <label class="field">
-                          <span>副标题</span>
-                          <input id="publish-subtitle" type="text">
-                        </label>
-                        <label class="field">
-                          <span>作者</span>
-                          <input id="publish-author" type="text">
-                        </label>
-                        <label class="field">
-                          <span>Publisher</span>
-                          <input id="publish-publisher" type="text">
-                        </label>
-                        <label class="field">
-                          <span>Imprint</span>
-                          <input id="publish-imprint" type="text">
-                        </label>
-                        <label class="field">
-                          <span>发布日期</span>
-                          <input id="publish-date" type="text" placeholder="YYYY-MM-DD">
-                        </label>
-                        <label class="field">
-                          <span>Rights</span>
-                          <input id="publish-rights" type="text">
-                        </label>
-                        <label class="field">
-                          <span>Territory</span>
-                          <input id="publish-territory" type="text">
-                        </label>
-                        <label class="field publish-editor-wide">
-                          <span>Distribution Rights</span>
-                          <input id="publish-distribution-rights" type="text">
-                        </label>
-                      </div>
-                    </section>
-
-                    <section class="publish-editor-section">
-                      <div class="publish-section-header">
-                        <div class="publish-section-kicker">02 / MARKETING</div>
-                        <h3>营销文案</h3>
-                        <p>用于封面、商店描述、封底与传播文案。</p>
-                      </div>
-                      <div class="publish-section-fields">
-                        <label class="field">
-                          <span>宣传语</span>
-                          <input id="publish-tagline" type="text">
-                        </label>
-                        <label class="field">
-                          <span>封面短句</span>
-                          <input id="publish-cover-hook" type="text">
-                        </label>
-                        <label class="field">
-                          <span>腰封文案</span>
-                          <input id="publish-obi-copy" type="text">
-                        </label>
-                        <label class="field">
-                          <span>书脊文案</span>
-                          <input id="publish-spine-text" type="text">
-                        </label>
-                        <label class="field publish-editor-wide">
-                          <span>短简介</span>
-                          <textarea id="publish-short-description" rows="3"></textarea>
-                        </label>
-                        <label class="field publish-editor-wide">
-                          <span>长简介</span>
-                          <textarea id="publish-long-description" rows="7"></textarea>
-                        </label>
-                        <label class="field publish-editor-wide">
-                          <span>封底摘要</span>
-                          <textarea id="publish-back-cover-blurb" rows="5"></textarea>
-                        </label>
-                        <label class="field publish-editor-wide">
-                          <span>作者简介</span>
-                          <textarea id="publish-author-bio" rows="4"></textarea>
-                        </label>
-                      </div>
-                    </section>
-
-                    <section class="publish-editor-section">
-                      <div class="publish-section-header">
-                        <div class="publish-section-kicker">03 / DISCOVERY</div>
-                        <h3>发行检索</h3>
-                        <p>用于平台检索、分类与后台投放。</p>
-                      </div>
-                      <div class="publish-section-fields">
-                        <label class="field publish-editor-wide">
-                          <span>Keywords</span>
-                          <textarea id="publish-keywords" rows="8" placeholder="每行一个关键词"></textarea>
-                        </label>
-                        <label class="field publish-editor-wide">
-                          <span>Categories</span>
-                          <textarea id="publish-categories" rows="8" placeholder="每行一个分类"></textarea>
-                        </label>
-                      </div>
-                    </section>
+                  <div class="cover-report-title">统一出版元数据主稿（publish_metadata.md）</div>
+                  <form id="publish-editor-form" class="publish-editor-form-single">
+                    <textarea id="publish-metadata-editor" class="cover-report publish-markdown-editor" spellcheck="false">运行 09-publish.ps1 后，这里会显示可直接审校的 publish_metadata.md。</textarea>
                   </form>
                   <div class="publish-editor-actions">
-                    <div class="publish-editor-action-copy">修改后会同步回 `publish_metadata.json / .md`，并刷新已有平台元数据。</div>
-                    <button id="save-publish-metadata" class="ghost-button" type="button">保存 09 元数据</button>
-                    <span id="publish-editor-status" class="write-notes-status">09 元数据已同步</span>
+                    <div class="publish-editor-action-copy">系统会先自动生成当前语种的 publish_metadata.md。你只需要在这一份 MD 主稿里集中审校，保存后会同步回 JSON、报告和平台包。</div>
+                    <button id="save-publish-metadata" class="ghost-button" type="button">立即保存</button>
+                    <span id="publish-editor-status" class="write-notes-status">09 元数据已自动生成</span>
                   </div>
                 </div>
               </div>
@@ -684,15 +601,9 @@
                     </label>
                   </div>
 
-                  <div class="publish-preview-grid">
-                    <div class="publish-preview-section">
-                      <div class="cover-report-title">统一出版元数据（publish_metadata.md）</div>
-                      <textarea id="publish-metadata-preview" class="cover-report" readonly spellcheck="false">运行 09-publish.ps1 后，这里会显示统一出版元数据。</textarea>
-                    </div>
-                    <div class="publish-preview-section">
-                      <div class="cover-report-title">上架总报告（publish_report.md）</div>
-                      <textarea id="publish-report-preview" class="cover-report" readonly spellcheck="false">运行 09-publish.ps1 后，这里会显示 publish_report.md。</textarea>
-                    </div>
+                  <div class="publish-preview-section">
+                    <div class="cover-report-title">上架总报告（publish_report.md）</div>
+                    <textarea id="publish-report-preview" class="cover-report" readonly spellcheck="false">运行 09-publish.ps1 后，这里会显示 publish_report.md。</textarea>
                   </div>
 
                   <div class="publish-platform-detail">

@@ -102,7 +102,6 @@ function Get-AmazonCategories {
 
 function Get-AmazonKeywordBoxes {
     param(
-        [Parameter(Mandatory = $true)]
         [string[]]$Keywords
     )
 
@@ -118,6 +117,30 @@ function Get-AmazonKeywordBoxes {
         }
     }
     return $Result
+}
+
+function Get-FallbackKeywords {
+    param(
+        [string]$Title,
+        [string]$Subtitle,
+        [string]$BookType,
+        [string]$CoreThesis
+    )
+
+    $Seeds = @(
+        "$Title",
+        "$Subtitle",
+        "$BookType",
+        "SageWrite",
+        "AI writing",
+        "artificial intelligence",
+        "knowledge creation",
+        "structured writing",
+        "digital publishing",
+        "$CoreThesis"
+    )
+
+    return @($Seeds | ForEach-Object { "$_".Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 }
 
 function Get-PrimaryManuscriptFile {
@@ -189,13 +212,21 @@ $AmazonMetadata = if (Test-Path -LiteralPath $AmazonMetadataPath) {
     $null
 }
 
-$KeywordBoxes = Get-AmazonKeywordBoxes -Keywords @($PublishMetadata.keywords | ForEach-Object { "$_" })
+$SourceKeywords = @($PublishMetadata.keywords | ForEach-Object { "$_" })
+if ($SourceKeywords.Count -eq 0) {
+    $SourceKeywords = Get-FallbackKeywords -Title "$($PublishMetadata.title)" -Subtitle "$($PublishMetadata.subtitle)" -BookType "$($PublishMetadata.book_type)" -CoreThesis "$($PublishMetadata.core_thesis)"
+}
+$KeywordBoxes = Get-AmazonKeywordBoxes -Keywords $SourceKeywords
 $AmazonRecommended = @($PublishMetadata.platform_recommended_categories.amazon | ForEach-Object { "$($_.path)" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$AmazonCategories = if ($AmazonRecommended.Count -gt 0) {
+$AmazonSelected = "$($PublishMetadata.platform_selected_categories.amazon)".Trim()
+$AmazonCategories = if (-not [string]::IsNullOrWhiteSpace($AmazonSelected)) {
+    @($AmazonSelected) + @($AmazonRecommended | Where-Object { $_ -ne $AmazonSelected })
+} elseif ($AmazonRecommended.Count -gt 0) {
     $AmazonRecommended
 } else {
     Get-AmazonCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
 }
+$AmazonCategories = @($AmazonCategories | Select-Object -Unique)
 $ManuscriptPath = Get-PrimaryManuscriptFile -AmazonRoot $AmazonRoot
 $CoverPath = Join-Path $AmazonRoot "cover.png"
 if (-not (Test-Path -LiteralPath $CoverPath)) {

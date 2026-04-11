@@ -1013,6 +1013,36 @@ function escapeRegex(text) {
 }
 
 function buildCategoryPlans(metadata) {
+  const normalizePath = (value) => String(value || "")
+    .split(">")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const pathPlans = [];
+  const recommended = Array.isArray(metadata?.platform_recommended_categories?.amazon)
+    ? metadata.platform_recommended_categories.amazon
+    : [];
+  const directCategories = Array.isArray(metadata?.categories)
+    ? metadata.categories
+    : [];
+
+  for (const item of [...directCategories, ...recommended.map((entry) => entry?.path)]) {
+    const segments = normalizePath(item);
+    if (segments.length >= 3) {
+      const tail = segments.slice(-3);
+      pathPlans.push({
+        category: tail[0],
+        subcategory: tail[1],
+        placement: tail[2],
+        sourcePath: segments.join(" > ")
+      });
+    }
+  }
+
+  if (pathPlans.length > 0) {
+    return pathPlans;
+  }
+
   const plans = [];
   const keywords = Array.isArray(metadata?.keywords) ? metadata.keywords.map((item) => String(item || "").toLowerCase()) : [];
   const combinedText = [
@@ -1049,6 +1079,180 @@ function buildCategoryPlans(metadata) {
   return plans;
 }
 
+async function waitForCategorySurface(pageLike, logPath, screenshotPath, timeoutMs = 15000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const dialog = pageLike.getByRole("dialog").first();
+    if (await isVisible(dialog)) {
+      await capturePage(pageLike, screenshotPath);
+      writeLog(logPath, "Category selector detected as in-page dialog.");
+      return {
+        surface: pageLike,
+        root: dialog,
+        mode: "dialog"
+      };
+    }
+
+    const markers = [
+      pageLike.getByRole("heading", { name: /^categories$/i }),
+      pageLike.getByText(/^categories$/i),
+      pageLike.getByText(/select categories and subcategories/i),
+      pageLike.getByLabel(/category/i),
+      pageLike.getByLabel(/subcategory/i)
+    ];
+
+    for (const marker of markers) {
+      if (await isVisible(marker)) {
+        await capturePage(pageLike, screenshotPath);
+        writeLog(logPath, "Category selector detected as separate page/window.");
+        return {
+          surface: pageLike,
+          root: pageLike.locator("body"),
+          mode: "page"
+        };
+      }
+    }
+
+    await pageLike.waitForTimeout(400);
+  }
+
+  return null;
+}
+
+async function clickCategoryTriggerByDom(page, logPath) {
+  const clicked = await page.evaluate(() => {
+    const normalize = (text) => String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+
+    const sectionCandidates = Array.from(document.querySelectorAll('section, fieldset, [role="group"], [role="region"], form > div, div'))
+      .filter((node) => node instanceof HTMLElement && visible(node))
+      .filter((node) => normalize(node.textContent || "").includes("categories"))
+      .sort((left, right) => (left.textContent || "").length - (right.textContent || "").length);
+
+    const triggerPatterns = ["choose categories", "set categories", "add categories"];
+    for (const section of sectionCandidates) {
+      const controls = Array.from(section.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], div, span'))
+        .filter((node) => node instanceof HTMLElement && visible(node));
+      for (const control of controls) {
+        const text = normalize(control.textContent || control.getAttribute("value") || control.getAttribute("aria-label") || "");
+        if (!triggerPatterns.some((pattern) => text.includes(pattern))) {
+          continue;
+        }
+        if (control.getAttribute("disabled") !== null || control.getAttribute("aria-disabled") === "true") {
+          continue;
+        }
+        control.click();
+        return text || "categories-trigger";
+      }
+    }
+
+    return "";
+  });
+
+  if (clicked) {
+    writeLog(logPath, `Clicked category trigger by DOM fallback: ${clicked}`);
+    return true;
+  }
+
+  return false;
+}
+
+async function openCategorySurface(page, logPath, screenshotPath) {
+  const openLocators = [
+    page.getByRole("button", { name: /set categories/i }),
+    page.getByRole("button", { name: /choose categories/i }),
+    page.getByRole("button", { name: /add categories/i }),
+    page.getByRole("link", { name: /set categories/i }),
+    page.getByRole("link", { name: /choose categories/i }),
+    page.getByRole("link", { name: /add categories/i })
+  ];
+
+  for (const locator of openLocators) {
+    if (!(await isVisible(locator))) {
+      continue;
+    }
+
+    const first = locator.first();
+    const enabled = typeof first.isEnabled === "function"
+      ? await first.isEnabled().catch(() => true)
+      : true;
+    if (!enabled) {
+      continue;
+    }
+
+    const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
+    const newPagePromise = page.context().waitForEvent("page", { timeout: 5000 }).catch(() => null);
+
+    try {
+      await first.click({ timeout: 3000 });
+      writeLog(logPath, "Clicked field control: categories-open");
+    } catch {
+      continue;
+    }
+
+    let popupPage = await popupPromise;
+    if (!popupPage) {
+      popupPage = await newPagePromise;
+    }
+
+    if (popupPage) {
+      try {
+        await popupPage.waitForLoadState("domcontentloaded", { timeout: 15000 });
+      } catch {}
+      const popupSurface = await waitForCategorySurface(popupPage, logPath, screenshotPath, 15000);
+      if (popupSurface) {
+        writeLog(logPath, "Categories opened in a separate popup/window.");
+        return popupSurface;
+      }
+    }
+
+    const inlineSurface = await waitForCategorySurface(page, logPath, screenshotPath, 5000);
+    if (inlineSurface) {
+      return inlineSurface;
+    }
+  }
+
+  const popupPromise = page.waitForEvent("popup", { timeout: 5000 }).catch(() => null);
+  const newPagePromise = page.context().waitForEvent("page", { timeout: 5000 }).catch(() => null);
+  const domClicked = await clickCategoryTriggerByDom(page, logPath);
+  if (domClicked) {
+    let popupPage = await popupPromise;
+    if (!popupPage) {
+      popupPage = await newPagePromise;
+    }
+
+    if (popupPage) {
+      try {
+        await popupPage.waitForLoadState("domcontentloaded", { timeout: 15000 });
+      } catch {}
+      const popupSurface = await waitForCategorySurface(popupPage, logPath, screenshotPath, 15000);
+      if (popupSurface) {
+        writeLog(logPath, "Categories opened in a separate popup/window via DOM fallback.");
+        return popupSurface;
+      }
+    }
+
+    const inlineSurface = await waitForCategorySurface(page, logPath, screenshotPath, 5000);
+    if (inlineSurface) {
+      return inlineSurface;
+    }
+  }
+
+  writeLog(logPath, "Could not open categories selector from the details page.");
+
+  return null;
+}
+
 async function setAdultOnlyNo(page, logPath) {
   const result = await page.evaluate(() => {
     const normalize = (text) => String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -1068,7 +1272,15 @@ async function setAdultOnlyNo(page, logPath) {
       .filter((node) => node instanceof HTMLElement && visible(node))
       .filter((node) => {
         const text = normalize(node.textContent || "");
-        return text.includes("adult-only") || text.includes("adult only") || text.includes("adult content");
+        return (
+          text.includes("adult-only") ||
+          text.includes("adult only") ||
+          text.includes("adult content") ||
+          text.includes("sexually explicit images or title") ||
+          text.includes("sexually explicit") ||
+          text.includes("explicit images") ||
+          text.includes("explicit language")
+        );
       })
       .sort((left, right) => (left.textContent || "").length - (right.textContent || "").length);
 
@@ -1107,6 +1319,7 @@ async function selectOptionFromDropdown(page, rootLocator, labelText, optionText
   const escapedLabel = escapeRegex(labelText);
   const escapedOption = escapeRegex(optionText);
   const byLabel = rootLocator.getByLabel(new RegExp(`^${escapedLabel}$`, "i")).first();
+  const byCombobox = rootLocator.getByRole("combobox", { name: new RegExp(`^${escapedLabel}$`, "i") }).first();
 
   try {
     if (await isVisible(byLabel)) {
@@ -1115,6 +1328,31 @@ async function selectOptionFromDropdown(page, rootLocator, labelText, optionText
       });
       writeLog(logPath, `Selected dropdown option: ${actionLabel} -> ${optionText}`);
       return true;
+    }
+  } catch {}
+
+  try {
+    if (await isVisible(byCombobox)) {
+      try {
+        await byCombobox.selectOption({ label: optionText });
+        writeLog(logPath, `Selected combobox option: ${actionLabel} -> ${optionText}`);
+        return true;
+      } catch {}
+
+      await byCombobox.click({ timeout: 3000 });
+      await page.waitForTimeout(400);
+
+      const openListCandidates = [
+        page.getByRole("option", { name: new RegExp(`^${escapedOption}$`, "i") }),
+        page.getByRole("listbox").getByText(new RegExp(`^${escapedOption}$`, "i")),
+        page.getByRole("menuitem", { name: new RegExp(`^${escapedOption}$`, "i") }),
+        page.getByText(new RegExp(`^${escapedOption}$`, "i"))
+      ];
+
+      if (await clickFirstVisibleLocator(openListCandidates, logPath, `${actionLabel}-option:${optionText}`)) {
+        writeLog(logPath, `Selected dropdown option via popup list: ${actionLabel} -> ${optionText}`);
+        return true;
+      }
     }
   } catch {}
 
@@ -1286,43 +1524,29 @@ async function setPublishingRights(page, logPath) {
   return "";
 }
 
-async function setCategories(page, categories, logPath, screenshotPath) {
-  const desiredCategories = Array.isArray(categories)
-    ? categories.map((item) => String(item || "").trim()).filter(Boolean)
-    : [];
-  const categoryPlans = buildCategoryPlans({ categories: desiredCategories });
+async function setCategories(page, metadata, logPath, screenshotPath) {
+  const categoryPlans = buildCategoryPlans(metadata);
   const selected = [];
 
   const audienceSelections = await setPrimaryAudience(page, logPath);
   selected.push(...audienceSelections);
 
-  const opened = await clickFirstVisibleLocator([
-    page.getByRole("button", { name: /set categories/i }),
-    page.getByRole("button", { name: /choose categories/i }),
-    page.getByRole("button", { name: /add categories/i }),
-    page.getByRole("link", { name: /set categories/i }),
-    page.getByRole("link", { name: /choose categories/i }),
-    page.getByRole("link", { name: /add categories/i })
-  ], logPath, "categories-open");
-
-  if (!opened) {
+  const categorySurface = await openCategorySurface(page, logPath, screenshotPath);
+  if (!categorySurface) {
     return [];
   }
 
-  await page.waitForTimeout(1500);
-  await capturePage(page, screenshotPath);
-
-  const dialogRoot = page.getByRole("dialog").first();
-  const modalRoot = await isVisible(dialogRoot) ? dialogRoot : page.locator("body");
+  const pickerPage = categorySurface.surface;
+  const modalRoot = categorySurface.root;
 
   for (const plan of categoryPlans.slice(0, 1)) {
-    const categorySet = await selectOptionFromDropdown(page, modalRoot, "Category", plan.category, logPath, "category");
+    const categorySet = await selectOptionFromDropdown(pickerPage, modalRoot, "Category", plan.category, logPath, "category");
     if (categorySet) {
       selected.push(`category-root:${plan.category}`);
       await page.waitForTimeout(500);
     }
 
-    const subcategorySet = await selectOptionFromDropdown(page, modalRoot, "Subcategory", plan.subcategory, logPath, "subcategory");
+    const subcategorySet = await selectOptionFromDropdown(pickerPage, modalRoot, "Subcategory", plan.subcategory, logPath, "subcategory");
     if (subcategorySet) {
       selected.push(`category-sub:${plan.subcategory}`);
       await page.waitForTimeout(800);
@@ -1340,13 +1564,25 @@ async function setCategories(page, categories, logPath, screenshotPath) {
     }
   }
 
-  await clickFirstVisibleLocator([
+  const saved = await clickFirstVisibleLocator([
     modalRoot.getByRole("button", { name: /save/i }),
     modalRoot.getByRole("button", { name: /done/i }),
     modalRoot.getByRole("button", { name: /apply/i }),
     modalRoot.getByRole("button", { name: /confirm/i }),
     modalRoot.getByRole("button", { name: /add another category/i })
   ], logPath, "categories-save");
+
+  if (saved && pickerPage !== page) {
+    try {
+      await pickerPage.waitForLoadState("domcontentloaded", { timeout: 5000 });
+    } catch {}
+    try {
+      await pickerPage.close({ runBeforeUnload: true });
+    } catch {}
+    try {
+      await page.bringToFront();
+    } catch {}
+  }
 
   await page.waitForTimeout(1200);
   await capturePage(page, screenshotPath);
@@ -1527,7 +1763,7 @@ async function fillKindleDetailsPage(page, metadata, logPath, screenshotPath) {
     filledFields.push(rightsField);
   }
 
-  const categoryFields = await setCategories(page, metadata.categories || metadata.discovery?.categories || [], logPath, screenshotPath);
+  const categoryFields = await setCategories(page, metadata, logPath, screenshotPath);
   filledFields.push(...categoryFields);
 
   const keywords = Array.isArray(metadata.keywords) ? metadata.keywords.slice(0, 7) : [];

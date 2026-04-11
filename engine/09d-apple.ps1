@@ -102,7 +102,6 @@ function Get-AppleCategories {
 
 function Get-AppleKeywords {
     param(
-        [Parameter(Mandatory = $true)]
         [string[]]$Keywords
     )
 
@@ -118,6 +117,30 @@ function Get-AppleKeywords {
         }
     }
     return $Result
+}
+
+function Get-FallbackKeywords {
+    param(
+        [string]$Title,
+        [string]$Subtitle,
+        [string]$BookType,
+        [string]$CoreThesis
+    )
+
+    $Seeds = @(
+        "$Title",
+        "$Subtitle",
+        "$BookType",
+        "SageWrite",
+        "AI writing",
+        "artificial intelligence",
+        "knowledge creation",
+        "structured writing",
+        "digital publishing",
+        "$CoreThesis"
+    )
+
+    return @($Seeds | ForEach-Object { "$_".Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 }
 
 function Get-PrimaryEpubFile {
@@ -182,13 +205,21 @@ $AppleMetadata = if (Test-Path -LiteralPath $AppleMetadataPath) {
     $null
 }
 
-$AppleKeywords = Get-AppleKeywords -Keywords @($PublishMetadata.keywords | ForEach-Object { "$_" })
+$SourceKeywords = @($PublishMetadata.keywords | ForEach-Object { "$_" })
+if ($SourceKeywords.Count -eq 0) {
+    $SourceKeywords = Get-FallbackKeywords -Title "$($PublishMetadata.title)" -Subtitle "$($PublishMetadata.subtitle)" -BookType "$($PublishMetadata.book_type)" -CoreThesis "$($PublishMetadata.core_thesis)"
+}
+$AppleKeywords = Get-AppleKeywords -Keywords $SourceKeywords
 $AppleRecommended = @($PublishMetadata.platform_recommended_categories.apple | ForEach-Object { "$($_.path)" } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-$AppleCategories = if ($AppleRecommended.Count -gt 0) {
+$AppleSelected = "$($PublishMetadata.platform_selected_categories.apple)".Trim()
+$AppleCategories = if (-not [string]::IsNullOrWhiteSpace($AppleSelected)) {
+    @($AppleSelected) + @($AppleRecommended | Where-Object { $_ -ne $AppleSelected })
+} elseif ($AppleRecommended.Count -gt 0) {
     $AppleRecommended
 } else {
     Get-AppleCategories -BookType "$($PublishMetadata.book_type)" -Audience "$($PublishMetadata.audience)" -CoreThesis "$($PublishMetadata.core_thesis)"
 }
+$AppleCategories = @($AppleCategories | Select-Object -Unique)
 $ManuscriptPath = Get-PrimaryEpubFile -AppleRoot $AppleRoot
 $CoverPath = Join-Path $AppleRoot "cover.png"
 if (-not (Test-Path -LiteralPath $CoverPath)) {

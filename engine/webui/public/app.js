@@ -17,6 +17,12 @@ const state = {
   publishLoadingKey: "",
   publishEditorKey: "",
   publishEditorDirty: false,
+  publishAutoSaveTimer: null,
+  publishFeedbackTimer: null,
+  publishPreviewRefreshTimer: null,
+  publishSaveInFlight: false,
+  publishLastSavedAt: "",
+  publishSelectedCategories: {},
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -24,6 +30,21 @@ const state = {
 };
 
 const COVER_PANEL_STORAGE_KEY = "sagewrite-cover-panel-expanded";
+const PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY = "sagewrite-publish-preview-platform";
+const PUBLISH_RECOMMENDED_CARD_STORAGE_KEY = "sagewrite-publish-recommended-cards";
+const PUBLISH_RAW_TOGGLE_STORAGE_KEY = "sagewrite-publish-raw-toggle-open";
+const LANGUAGE_LABELS = {
+  zh: "中文",
+  en: "English",
+  ms: "Bahasa Melayu",
+  fr: "Français",
+  de: "Deutsch",
+  es: "Español",
+  it: "Italiano",
+  pt: "Português",
+  ja: "日本語",
+  ko: "한국어"
+};
 
 function $(selector) {
   return document.querySelector(selector);
@@ -94,7 +115,110 @@ function getPublishLanguage() {
 
 function getPublishPreviewPlatform() {
   const field = $("#publish-preview-platform");
-  return field ? field.value : "amazon";
+  if (field && field.value) {
+    return field.value;
+  }
+  return localStorage.getItem(PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY) || "amazon";
+}
+
+function joinWindowsPath(...parts) {
+  return parts
+    .filter(Boolean)
+    .map((part, index) => {
+      const value = String(part || "");
+      if (index === 0) {
+        return value.replace(/[\\/]+$/g, "");
+      }
+      return value.replace(/^[\\/]+|[\\/]+$/g, "");
+    })
+    .filter(Boolean)
+    .join("\\");
+}
+
+function getPublishRootAbsolutePath(item, language = getPublishLanguage()) {
+  if (!item?.workspacePath) {
+    return "";
+  }
+  return joinWindowsPath(item.workspacePath, "sagewrite", "book", "09_publish", language);
+}
+
+function getPublishPlatformAbsolutePath(item, language = getPublishLanguage(), platform = getPublishPreviewPlatform()) {
+  const rootPath = getPublishRootAbsolutePath(item, language);
+  return platform ? joinWindowsPath(rootPath, platform) : rootPath;
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "").trim();
+  if (!value) {
+    throw new Error("当前没有可复制的路径。");
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const probe = document.createElement("textarea");
+  probe.value = value;
+  probe.setAttribute("readonly", "true");
+  probe.style.position = "fixed";
+  probe.style.opacity = "0";
+  document.body.appendChild(probe);
+  probe.select();
+  document.execCommand("copy");
+  document.body.removeChild(probe);
+}
+
+function getLanguageLabel(languageCode) {
+  return LANGUAGE_LABELS[String(languageCode || "").trim().toLowerCase()] || String(languageCode || "").trim().toLowerCase();
+}
+
+function getWorkspacePublishLanguages(item, publish = null) {
+  const languages = [];
+  const addLanguage = (value) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized || languages.includes(normalized)) {
+      return;
+    }
+    languages.push(normalized);
+  };
+
+  (publish?.sourceLanguages || []).forEach(addLanguage);
+  (publish?.availableLanguages || []).forEach(addLanguage);
+  (item?.outputLanguages || []).forEach(addLanguage);
+  (item?.publishLanguages || []).forEach(addLanguage);
+
+  if (!languages.length) {
+    addLanguage("zh");
+  }
+
+  return languages;
+}
+
+function syncPublishLanguageOptions(item, publish = null, preferredLanguage = "") {
+  const select = $("#publish-language");
+  if (!select) {
+    return;
+  }
+
+  const options = getWorkspacePublishLanguages(item, publish);
+  const currentValue = String(preferredLanguage || select.value || "").trim().toLowerCase();
+  const nextValue = options.includes(currentValue) ? currentValue : options[0];
+  const snapshot = options.join("|");
+
+  if (select.dataset.optionsSnapshot !== snapshot) {
+    select.innerHTML = options.map((language) => (
+      `<option value="${escapeHtml(language)}">${escapeHtml(getLanguageLabel(language))}（${escapeHtml(language)}）</option>`
+    )).join("");
+    select.dataset.optionsSnapshot = snapshot;
+  }
+
+  select.value = nextValue;
+
+  const hint = $("#publish-language-hint");
+  if (hint) {
+    hint.textContent = `当前项目检测到语言版本：${options.map((language) => `${getLanguageLabel(language)}（${language}）`).join("、")}。09 会为每个语种分别生成独立上架包。`;
+  }
 }
 
 function updatePublishEditorStatus() {
@@ -102,7 +226,170 @@ function updatePublishEditorStatus() {
   if (!status) {
     return;
   }
-  status.textContent = state.publishEditorDirty ? "09 元数据有未保存修改" : "09 元数据已同步";
+  if (state.publishSaveInFlight) {
+    status.textContent = "正在自动保存人工微调...";
+    return;
+  }
+
+  if (state.publishEditorDirty) {
+    status.textContent = "当前是自动生成稿，修改将在短暂静止后自动保存";
+    return;
+  }
+
+  if (state.publishLastSavedAt) {
+    status.textContent = `09 元数据已自动同步（${state.publishLastSavedAt}）`;
+    return;
+  }
+
+  status.textContent = "09 元数据已自动生成并同步";
+}
+
+function getPublishCacheKey(bookName = requireBookName(), language = getPublishLanguage()) {
+  return `${bookName}:${language}`;
+}
+
+function setPublishSelectedCategories(cacheKey, metadata = {}) {
+  state.publishSelectedCategories[cacheKey] = {
+    amazon: metadata.platform_selected_categories?.amazon || metadata.discovery?.platform_selected_categories?.amazon || "",
+    apple: metadata.platform_selected_categories?.apple || metadata.discovery?.platform_selected_categories?.apple || "",
+    google: metadata.platform_selected_categories?.google || metadata.discovery?.platform_selected_categories?.google || ""
+  };
+}
+
+function getPublishSelectedCategories(cacheKey) {
+  return state.publishSelectedCategories[cacheKey] || { amazon: "", apple: "", google: "" };
+}
+
+function clearPublishAutoSaveTimer() {
+  if (!state.publishAutoSaveTimer) {
+    return;
+  }
+  clearTimeout(state.publishAutoSaveTimer);
+  state.publishAutoSaveTimer = null;
+}
+
+function clearPublishFeedbackTimer() {
+  if (!state.publishFeedbackTimer) {
+    return;
+  }
+  clearTimeout(state.publishFeedbackTimer);
+  state.publishFeedbackTimer = null;
+}
+
+function clearPublishPreviewRefreshTimer() {
+  if (!state.publishPreviewRefreshTimer) {
+    return;
+  }
+  clearTimeout(state.publishPreviewRefreshTimer);
+  state.publishPreviewRefreshTimer = null;
+}
+
+function showPublishSaveFeedback(kind, message, persist = false) {
+  const panel = $("#publish-save-feedback");
+  if (!panel) {
+    return;
+  }
+
+  clearPublishFeedbackTimer();
+  panel.textContent = message || "";
+  panel.dataset.kind = kind || "success";
+  panel.classList.remove("hidden");
+
+  if (!persist) {
+    state.publishFeedbackTimer = setTimeout(() => {
+      panel.classList.add("hidden");
+      panel.textContent = "";
+      panel.dataset.kind = "";
+      state.publishFeedbackTimer = null;
+    }, kind === "error" ? 5200 : 2600);
+  }
+}
+
+function hidePublishSaveFeedback() {
+  const panel = $("#publish-save-feedback");
+  if (!panel) {
+    return;
+  }
+  clearPublishFeedbackTimer();
+  panel.classList.add("hidden");
+  panel.textContent = "";
+  panel.dataset.kind = "";
+}
+
+function flashPublishPreview(message = "右侧预览已刷新") {
+  const stack = document.querySelector(".publish-preview-stack");
+  if (!stack) {
+    return;
+  }
+
+  stack.classList.remove("publish-preview-flash");
+  void stack.offsetWidth;
+  stack.classList.add("publish-preview-flash");
+  stack.dataset.previewNotice = message;
+
+  clearPublishPreviewRefreshTimer();
+  state.publishPreviewRefreshTimer = setTimeout(() => {
+    stack.classList.remove("publish-preview-flash");
+    stack.dataset.previewNotice = "";
+    state.publishPreviewRefreshTimer = null;
+  }, 1800);
+}
+
+function formatTimeLabel(date = new Date()) {
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+}
+
+function initPublishUiState() {
+  const platformField = $("#publish-preview-platform");
+  if (platformField) {
+    const storedPlatform = localStorage.getItem(PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY);
+    if (storedPlatform && Array.from(platformField.options).some((option) => option.value === storedPlatform)) {
+      platformField.value = storedPlatform;
+    }
+  }
+
+  const rawToggle = document.querySelector(".publish-raw-toggle");
+  if (rawToggle) {
+    rawToggle.open = isPublishRawToggleOpen();
+  }
+}
+
+function getPublishRecommendedCardState() {
+  try {
+    const raw = localStorage.getItem(PUBLISH_RECOMMENDED_CARD_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setPublishRecommendedCardState(platformName, isOpen) {
+  const current = getPublishRecommendedCardState();
+  current[String(platformName || "").trim().toLowerCase()] = Boolean(isOpen);
+  localStorage.setItem(PUBLISH_RECOMMENDED_CARD_STORAGE_KEY, JSON.stringify(current));
+}
+
+function isPublishRecommendedCardOpen(platformName) {
+  const current = getPublishRecommendedCardState();
+  const key = String(platformName || "").trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(current, key)) {
+    return Boolean(current[key]);
+  }
+  return key === "amazon";
+}
+
+function setPublishRawToggleOpen(isOpen) {
+  localStorage.setItem(PUBLISH_RAW_TOGGLE_STORAGE_KEY, isOpen ? "1" : "0");
+}
+
+function isPublishRawToggleOpen() {
+  return localStorage.getItem(PUBLISH_RAW_TOGGLE_STORAGE_KEY) === "1";
 }
 
 function requireBookName() {
@@ -1224,60 +1511,9 @@ function renderBuildOutputs(item) {
         <strong>${escapeHtml(fileName)}</strong>
         <span>${getFolderLabel(fileName)}</span>
       </div>
-      <div class="build-output-actions">
-        <button
-          type="button"
-          class="ghost-button build-open-button"
-          data-reveal-output="${escapeHtml(fileName)}"
-        >
-          定位文件
-        </button>
-        <button
-          type="button"
-          class="ghost-button build-open-button"
-          data-open-folder="${escapeHtml(fileName)}"
-        >
-          打开文件夹
-        </button>
-      </div>
+      <div class="build-output-status">已生成</div>
     </div>
   `).join("");
-
-  panel.querySelectorAll("[data-reveal-output]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        const bookName = requireBookName();
-        const fileName = button.dataset.revealOutput || "";
-        await api("/api/reveal-output", {
-          method: "POST",
-          body: JSON.stringify({ bookName, fileName })
-        });
-        setStatusBadge("已定位", "success");
-        setLog(`已在资源管理器中定位文件：${fileName}`);
-      } catch (error) {
-        setStatusBadge("失败", "failed");
-        setLog(error.message);
-      }
-    });
-  });
-
-  panel.querySelectorAll("[data-open-folder]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      try {
-        const bookName = requireBookName();
-        const fileName = button.dataset.openFolder || "";
-        await api("/api/open-output-folder", {
-          method: "POST",
-          body: JSON.stringify({ bookName, fileName })
-        });
-        setStatusBadge("已打开", "success");
-        setLog(`已打开输出文件夹，可查看文件：${fileName}`);
-      } catch (error) {
-        setStatusBadge("失败", "failed");
-        setLog(error.message);
-      }
-    });
-  });
 }
 
 async function loadPublishArtifacts(item, language = getPublishLanguage()) {
@@ -1309,8 +1545,153 @@ async function loadPublishArtifacts(item, language = getPublishLanguage()) {
   }
 }
 
-function setPublishEditorFields(metadata, cacheKey, force = false) {
-  if (!metadata) {
+function formatPublishSourceSummary(item, publish, language) {
+  if (!item || !publish?.metadataJson) {
+    return "选择一个 BookName 后，这里会显示当前语言版本的生成来源、输出文件和发布目录。";
+  }
+
+  const metadata = publish.metadataJson || {};
+  const sourceFiles = metadata.source_files || {};
+  const sourceLines = [
+    `当前语种：${getLanguageLabel(language)}（${language}）`,
+    `04 输出来源：${sourceFiles.epub || sourceFiles.pdf || sourceFiles.docx || "尚未生成"}`,
+    `封面来源：${sourceFiles.cover || "尚未生成"}`,
+    `09 发布目录：${publish.root || `09_publish/${language}`}`,
+    `平台包目录：${Object.entries(publish.platforms || {}).filter(([, data]) => data?.exists).map(([name]) => name).join(" / ") || "尚未生成"}`
+  ];
+
+  return sourceLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+}
+
+function renderPublishOpenPaths(item, publish, language = getPublishLanguage(), platform = getPublishPreviewPlatform()) {
+  const rootPanel = $("#publish-root-path");
+  const platformPanel = $("#publish-platform-path");
+  if (!rootPanel || !platformPanel) {
+    return;
+  }
+
+  if (!item) {
+    rootPanel.textContent = "选择一个 BookName 后，这里会显示语言目录的真实路径。";
+    platformPanel.textContent = "选择平台后，这里会显示平台目录的真实路径。";
+    rootPanel.dataset.path = "";
+    platformPanel.dataset.path = "";
+    return;
+  }
+
+  const rootPath = getPublishRootAbsolutePath(item, language);
+  const platformPath = getPublishPlatformAbsolutePath(item, language, platform);
+
+  rootPanel.textContent = rootPath || "当前无法解析语言目录路径。";
+  platformPanel.textContent = platformPath || "当前无法解析平台目录路径。";
+  rootPanel.dataset.path = rootPath;
+  platformPanel.dataset.path = platformPath;
+}
+
+function formatRecommendedCategoriesHtml(recommended) {
+  const selectedMap = getPublishSelectedCategories(state.publishEditorKey);
+  const activePlatform = getPublishPreviewPlatform();
+  const platforms = [activePlatform || "amazon"];
+  const cards = platforms.map((platformName) => {
+    const entries = Array.isArray(recommended?.[platformName]) ? recommended[platformName] : [];
+    const label = platformName === "amazon"
+      ? "Amazon"
+      : platformName === "apple"
+        ? "Apple Books"
+        : "Google Play Books";
+
+    const listHtml = entries.length
+      ? entries.map((entry) => `
+          <div class="publish-category-item">
+            <strong>${escapeHtml(String(entry.priority || ""))}</strong>
+            <div>
+              <div class="publish-category-path">${escapeHtml(entry.path || "")}</div>
+              <span>${escapeHtml(entry.note || "")}</span>
+            </div>
+            <button
+              type="button"
+              class="ghost-button publish-category-select-button ${selectedMap[platformName] === entry.path ? "is-selected" : ""}"
+              data-publish-category-platform="${escapeHtml(platformName)}"
+              data-publish-category-path="${escapeHtml(entry.path || "")}"
+            >
+              ${selectedMap[platformName] === entry.path ? "已选默认" : "设为默认"}
+            </button>
+          </div>
+        `).join("")
+      : '<div class="build-output-empty">当前还没有推荐分类。</div>';
+
+    return `
+      <details class="publish-platform-review-card" data-publish-review-platform="${escapeHtml(platformName)}" ${isPublishRecommendedCardOpen(platformName) ? "open" : ""}>
+        <summary>
+          <span class="publish-platform-review-title">${escapeHtml(label)}</span>
+          <span class="publish-platform-review-meta">${entries.length ? `${entries.length} 条建议` : "暂无建议"}</span>
+        </summary>
+        <div class="publish-platform-review-body">
+          <div class="publish-platform-review-tip">系统已根据当前书稿内容自动推导该平台建议分类，人工可在提交前核对是否需要微调。</div>
+          ${listHtml}
+        </div>
+      </details>
+    `;
+  }).join("");
+
+  return cards || '<div class="build-output-empty">当前还没有推荐分类。</div>';
+}
+
+function renderPublishInsights(item, publish, language) {
+  const note = $("#publish-review-note");
+  const sourcePanel = $("#publish-source-summary");
+  const categoriesPanel = $("#publish-recommended-categories");
+  if (!note || !sourcePanel || !categoriesPanel) {
+    return;
+  }
+
+  if (!item) {
+    note.textContent = "09 的元数据应由系统根据当前语种书稿自动生成，人工主要负责审校与少量微调。";
+    sourcePanel.innerHTML = "选择一个 BookName 后，这里会显示当前语言版本的生成来源、输出文件和发布目录。";
+    categoriesPanel.innerHTML = "运行 09-publish.ps1 后，这里会显示 Amazon / Apple / Google 的推荐分类路径。";
+    renderPublishOpenPaths(null, null, language);
+    return;
+  }
+
+  const sourceLanguages = getWorkspacePublishLanguages(item, publish);
+  note.textContent = `系统会根据 ${sourceLanguages.map((code) => `${getLanguageLabel(code)}（${code}）`).join("、")} 这些语种版本自动生成上架元数据；当前正在审校的是 ${getLanguageLabel(language)}（${language}）版本。`;
+
+  if (!publish?.metadataJson) {
+    sourcePanel.innerHTML = `<div>当前语种：${escapeHtml(getLanguageLabel(language))}（${escapeHtml(language)}）</div><div>尚未生成 09 元数据，请先运行 09-publish.ps1。</div>`;
+    categoriesPanel.innerHTML = '<div class="build-output-empty">当前语言还没有推荐分类。</div>';
+    renderPublishOpenPaths(item, publish, language);
+    return;
+  }
+
+  sourcePanel.innerHTML = formatPublishSourceSummary(item, publish, language);
+  renderPublishOpenPaths(item, publish, language);
+  categoriesPanel.innerHTML = formatRecommendedCategoriesHtml(
+    publish.metadataJson.platform_recommended_categories || publish.metadataJson.discovery?.platform_recommended_categories || {}
+  );
+
+  categoriesPanel.querySelectorAll("[data-publish-category-platform]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const cacheKey = state.publishEditorKey || getPublishCacheKey(item.bookName, language);
+      const selected = {
+        ...getPublishSelectedCategories(cacheKey),
+        [button.dataset.publishCategoryPlatform || ""]: button.dataset.publishCategoryPath || ""
+      };
+      state.publishSelectedCategories[cacheKey] = selected;
+      state.publishEditorDirty = true;
+      updatePublishEditorStatus();
+      renderPublishInsights(item, publish, language);
+      schedulePublishAutoSave();
+    });
+  });
+
+  categoriesPanel.querySelectorAll("[data-publish-review-platform]").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      setPublishRecommendedCardState(details.dataset.publishReviewPlatform || "", details.open);
+    });
+  });
+}
+
+function setPublishEditorFields(metadataMarkdown, metadata, cacheKey, force = false) {
+  if (typeof metadataMarkdown !== "string") {
     return;
   }
 
@@ -1318,58 +1699,18 @@ function setPublishEditorFields(metadata, cacheKey, force = false) {
     return;
   }
 
-  setFormValue("#publish-title", metadata.title || "");
-  setFormValue("#publish-subtitle", metadata.subtitle || "");
-  setFormValue("#publish-author", metadata.author || "");
-  setFormValue("#publish-publisher", metadata.publisher || "");
-  setFormValue("#publish-imprint", metadata.imprint || "");
-  setFormValue("#publish-date", metadata.publication_date || "");
-  setFormValue("#publish-rights", metadata.rights || "");
-  setFormValue("#publish-territory", metadata.territory || "");
-  setFormValue("#publish-distribution-rights", metadata.distribution_rights || "");
-  setFormValue("#publish-tagline", metadata.marketing_tagline || "");
-  setFormValue("#publish-cover-hook", metadata.cover_hook || "");
-  setFormValue("#publish-obi-copy", metadata.obi_copy || "");
-  setFormValue("#publish-spine-text", metadata.spine_text || "");
-  setFormValue("#publish-short-description", metadata.short_description || "");
-  setFormValue("#publish-long-description", metadata.long_description || "");
-  setFormValue("#publish-back-cover-blurb", metadata.back_cover_blurb || "");
-  setFormValue("#publish-author-bio", metadata.author_bio || "");
-  setFormValue("#publish-keywords", (metadata.keywords || []).join("\n"));
-  setFormValue("#publish-categories", (metadata.categories || []).join("\n"));
+  setFormValue("#publish-metadata-editor", metadataMarkdown);
 
   state.publishEditorKey = cacheKey;
+  setPublishSelectedCategories(cacheKey, metadata);
   state.publishEditorDirty = false;
   updatePublishEditorStatus();
 }
 
 function getPublishEditorPayload() {
   return {
-    title: ($("#publish-title")?.value || "").trim(),
-    subtitle: ($("#publish-subtitle")?.value || "").trim(),
-    author: ($("#publish-author")?.value || "").trim(),
-    publisher: ($("#publish-publisher")?.value || "").trim(),
-    imprint: ($("#publish-imprint")?.value || "").trim(),
-    publicationDate: ($("#publish-date")?.value || "").trim(),
-    rights: ($("#publish-rights")?.value || "").trim(),
-    territory: ($("#publish-territory")?.value || "").trim(),
-    distributionRights: ($("#publish-distribution-rights")?.value || "").trim(),
-    marketingTagline: ($("#publish-tagline")?.value || "").trim(),
-    coverHook: ($("#publish-cover-hook")?.value || "").trim(),
-    obiCopy: ($("#publish-obi-copy")?.value || "").trim(),
-    spineText: ($("#publish-spine-text")?.value || "").trim(),
-    shortDescription: ($("#publish-short-description")?.value || "").trim(),
-    longDescription: ($("#publish-long-description")?.value || "").trim(),
-    backCoverBlurb: ($("#publish-back-cover-blurb")?.value || "").trim(),
-    authorBio: ($("#publish-author-bio")?.value || "").trim(),
-    keywords: ($("#publish-keywords")?.value || "")
-      .split(/\r?\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean),
-    categories: ($("#publish-categories")?.value || "")
-      .split(/\r?\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean)
+    metadataMarkdown: $("#publish-metadata-editor")?.value || "",
+    selectedPlatformCategories: getPublishSelectedCategories(state.publishEditorKey)
   };
 }
 
@@ -1390,13 +1731,58 @@ async function savePublishMetadata() {
   const cacheKey = `${bookName}:${language}`;
   state.publishCache[cacheKey] = result.publish || null;
   state.publishEditorKey = cacheKey;
+  setPublishSelectedCategories(cacheKey, result.publish?.metadataJson || {});
   state.publishEditorDirty = false;
+  state.publishLastSavedAt = formatTimeLabel();
   updatePublishEditorStatus();
 
   const selected = getSelectedWorkspaceItem();
   renderPublishPanel(selected);
-  setStatusBadge("已保存", "success");
-  setLog(`09 元数据已保存，并同步刷新 ${language} 语言下的平台上架包。`);
+  flashPublishPreview(`已刷新 ${getLanguageLabel(language)}（${language}）版本的右侧预览`);
+  return { bookName, language };
+}
+
+async function savePublishMetadataWithFeedback(mode = "manual") {
+  state.publishSaveInFlight = true;
+  showPublishSaveFeedback("saving", mode === "manual" ? "正在保存当前人工微调..." : "检测到修改，正在自动保存...", true);
+  updatePublishEditorStatus();
+
+  try {
+    const result = await savePublishMetadata();
+    showPublishSaveFeedback(
+      "success",
+      mode === "manual"
+        ? `已保存 ${getLanguageLabel(result.language)}（${result.language}）版本的 09 元数据。`
+        : `已自动保存 ${getLanguageLabel(result.language)}（${result.language}）版本的 09 元数据。`
+    );
+    if (mode === "manual") {
+      setStatusBadge("已保存", "success");
+      setLog(`09 的 ${result.language} 语言元数据人工微调已保存，并同步刷新该语种的平台上架包。`);
+    }
+    return result;
+  } catch (error) {
+    showPublishSaveFeedback("error", `保存失败：${error.message}`, false);
+    throw error;
+  } finally {
+    state.publishSaveInFlight = false;
+    updatePublishEditorStatus();
+  }
+}
+
+function schedulePublishAutoSave() {
+  clearPublishAutoSaveTimer();
+  state.publishAutoSaveTimer = setTimeout(async () => {
+    if (!state.publishEditorDirty || state.publishSaveInFlight) {
+      return;
+    }
+
+    try {
+      await savePublishMetadataWithFeedback("auto");
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  }, 1200);
 }
 
 function renderPublishFiles(bookName, language, platformName, platformData) {
@@ -1473,9 +1859,14 @@ function renderPublishPlatformDetail(language, platformName, platformData, rawTe
   const folderLabel = $("#publish-platform-folder");
   const statsPanel = $("#publish-platform-stats");
   const cardsPanel = $("#publish-platform-cards");
+  const rawToggle = document.querySelector(".publish-raw-toggle");
 
   if (!rawPanel || !folderLabel || !statsPanel || !cardsPanel) {
     return;
+  }
+
+  if (rawToggle) {
+    rawToggle.open = isPublishRawToggleOpen();
   }
 
   rawPanel.value = rawText || "选择平台后，这里会显示对应平台的提交清单。";
@@ -1563,55 +1954,45 @@ function renderPublishPlatformDetail(language, platformName, platformData, rawTe
 
 function renderPublishPanel(item) {
   const summary = $("#publish-summary");
-  const metadataPanel = $("#publish-metadata-preview");
   const reportPanel = $("#publish-report-preview");
   const platformPanel = $("#publish-platform-preview");
 
-  if (!summary || !metadataPanel || !reportPanel || !platformPanel) {
+  if (!summary || !reportPanel || !platformPanel) {
     return;
   }
 
   if (!item) {
+    clearPublishAutoSaveTimer();
+    hidePublishSaveFeedback();
+    state.publishLastSavedAt = "";
+    syncPublishLanguageOptions(null, null, getPublishLanguage());
     summary.textContent = "选择一个 BookName 后，这里会显示 09 上架包。";
-    setPublishEditorFields({
-      title: "",
-      subtitle: "",
-      author: "",
-      publisher: "",
-      imprint: "",
-      publication_date: "",
-      rights: "",
-      territory: "",
-      distribution_rights: "",
-      marketing_tagline: "",
-      cover_hook: "",
-      obi_copy: "",
-      spine_text: "",
-      short_description: "",
-      long_description: "",
-      back_cover_blurb: "",
-      author_bio: "",
-      keywords: [],
-      categories: []
-    }, "", true);
-    metadataPanel.value = "运行 09-publish.ps1 后，这里会显示统一出版元数据。";
+    setPublishEditorFields("运行 09-publish.ps1 后，这里会显示可直接审校的 publish_metadata.md。", {}, "", true);
     reportPanel.value = "运行 09-publish.ps1 后，这里会显示 publish_report.md。";
+    renderPublishInsights(null, null, getPublishLanguage());
     renderPublishPlatformDetail(getPublishLanguage(), getPublishPreviewPlatform(), null, "选择平台后，这里会显示对应平台的提交清单。");
     renderPublishFiles("", getPublishLanguage(), getPublishPreviewPlatform(), null);
     return;
   }
 
+  const requestedLanguage = getPublishLanguage();
+  let cacheKey = `${item.bookName}:${requestedLanguage}`;
+  let publish = state.publishCache[cacheKey] || null;
+  syncPublishLanguageOptions(item, publish, requestedLanguage);
   const language = getPublishLanguage();
   const previewPlatform = getPublishPreviewPlatform();
-  const cacheKey = `${item.bookName}:${language}`;
-  const publish = state.publishCache[cacheKey] || null;
+  if (language !== requestedLanguage) {
+    cacheKey = `${item.bookName}:${language}`;
+    publish = state.publishCache[cacheKey] || null;
+  }
 
   if (!publish) {
     summary.textContent = state.publishLoadingKey === cacheKey
       ? "正在读取 09 上架数据，请稍候..."
       : "当前语言还没有加载 09 上架数据。";
-    metadataPanel.value = "正在读取统一出版元数据...";
+    setPublishEditorFields("正在读取统一出版元数据...", {}, cacheKey, true);
     reportPanel.value = "正在读取 publish_report.md ...";
+    renderPublishInsights(item, null, language);
     renderPublishPlatformDetail(language, previewPlatform, null, "正在读取平台提交清单...");
     renderPublishFiles(item.bookName, language, previewPlatform, null);
     if (state.publishLoadingKey !== cacheKey) {
@@ -1620,18 +2001,18 @@ function renderPublishPanel(item) {
     return;
   }
 
-  const availableLanguages = publish.availableLanguages || item.publishLanguages || [];
+  const availableLanguages = getWorkspacePublishLanguages(item, publish);
   const platformData = publish.platforms?.[previewPlatform] || null;
 
   summary.textContent =
-    `语言: ${language} · ` +
-    `可用语言: ${availableLanguages.length ? availableLanguages.join(", ") : "暂无"} · ` +
+    `语言: ${getLanguageLabel(language)}（${language}） · ` +
+    `可用语言: ${availableLanguages.length ? availableLanguages.map((code) => `${getLanguageLabel(code)}（${code}）`).join("、") : "暂无"} · ` +
     `publish 根目录: ${publish.exists ? publish.root || `09_publish/${language}` : "尚未生成"} · ` +
     `root files: ${(publish.rootFiles || []).length}`;
 
-  setPublishEditorFields(publish.metadataJson || {}, cacheKey);
-  metadataPanel.value = publish.metadataMarkdown || "当前语言还没有 publish_metadata.md。";
+  setPublishEditorFields(publish.metadataMarkdown || "当前语言还没有 publish_metadata.md。", publish.metadataJson || {}, cacheKey);
   reportPanel.value = publish.reportText || "当前语言还没有 publish_report.md。";
+  renderPublishInsights(item, publish, language);
 
   let rawPlatformText = "";
   if (!platformData || !platformData.exists) {
@@ -1668,6 +2049,10 @@ function renderPublishPanel(item) {
 }
 
 function renderWorkspaceSelection(item) {
+  clearPublishAutoSaveTimer();
+  hidePublishSaveFeedback();
+  clearPublishPreviewRefreshTimer();
+  state.publishSaveInFlight = false;
   renderIntakePreview(item);
   renderProjectStatus(item);
   renderTocPreview(item);
@@ -1699,6 +2084,7 @@ function renderWorkspaces(workspaces) {
       <strong>${escapeHtml(item.bookName)}</strong>
       <span>${item.chapterCount} 个章节文件</span>
       <span>${item.outputFiles.length} 个输出文档</span>
+      <span>${(item.outputLanguages || []).length ? `输出语言: ${escapeHtml(item.outputLanguages.join(", "))}` : "04 输出语言未检测到"}</span>
       <span>${(item.publishLanguages || []).length ? `09 上架语言: ${escapeHtml(item.publishLanguages.join(", "))}` : "09 上架包未生成"}</span>
     `;
     button.addEventListener("click", () => {
@@ -1971,11 +2357,13 @@ function setupForms() {
   $("#publish-editor-form").addEventListener("input", () => {
     state.publishEditorDirty = true;
     updatePublishEditorStatus();
+    schedulePublishAutoSave();
   });
 
   $("#save-publish-metadata").addEventListener("click", async () => {
     try {
-      await savePublishMetadata();
+      clearPublishAutoSaveTimer();
+      await savePublishMetadataWithFeedback("manual");
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -1984,13 +2372,21 @@ function setupForms() {
 
   $("#publish-language").addEventListener("change", () => {
     const selected = state.workspaces.find((item) => item.bookName === getBookName()) || null;
+    clearPublishAutoSaveTimer();
+    hidePublishSaveFeedback();
     state.publishEditorDirty = false;
+    state.publishLastSavedAt = "";
     renderPublishPanel(selected);
   });
 
   $("#publish-preview-platform").addEventListener("change", () => {
+    localStorage.setItem(PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY, getPublishPreviewPlatform());
     const selected = state.workspaces.find((item) => item.bookName === getBookName()) || null;
     renderPublishPanel(selected);
+  });
+
+  document.querySelector(".publish-raw-toggle")?.addEventListener("toggle", (event) => {
+    setPublishRawToggleOpen(Boolean(event.currentTarget?.open));
   });
 
   $("#open-publish-root").addEventListener("click", async () => {
@@ -2022,6 +2418,28 @@ function setupForms() {
       });
       setStatusBadge("已打开", "success");
       setLog(`已打开 ${getPublishPreviewPlatform()} 平台目录。`);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#copy-publish-root-path").addEventListener("click", async () => {
+    try {
+      await copyTextToClipboard($("#publish-root-path")?.dataset.path || $("#publish-root-path")?.textContent || "");
+      setStatusBadge("已复制", "success");
+      setLog("已复制语言目录路径。");
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#copy-publish-platform-path").addEventListener("click", async () => {
+    try {
+      await copyTextToClipboard($("#publish-platform-path")?.dataset.path || $("#publish-platform-path")?.textContent || "");
+      setStatusBadge("已复制", "success");
+      setLog("已复制平台目录路径。");
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -2204,6 +2622,7 @@ function setupForms() {
 
 async function init() {
   initCoverPanelState();
+  initPublishUiState();
   setupForms();
   setWriteNotesStatus();
   try {

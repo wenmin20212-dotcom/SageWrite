@@ -355,10 +355,42 @@ function getPublishLanguageRoot(bookRoot, languageCode) {
   return path.join(bookRoot, "09_publish", languageCode);
 }
 
+function getOutputLanguages(bookRoot) {
+  const outputRoot = path.join(bookRoot, "04_output");
+  if (!fs.existsSync(outputRoot)) {
+    return [];
+  }
+
+  const languages = [];
+  const directOutputFiles = fs.readdirSync(outputRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => !name.startsWith("~$"))
+    .filter((name) => /\.(docx|epub|pdf)$/i.test(name));
+
+  if (directOutputFiles.length) {
+    languages.push("zh");
+  }
+
+  fs.readdirSync(outputRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== "back")
+    .map((entry) => entry.name.trim().toLowerCase())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+    .forEach((language) => {
+      if (!languages.includes(language)) {
+        languages.push(language);
+      }
+    });
+
+  return languages;
+}
+
 function getPublishArtifacts(bookRoot, languageCode = "zh") {
   const publishBaseRoot = path.join(bookRoot, "09_publish");
   const publishRoot = getPublishLanguageRoot(bookRoot, languageCode);
   const availableLanguages = listDirectories(publishBaseRoot);
+  const sourceLanguages = getOutputLanguages(bookRoot);
   const manifestPath = path.join(publishRoot, "publish_manifest.json");
   const metadataJsonPath = path.join(publishRoot, "publish_metadata.json");
   const metadataMdPath = path.join(publishRoot, "publish_metadata.md");
@@ -404,6 +436,7 @@ function getPublishArtifacts(bookRoot, languageCode = "zh") {
     exists: fs.existsSync(publishRoot),
     language: languageCode,
     availableLanguages,
+    sourceLanguages,
     root: fs.existsSync(publishRoot) ? path.relative(bookRoot, publishRoot) : "",
     rootFiles: listDirectFiles(publishRoot),
     manifest: readJsonFileSafe(manifestPath),
@@ -440,25 +473,26 @@ function buildPublishMetadataMarkdown(metadata) {
   lines.push(`- Title: ${metadata.title || ""}`);
   lines.push(`- Subtitle: ${metadata.subtitle || ""}`);
   lines.push(`- Author: ${metadata.author || ""}`);
-  lines.push(`- Language: ${metadata.language || ""} (${metadata.language_name || ""})`);
+  lines.push(`- Language: ${metadata.language || ""}`);
+  lines.push(`- Publication Date: ${metadata.publication_date || ""}`);
   lines.push(`- Publisher: ${metadata.publisher || ""}`);
   lines.push(`- Imprint: ${metadata.imprint || ""}`);
-  lines.push(`- Edition type: ${metadata.edition_type || ""}`);
-  lines.push(`- Publication date: ${metadata.publication_date || ""}`);
+  lines.push(`- Edition Type: ${metadata.edition_type || ""}`);
   lines.push("");
   lines.push("## Rights");
   lines.push("");
   lines.push(metadata.rights || "");
   lines.push("");
-  lines.push(`- Copyright holder: ${metadata.copyright_holder || ""}`);
+  lines.push(`- Copyright Holder: ${metadata.copyright_holder || ""}`);
   lines.push(`- Territory: ${metadata.territory || ""}`);
-  lines.push(`- Distribution rights: ${metadata.distribution_rights || ""}`);
+  lines.push(`- Distribution Rights: ${metadata.distribution_rights || ""}`);
   lines.push("");
   lines.push("## Marketing");
   lines.push("");
   lines.push(`- Tagline: ${metadata.marketing_tagline || ""}`);
-  lines.push(`- OBI copy: ${metadata.obi_copy || ""}`);
-  lines.push(`- Spine text: ${metadata.spine_text || ""}`);
+  lines.push(`- Cover Hook: ${metadata.cover_hook || ""}`);
+  lines.push(`- OBI Copy: ${metadata.obi_copy || ""}`);
+  lines.push(`- Spine Text: ${metadata.spine_text || ""}`);
   lines.push("");
   lines.push("## Short Description");
   lines.push("");
@@ -467,6 +501,14 @@ function buildPublishMetadataMarkdown(metadata) {
   lines.push("## Long Description");
   lines.push("");
   lines.push(metadata.long_description || "");
+  lines.push("");
+  lines.push("## Back Cover Blurb");
+  lines.push("");
+  lines.push(metadata.back_cover_blurb || "");
+  lines.push("");
+  lines.push("## Author Bio");
+  lines.push("");
+  lines.push(metadata.author_bio || "");
   lines.push("");
   lines.push("## Keywords");
   lines.push("");
@@ -531,6 +573,321 @@ function buildPublishReportMarkdown(metadata, manifest) {
   return lines.join("\r\n");
 }
 
+function parsePublishMetadataMarkdown(markdown, existing = {}) {
+  const raw = String(markdown || "").replace(/^\uFEFF/, "");
+  const lines = raw.split(/\r?\n/);
+  const rootFields = {};
+  const rightsFields = {};
+  const marketingFields = {};
+  const selectedPlatformCategories = {
+    amazon: existing.platform_selected_categories?.amazon || existing.discovery?.platform_selected_categories?.amazon || "",
+    apple: existing.platform_selected_categories?.apple || existing.discovery?.platform_selected_categories?.apple || "",
+    google: existing.platform_selected_categories?.google || existing.discovery?.platform_selected_categories?.google || ""
+  };
+  const recommendedCategories = JSON.parse(JSON.stringify(existing.platform_recommended_categories || existing.discovery?.platform_recommended_categories || {}));
+  const rightsParagraph = [];
+  const shortDescription = [];
+  const longDescription = [];
+  const backCoverBlurb = [];
+  const authorBio = [];
+  const keywords = [];
+  const categories = [];
+  const formats = [];
+  let currentSection = "root";
+  let currentPlatform = "";
+
+  const getPlatformKey = (value) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized.includes("amazon")) return "amazon";
+    if (normalized.includes("apple")) return "apple";
+    if (normalized.includes("google")) return "google";
+    return "";
+  };
+
+  const normalizeFieldKey = (key) => {
+    const rawKey = String(key || "").trim().toLowerCase();
+    const map = {
+      "书名": "title",
+      "title": "title",
+      "副标题": "subtitle",
+      "subtitle": "subtitle",
+      "作者": "author",
+      "author": "author",
+      "语言": "language",
+      "language": "language",
+      "出版方": "publisher",
+      "publisher": "publisher",
+      "品牌": "imprint",
+      "imprint": "imprint",
+      "版本类型": "edition type",
+      "edition type": "edition type",
+      "发布日期": "publication date",
+      "publication date": "publication date",
+      "版权持有人": "copyright holder",
+      "copyright holder": "copyright holder",
+      "发行地区": "territory",
+      "territory": "territory",
+      "发行权利": "distribution rights",
+      "distribution rights": "distribution rights",
+      "宣传语": "tagline",
+      "tagline": "tagline",
+      "封面短句": "cover hook",
+      "cover hook": "cover hook",
+      "腰封文案": "obi copy",
+      "obi copy": "obi copy",
+      "书脊文案": "spine text",
+      "spine text": "spine text",
+      "默认分类": "selected default",
+      "selected default": "selected default"
+    };
+    return map[rawKey] || rawKey;
+  };
+
+  const normalizeSectionHeading = (heading) => {
+    const rawHeading = String(heading || "").trim().toLowerCase();
+    const map = {
+      "版权": "rights",
+      "rights": "rights",
+      "营销文案": "marketing",
+      "marketing": "marketing",
+      "短简介": "short_description",
+      "short description": "short_description",
+      "长简介": "long_description",
+      "long description": "long_description",
+      "封底摘要": "back_cover_blurb",
+      "back cover blurb": "back_cover_blurb",
+      "作者简介": "author_bio",
+      "author bio": "author_bio",
+      "关键词": "keywords",
+      "keywords": "keywords",
+      "分类": "categories",
+      "categories": "categories",
+      "平台推荐分类": "platform_recommended_categories",
+      "platform recommended categories": "platform_recommended_categories",
+      "格式": "formats",
+      "formats": "formats"
+    };
+    return map[rawHeading] || rawHeading;
+  };
+
+  const parseFieldLine = (line) => {
+    const match = String(line || "").trim().match(/^- ([^:]+):\s*(.*)$/);
+    if (!match) {
+      return null;
+    }
+    return { key: normalizeFieldKey(match[1].trim()), value: match[2].trim() };
+  };
+
+  const extractBulletSection = (sectionTitle) => {
+    const targetHeading = `## ${String(sectionTitle || "").trim().toLowerCase()}`;
+    let collecting = false;
+    const results = [];
+
+    for (const entry of lines) {
+      const trimmedEntry = String(entry || "").trim();
+      const normalizedHeading = trimmedEntry.toLowerCase();
+
+      if (normalizedHeading === targetHeading) {
+        collecting = true;
+        continue;
+      }
+
+      if (collecting && /^##\s+/i.test(trimmedEntry)) {
+        break;
+      }
+
+      if (collecting && trimmedEntry.startsWith("- ")) {
+        results.push(trimmedEntry.replace(/^- /, "").trim());
+      }
+    }
+
+    return results.filter(Boolean);
+  };
+
+  const pushParagraphLine = (bucket, line) => {
+    const value = String(line || "").trimEnd();
+    if (!bucket.length && !value.trim()) {
+      return;
+    }
+    bucket.push(value);
+  };
+
+  for (const line of lines) {
+    const trimmed = String(line || "").trim();
+
+    if (/^###\s+/.test(trimmed)) {
+      currentSection = "platform_recommended_categories";
+      currentPlatform = getPlatformKey(trimmed.replace(/^###\s+/, ""));
+      if (currentPlatform && !Array.isArray(recommendedCategories[currentPlatform])) {
+        recommendedCategories[currentPlatform] = [];
+      }
+      continue;
+    }
+
+    if (/^##\s+/.test(trimmed)) {
+      currentPlatform = "";
+      const heading = normalizeSectionHeading(trimmed.replace(/^##\s+/, "").trim());
+      if (heading === "rights") currentSection = "rights";
+      else if (heading === "marketing") currentSection = "marketing";
+      else if (heading === "short_description") currentSection = "short_description";
+      else if (heading === "long_description") currentSection = "long_description";
+      else if (heading === "back_cover_blurb") currentSection = "back_cover_blurb";
+      else if (heading === "author_bio") currentSection = "author_bio";
+      else if (heading === "keywords") currentSection = "keywords";
+      else if (heading === "categories") currentSection = "categories";
+      else if (heading === "platform_recommended_categories") currentSection = "platform_recommended_categories";
+      else if (heading === "formats") currentSection = "formats";
+      else currentSection = "other";
+      continue;
+    }
+
+    if (/^#\s+/.test(trimmed)) {
+      currentSection = "root";
+      currentPlatform = "";
+      continue;
+    }
+
+    if (currentSection === "root") {
+      const field = parseFieldLine(trimmed);
+      if (field) rootFields[field.key] = field.value;
+      continue;
+    }
+
+    if (currentSection === "rights") {
+      const field = parseFieldLine(trimmed);
+      if (field) rightsFields[field.key] = field.value;
+      else pushParagraphLine(rightsParagraph, line);
+      continue;
+    }
+
+    if (currentSection === "marketing") {
+      const field = parseFieldLine(trimmed);
+      if (field) marketingFields[field.key] = field.value;
+      continue;
+    }
+
+    if (currentSection === "short_description") {
+      pushParagraphLine(shortDescription, line);
+      continue;
+    }
+
+    if (currentSection === "long_description") {
+      pushParagraphLine(longDescription, line);
+      continue;
+    }
+
+    if (currentSection === "back_cover_blurb") {
+      pushParagraphLine(backCoverBlurb, line);
+      continue;
+    }
+
+    if (currentSection === "author_bio") {
+      pushParagraphLine(authorBio, line);
+      continue;
+    }
+
+    if (currentSection === "keywords" && trimmed.startsWith("- ")) {
+      keywords.push(trimmed.replace(/^- /, "").trim());
+      continue;
+    }
+
+    if (currentSection === "categories" && trimmed.startsWith("- ")) {
+      categories.push(trimmed.replace(/^- /, "").trim());
+      continue;
+    }
+
+    if (currentSection === "formats" && trimmed.startsWith("- ")) {
+      formats.push(trimmed.replace(/^- /, "").trim());
+      continue;
+    }
+
+    if (currentSection === "platform_recommended_categories" && currentPlatform) {
+      const selectedMatch = trimmed.match(/^- Selected default:\s*(.*)$/i);
+      if (selectedMatch) {
+        selectedPlatformCategories[currentPlatform] = selectedMatch[1].trim();
+        continue;
+      }
+
+      const recMatch = trimmed.match(/^- \[(.*?)\]\s+(.*?)\s+-\s+(.*)$/);
+      if (recMatch) {
+        recommendedCategories[currentPlatform] = recommendedCategories[currentPlatform] || [];
+        recommendedCategories[currentPlatform].push({
+          priority: recMatch[1].trim(),
+          path: recMatch[2].trim(),
+          note: recMatch[3].trim()
+        });
+      }
+    }
+  }
+
+  const cleanBlock = (bucket, fallback = "") => {
+    const text = bucket.join("\n").replace(/^\s+|\s+$/g, "");
+    return text || fallback || "";
+  };
+
+  const languageMatch = String(rootFields.language || "").match(/^([a-z]{2,5})\s*(?:\((.*?)\))?$/i);
+
+  return {
+    title: sanitizeText(rootFields.title || existing.title),
+    subtitle: sanitizeText(rootFields.subtitle || existing.subtitle),
+    author: sanitizeText(rootFields.author || existing.author),
+    language: sanitizeText((languageMatch?.[1] || existing.language || "").toLowerCase()),
+    language_name: sanitizeText(languageMatch?.[2] || existing.language_name),
+    publisher: sanitizeText(rootFields.publisher || existing.publisher),
+    imprint: sanitizeText(rootFields.imprint || existing.imprint),
+    edition_type: sanitizeText(rootFields["edition type"] || existing.edition_type),
+    publication_date: sanitizeText(rootFields["publication date"] || existing.publication_date),
+    rights: sanitizeText(cleanBlock(rightsParagraph, existing.rights)),
+    copyright_holder: sanitizeText(rightsFields["copyright holder"] || existing.copyright_holder),
+    territory: sanitizeText(rightsFields.territory || existing.territory),
+    distribution_rights: sanitizeText(rightsFields["distribution rights"] || existing.distribution_rights),
+    marketing_tagline: sanitizeText(marketingFields.tagline || existing.marketing_tagline),
+    cover_hook: sanitizeText(marketingFields["cover hook"] || existing.cover_hook),
+    obi_copy: sanitizeText(marketingFields["obi copy"] || existing.obi_copy),
+    spine_text: sanitizeText(marketingFields["spine text"] || existing.spine_text),
+    short_description: sanitizeText(cleanBlock(shortDescription, existing.short_description)),
+    long_description: sanitizeText(cleanBlock(longDescription, existing.long_description)),
+    back_cover_blurb: sanitizeText(cleanBlock(backCoverBlurb, existing.back_cover_blurb)),
+    author_bio: sanitizeText(cleanBlock(authorBio, existing.author_bio)),
+    keywords: sanitizeList(keywords.length ? keywords : (extractBulletSection("Keywords").length ? extractBulletSection("Keywords") : (existing.keywords || existing.discovery?.keywords))),
+    categories: sanitizeList(categories.length ? categories : (extractBulletSection("Categories").length ? extractBulletSection("Categories") : (existing.categories || existing.discovery?.categories))),
+    formats: sanitizeList(formats.length ? formats : (extractBulletSection("Formats").length ? extractBulletSection("Formats") : existing.formats)),
+    platform_selected_categories: {
+      amazon: sanitizeText(selectedPlatformCategories.amazon),
+      apple: sanitizeText(selectedPlatformCategories.apple),
+      google: sanitizeText(selectedPlatformCategories.google)
+    },
+    platform_recommended_categories: recommendedCategories
+  };
+}
+
+function extractMarkdownBulletSection(markdown, sectionTitle) {
+  const lines = String(markdown || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  const targetHeading = `## ${String(sectionTitle || "").trim().toLowerCase()}`;
+  let collecting = false;
+  const results = [];
+
+  for (const line of lines) {
+    const trimmed = String(line || "").trim();
+    const normalized = trimmed.toLowerCase();
+
+    if (normalized === targetHeading) {
+      collecting = true;
+      continue;
+    }
+
+    if (collecting && /^##\s+/i.test(trimmed)) {
+      break;
+    }
+
+    if (collecting && trimmed.startsWith("- ")) {
+      results.push(trimmed.replace(/^- /, "").trim());
+    }
+  }
+
+  return results.filter(Boolean);
+}
+
 function buildPlatformMetadataFromPublish(metadata, platformName) {
   return {
     platform: platformName,
@@ -562,6 +919,8 @@ function buildPlatformMetadataFromPublish(metadata, platformName) {
     spine_text: metadata.spine_text || "",
     keywords: Array.isArray(metadata.keywords) ? metadata.keywords : [],
     categories: Array.isArray(metadata.categories) ? metadata.categories : [],
+    platform_recommended_categories: metadata.platform_recommended_categories || {},
+    platform_selected_categories: metadata.platform_selected_categories || {},
     formats: Array.isArray(metadata.formats) ? metadata.formats : [],
     identification: metadata.identification || {},
     marketing: metadata.marketing || {},
@@ -713,7 +1072,7 @@ function readJsonBody(req) {
     let raw = "";
     req.on("data", (chunk) => {
       raw += chunk;
-      if (raw.length > 1_000_000) {
+      if (raw.length > 5_000_000) {
         reject(new Error("Request body too large."));
       }
     });
@@ -760,6 +1119,7 @@ function listWorkspaces() {
       const chapterFiles = getChapterMetadata(chapterRoot);
       const chapterCount = chapterFiles.length;
       const outputs = listOutputDocuments(outputRoot);
+      const outputLanguages = getOutputLanguages(bookRoot);
       const publishLanguages = listDirectories(publishRoot);
       let status = null;
       let recentRuns = [];
@@ -810,6 +1170,7 @@ function listWorkspaces() {
         chapterFiles,
         chapterCount,
         outputFiles: outputs,
+        outputLanguages,
         publishLanguages,
         coverArtifacts,
         status,
@@ -1035,7 +1396,19 @@ function openFileWithDefaultApp(filePath) {
 }
 
 function openFolder(folderPath) {
-  const child = spawn("explorer.exe", [folderPath], {
+  const child = spawn("powershell.exe", [
+    "-NoProfile",
+    "-Command",
+    "$folder = $args[0];",
+    "Start-Process -FilePath explorer.exe -ArgumentList @('/n,', $folder) | Out-Null;",
+    "Start-Sleep -Milliseconds 700;",
+    "try {",
+    "  $shell = New-Object -ComObject WScript.Shell;",
+    "  $title = Split-Path -Path $folder -Leaf;",
+    "  if (-not [string]::IsNullOrWhiteSpace($title)) { $shell.AppActivate($title) | Out-Null }",
+    "} catch {}",
+    folderPath
+  ], {
     detached: true,
     stdio: "ignore"
   });
@@ -1044,7 +1417,19 @@ function openFolder(folderPath) {
 }
 
 function revealFileInExplorer(filePath) {
-  const child = spawn("explorer.exe", ["/select,", filePath], {
+  const child = spawn("powershell.exe", [
+    "-NoProfile",
+    "-Command",
+    "$file = $args[0];",
+    "Start-Process -FilePath explorer.exe -ArgumentList @('/select,', $file) | Out-Null;",
+    "Start-Sleep -Milliseconds 700;",
+    "try {",
+    "  $shell = New-Object -ComObject WScript.Shell;",
+    "  $title = Split-Path -Path (Split-Path -Path $file -Parent) -Leaf;",
+    "  if (-not [string]::IsNullOrWhiteSpace($title)) { $shell.AppActivate($title) | Out-Null }",
+    "} catch {}",
+    filePath
+  ], {
     detached: true,
     stdio: "ignore"
   });
@@ -1395,83 +1780,150 @@ const server = http.createServer(async (req, res) => {
       }
 
       const existing = readJsonFile(metadataPath);
-      const keywords = sanitizeList(body.keywords);
-      const categories = sanitizeList(body.categories);
+      let nextMetadata;
 
-      const title = sanitizeText(body.title || existing.title);
-      const subtitle = sanitizeText(body.subtitle || existing.subtitle);
-      const author = sanitizeText(body.author || existing.author);
-      const publisher = sanitizeText(body.publisher || existing.publisher);
-      const imprint = sanitizeText(body.imprint || existing.imprint);
-      const publicationDate = sanitizeText(body.publicationDate || existing.publication_date);
-      const rights = sanitizeText(body.rights || existing.rights);
-      const territory = sanitizeText(body.territory || existing.territory);
-      const distributionRights = sanitizeText(body.distributionRights || existing.distribution_rights);
-      const shortDescription = sanitizeText(body.shortDescription || existing.short_description);
-      const longDescription = sanitizeText(body.longDescription || existing.long_description);
-      const marketingTagline = sanitizeText(body.marketingTagline || existing.marketing_tagline);
-      const coverHook = sanitizeText(body.coverHook || existing.cover_hook);
-      const backCoverBlurb = sanitizeText(body.backCoverBlurb || existing.back_cover_blurb);
-      const obiCopy = sanitizeText(body.obiCopy || existing.obi_copy);
-      const authorBio = sanitizeText(body.authorBio || existing.author_bio);
-      const spineText = sanitizeText(body.spineText || existing.spine_text);
+      if (typeof body.metadataMarkdown === "string") {
+        const parsed = parsePublishMetadataMarkdown(body.metadataMarkdown, existing);
+        nextMetadata = {
+          ...existing,
+          title: parsed.title,
+          subtitle: parsed.subtitle,
+          author: parsed.author,
+          language: parsed.language || existing.language || language,
+          language_name: parsed.language_name || existing.language_name,
+          publisher: parsed.publisher,
+          imprint: parsed.imprint,
+          edition_type: parsed.edition_type || existing.edition_type,
+          publication_date: parsed.publication_date,
+          rights: parsed.rights,
+          copyright_holder: parsed.copyright_holder || existing.copyright_holder,
+          territory: parsed.territory,
+          distribution_rights: parsed.distribution_rights,
+          short_description: parsed.short_description,
+          long_description: parsed.long_description,
+          marketing_tagline: parsed.marketing_tagline,
+          cover_hook: parsed.cover_hook,
+          back_cover_blurb: parsed.back_cover_blurb,
+          obi_copy: parsed.obi_copy,
+          author_bio: parsed.author_bio,
+          spine_text: parsed.spine_text,
+          keywords: parsed.keywords,
+          categories: parsed.categories,
+          formats: parsed.formats,
+          platform_recommended_categories: parsed.platform_recommended_categories,
+          platform_selected_categories: parsed.platform_selected_categories
+        };
+      } else {
+        const keywords = sanitizeList(body.keywords);
+        const categories = sanitizeList(body.categories);
+        const selectedPlatformCategories = body.selectedPlatformCategories && typeof body.selectedPlatformCategories === "object"
+          ? body.selectedPlatformCategories
+          : (existing.platform_selected_categories || {});
 
-      const nextMetadata = {
-        ...existing,
-        title,
-        subtitle,
-        author,
-        publisher,
-        imprint,
-        publication_date: publicationDate,
-        rights,
-        territory,
-        distribution_rights: distributionRights,
-        short_description: shortDescription,
-        long_description: longDescription,
-        marketing_tagline: marketingTagline,
-        cover_hook: coverHook,
-        back_cover_blurb: backCoverBlurb,
-        obi_copy: obiCopy,
-        author_bio: authorBio,
-        spine_text: spineText,
-        keywords,
-        categories,
-        identification: {
-          ...(existing.identification || {}),
+        const title = sanitizeText(body.title || existing.title);
+        const subtitle = sanitizeText(body.subtitle || existing.subtitle);
+        const author = sanitizeText(body.author || existing.author);
+        const publisher = sanitizeText(body.publisher || existing.publisher);
+        const imprint = sanitizeText(body.imprint || existing.imprint);
+        const publicationDate = sanitizeText(body.publicationDate || existing.publication_date);
+        const rights = sanitizeText(body.rights || existing.rights);
+        const territory = sanitizeText(body.territory || existing.territory);
+        const distributionRights = sanitizeText(body.distributionRights || existing.distribution_rights);
+        const shortDescription = sanitizeText(body.shortDescription || existing.short_description);
+        const longDescription = sanitizeText(body.longDescription || existing.long_description);
+        const marketingTagline = sanitizeText(body.marketingTagline || existing.marketing_tagline);
+        const coverHook = sanitizeText(body.coverHook || existing.cover_hook);
+        const backCoverBlurb = sanitizeText(body.backCoverBlurb || existing.back_cover_blurb);
+        const obiCopy = sanitizeText(body.obiCopy || existing.obi_copy);
+        const authorBio = sanitizeText(body.authorBio || existing.author_bio);
+        const spineText = sanitizeText(body.spineText || existing.spine_text);
+
+        nextMetadata = {
+          ...existing,
           title,
           subtitle,
           author,
-          publication_date: publicationDate,
           publisher,
-          imprint
-        },
-        marketing: {
-          ...(existing.marketing || {}),
-          tagline: marketingTagline,
-          subtitle,
+          imprint,
+          publication_date: publicationDate,
+          rights,
+          territory,
+          distribution_rights: distributionRights,
           short_description: shortDescription,
           long_description: longDescription,
+          marketing_tagline: marketingTagline,
           cover_hook: coverHook,
           back_cover_blurb: backCoverBlurb,
           obi_copy: obiCopy,
           author_bio: authorBio,
-          spine_text: spineText
-        },
-        rights_metadata: {
-          ...(existing.rights_metadata || {}),
-          rights_statement: rights,
-          territory,
-          distribution_rights: distributionRights,
-          publisher,
-          imprint
-        },
-        discovery: {
-          ...(existing.discovery || {}),
+          spine_text: spineText,
           keywords,
-          categories
+          categories,
+          platform_selected_categories: {
+            amazon: sanitizeText(selectedPlatformCategories.amazon),
+            apple: sanitizeText(selectedPlatformCategories.apple),
+            google: sanitizeText(selectedPlatformCategories.google)
+          }
+        };
+      }
+
+      nextMetadata.identification = {
+        ...(existing.identification || {}),
+        title: nextMetadata.title,
+        subtitle: nextMetadata.subtitle,
+        author: nextMetadata.author,
+        publication_date: nextMetadata.publication_date,
+        publisher: nextMetadata.publisher,
+        imprint: nextMetadata.imprint
+      };
+
+      nextMetadata.marketing = {
+        ...(existing.marketing || {}),
+        tagline: nextMetadata.marketing_tagline,
+        subtitle: nextMetadata.subtitle,
+        short_description: nextMetadata.short_description,
+        long_description: nextMetadata.long_description,
+        cover_hook: nextMetadata.cover_hook,
+        back_cover_blurb: nextMetadata.back_cover_blurb,
+        obi_copy: nextMetadata.obi_copy,
+        author_bio: nextMetadata.author_bio,
+        spine_text: nextMetadata.spine_text
+      };
+
+      nextMetadata.rights_metadata = {
+        ...(existing.rights_metadata || {}),
+        rights_statement: nextMetadata.rights,
+        territory: nextMetadata.territory,
+        distribution_rights: nextMetadata.distribution_rights,
+        publisher: nextMetadata.publisher,
+        imprint: nextMetadata.imprint
+      };
+
+      nextMetadata.discovery = {
+        ...(existing.discovery || {}),
+        keywords: nextMetadata.keywords || [],
+        categories: nextMetadata.categories || [],
+        platform_recommended_categories: nextMetadata.platform_recommended_categories || existing.platform_recommended_categories || existing.discovery?.platform_recommended_categories || {},
+        platform_selected_categories: {
+          amazon: sanitizeText(nextMetadata.platform_selected_categories?.amazon),
+          apple: sanitizeText(nextMetadata.platform_selected_categories?.apple),
+          google: sanitizeText(nextMetadata.platform_selected_categories?.google)
         }
       };
+
+      if (typeof body.metadataMarkdown === "string") {
+        if (!Array.isArray(nextMetadata.keywords) || !nextMetadata.keywords.length) {
+          nextMetadata.keywords = sanitizeList(extractMarkdownBulletSection(body.metadataMarkdown, "Keywords"));
+          nextMetadata.discovery.keywords = nextMetadata.keywords;
+        }
+        if (!Array.isArray(nextMetadata.categories) || !nextMetadata.categories.length) {
+          nextMetadata.categories = sanitizeList(extractMarkdownBulletSection(body.metadataMarkdown, "Categories"));
+          nextMetadata.discovery.categories = nextMetadata.categories;
+        }
+        if (!Array.isArray(nextMetadata.formats) || !nextMetadata.formats.length) {
+          nextMetadata.formats = sanitizeList(extractMarkdownBulletSection(body.metadataMarkdown, "Formats"));
+        }
+      }
 
       syncPublishMetadataFiles(paths.bookRoot, language, nextMetadata);
 
