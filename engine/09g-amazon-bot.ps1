@@ -4,11 +4,14 @@ param(
 
     [string]$Language = "zh",
 
-    [ValidateSet("prepare", "draft", "assist")]
+    [ValidateSet("prepare", "draft", "assist", "details", "content")]
     [string]$Mode = "prepare",
 
     [Parameter(Mandatory = $true)]
     [string]$RunRoot,
+
+    [switch]$AttachChrome,
+    [int]$ChromeDebugPort = 9222,
 
     [switch]$ReuseSession,
     [switch]$Force
@@ -111,6 +114,12 @@ $nodeArgs = @(
 
 if ($ReuseSession) {
     $nodeArgs += "--reuse-session"
+}
+
+if ($AttachChrome) {
+    $nodeArgs += "--attach-browser"
+    $nodeArgs += "--remote-debug-url"
+    $nodeArgs += ("http://127.0.0.1:{0}" -f $ChromeDebugPort)
 }
 
 if ($Force) {

@@ -7,8 +7,11 @@ param(
     [ValidateSet("all", "amazon", "apple", "google")]
     [string]$Platform = "all",
 
-    [ValidateSet("prepare", "draft", "assist")]
+    [ValidateSet("prepare", "draft", "assist", "details", "content")]
     [string]$Mode = "prepare",
+
+    [switch]$AttachChrome,
+    [int]$ChromeDebugPort = 9222,
 
     [switch]$ReuseSession,
     [switch]$Force
@@ -83,12 +86,16 @@ function Invoke-SubmitModule {
     if ($ReuseSession) {
         $invokeSplat.ReuseSession = $true
     }
+    if ($TargetPlatform -eq "google" -and $AttachChrome) {
+        $invokeSplat.AttachChrome = $true
+        $invokeSplat.ChromeDebugPort = $ChromeDebugPort
+    }
     if ($Force) {
         $invokeSplat.Force = $true
     }
 
     Write-RunLog "Running $TargetPlatform submit module."
-    & $ScriptPath @invokeSplat
+    & $ScriptPath @invokeSplat | ForEach-Object { Write-Host $_ }
 
     if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
         throw "$TargetPlatform submit module failed with exit code $LASTEXITCODE"
@@ -116,6 +123,8 @@ Set-SageCurrentStep -Context $Context -Step "submit" -Data @{
     language = $LanguageCode
     platform = $Platform
     mode = $Mode
+    attach_chrome = [bool]$AttachChrome
+    chrome_debug_port = $ChromeDebugPort
 }
 
 $BookRoot = $Context.BookRoot
@@ -164,6 +173,8 @@ $request = [ordered]@{
     language = $LanguageCode
     platform_scope = $Platform
     mode = $Mode
+    attach_chrome = [bool]$AttachChrome
+    chrome_debug_port = $ChromeDebugPort
     reuse_session = [bool]$ReuseSession
     force = [bool]$Force
     run_root = $RunRoot
@@ -229,7 +240,7 @@ try {
     }
 
     $result.state = "success"
-    $result.summary = "Submit skeleton finished. Platform modules created draft/assist placeholders only."
+    $result.summary = "Submit run finished. Review each platform result for readiness and any remaining manual portal steps."
     Write-JsonUtf8 -Path $ResultPath -Data $result
 
     Complete-SageStep -Context $Context -Step "submit" -State "success" -Message "Submit skeleton finished." -Data @{

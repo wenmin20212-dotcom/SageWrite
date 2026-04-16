@@ -41,36 +41,63 @@ if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
 
 $PlatformRoot = Join-Path $Context.BookRoot ("09_publish\" + $LanguageCode + "\apple")
 $MetadataPath = Join-Path $PlatformRoot "metadata.json"
+$PackagePath = Join-Path $PlatformRoot "apple_books_package.json"
 $ResultPath = Join-Path $RunRoot "apple_result.json"
-$ArtifactPath = Join-Path (Join-Path $RunRoot "artifacts") "apple-delivery-note.txt"
+$SessionRoot = Join-Path $PlatformRoot ".automation\edge-profile"
+$AutomationRoot = Join-Path $Context.EnginePath "automation"
+$AutomationScript = Join-Path $AutomationRoot "submit-apple.js"
+$PackageJsonPath = Join-Path $AutomationRoot "package.json"
 
 if (-not (Test-Path -LiteralPath $MetadataPath)) {
     throw "Apple metadata.json not found: $MetadataPath"
 }
 
-$Metadata = Get-Content -LiteralPath $MetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
-Set-Content -LiteralPath $ArtifactPath -Value "Placeholder for future Apple delivery tooling notes." -Encoding UTF8
-
-$Result = [ordered]@{
-    platform = "apple"
-    state = "prepared"
-    mode = $Mode
-    automation_type = "delivery"
-    supported_today = $false
-    executed_browser = $false
-    reuse_session = [bool]$ReuseSession
-    force = [bool]$Force
-    title = "$($Metadata.title)"
-    author = "$($Metadata.author)"
-    folder = $PlatformRoot
-    result_file = $ResultPath
-    next_step = "Keep generating Apple delivery package first; do not start browser automation yet."
-    notes = @(
-        "Apple submission is intentionally kept out of browser automation in phase one.",
-        "This module reserves the delivery handoff point for future Apple-specific tooling.",
-        "Current action is package verification only."
-    )
+if (-not (Test-Path -LiteralPath $PackagePath)) {
+    throw "Apple package file not found: $PackagePath"
 }
 
-Write-JsonUtf8 -Path $ResultPath -Data $Result
-Write-Host "Apple delivery scaffold completed: $ResultPath"
+if (-not (Test-Path -LiteralPath $AutomationScript)) {
+    throw "Apple automation script not found: $AutomationScript"
+}
+
+if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
+    throw "Automation package.json not found: $PackageJsonPath"
+}
+
+New-Item -ItemType Directory -Path $SessionRoot -Force | Out-Null
+
+$nodeArgs = @(
+    $AutomationScript,
+    "--mode", $Mode,
+    "--platform-root", $PlatformRoot,
+    "--metadata-path", $MetadataPath,
+    "--package-path", $PackagePath,
+    "--run-root", $RunRoot,
+    "--result-path", $ResultPath,
+    "--session-root", $SessionRoot
+)
+
+if ($ReuseSession) {
+    $nodeArgs += "--reuse-session"
+}
+
+if ($Force) {
+    $nodeArgs += "--force"
+}
+
+Push-Location $AutomationRoot
+try {
+    & node @nodeArgs
+    if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
+        throw "submit-apple.js failed with exit code $LASTEXITCODE"
+    }
+}
+finally {
+    Pop-Location
+}
+
+if (-not (Test-Path -LiteralPath $ResultPath)) {
+    throw "Apple automation did not write result file: $ResultPath"
+}
+
+Write-Host "Apple submit automation completed: $ResultPath"

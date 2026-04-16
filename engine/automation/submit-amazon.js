@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
 
 function parseArgs(argv) {
   const args = {};
@@ -98,6 +99,58 @@ function writeLog(logPath, message) {
   process.stdout.write(`${line}\n`);
 }
 
+async function forcePageFront(page, logPath) {
+  if (!page) {
+    return;
+  }
+
+  try {
+    await page.bringToFront();
+  } catch {}
+
+  try {
+    await page.evaluate(() => {
+      try {
+        window.focus();
+      } catch {}
+    });
+  } catch {}
+
+  try {
+    await page.waitForTimeout(250);
+  } catch {}
+
+  if (logPath) {
+    writeLog(logPath, "Requested browser page to come to front.");
+  }
+}
+
+function requestWindowsEdgeFront(logPath) {
+  const command = [
+    "$shell = New-Object -ComObject WScript.Shell;",
+    "Start-Sleep -Milliseconds 600;",
+    "$titles = @('Amazon KDP', 'Kindle eBook Details', 'Bookshelf', 'Microsoft Edge');",
+    "foreach ($title in $titles) {",
+    "  try { if ($shell.AppActivate($title)) { break } } catch {}",
+    "}"
+  ].join(" ");
+
+  try {
+    const child = spawn("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      command
+    ], {
+      detached: true,
+      stdio: "ignore"
+    });
+    child.unref();
+    if (logPath) {
+      writeLog(logPath, "Requested Windows to activate the Edge window.");
+    }
+  } catch {}
+}
+
 async function capturePage(page, screenshotPath) {
   try {
     await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -113,6 +166,68 @@ function detectEdgePath() {
   ].filter(Boolean);
 
   return candidates.find((candidate) => fs.existsSync(candidate)) || "";
+}
+
+async function canConnectToDebugUrl(debugUrl) {
+  try {
+    const response = await fetch(`${String(debugUrl || "").replace(/\/$/, "")}/json/version`, {
+      method: "GET"
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function classifyAmazonPage(url) {
+  const value = String(url || "");
+  if (/\/title-setup\/kindle\/.*\/content/i.test(value)) {
+    return "content";
+  }
+  if (/\/title-setup\/kindle\/.*\/details/i.test(value)) {
+    return "details";
+  }
+  if (/kdp\.amazon\.[^/]+\/.*bookshelf/i.test(value)) {
+    return "bookshelf";
+  }
+  if (/kdp\.amazon\./i.test(value)) {
+    return "amazon";
+  }
+  return "";
+}
+
+function flattenBrowserPages(browser) {
+  if (!browser || typeof browser.contexts !== "function") {
+    return [];
+  }
+
+  const pages = [];
+  for (const context of browser.contexts()) {
+    try {
+      pages.push(...context.pages());
+    } catch {}
+  }
+  return pages;
+}
+
+function findAttachedAmazonPage(browser, preferredState) {
+  const pages = flattenBrowserPages(browser);
+  const pageEntries = pages
+    .map((page) => ({ page, state: classifyAmazonPage(typeof page.url === "function" ? page.url() : "") }))
+    .filter((entry) => entry.state);
+
+  if (!pageEntries.length) {
+    return null;
+  }
+
+  const preferred = preferredState
+    ? pageEntries.find((entry) => entry.state === preferredState)
+    : null;
+  if (preferred) {
+    return preferred;
+  }
+
+  return pageEntries[0];
 }
 
 function resolveMainFiles(platformRoot) {
@@ -141,6 +256,8 @@ function buildBaseResult({
   platformRoot,
   metadata,
   edgePath,
+  attachBrowser,
+  remoteDebugUrl,
   playwrightLoaded,
   files,
   sessionRoot,
@@ -155,6 +272,8 @@ function buildBaseResult({
     executed_browser: false,
     browser_engine: "msedge",
     edge_path: edgePath || "",
+    connection_mode: attachBrowser ? "cdp_attach" : "launch",
+    remote_debug_url: remoteDebugUrl || "",
     playwright_available: Boolean(playwrightLoaded),
     interactive_terminal: Boolean(process.stdin.isTTY),
     folder: platformRoot,
@@ -1700,6 +1819,228 @@ async function waitForContentPage(page, logPath, screenshotPath, timeoutMs = 120
   };
 }
 
+async function clickChoiceBySectionDom(page, spec, logPath) {
+  const result = await page.evaluate((input) => {
+    const normalize = (text) => String(text || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const includesAny = (text, patterns) => patterns.some((pattern) => normalize(text).includes(normalize(pattern)));
+
+    const isVisible = (element) => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+
+    const clickNode = (node) => {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+
+      const control = node.matches('input[type="radio"], input[type="checkbox"], button, [role="button"], [role="radio"]')
+        ? node
+        : node.querySelector('input[type="radio"], input[type="checkbox"], button, [role="button"], [role="radio"]');
+
+      const target = control instanceof HTMLElement ? control : node;
+      target.click();
+      return true;
+    };
+
+    const sectionSelector = 'section, fieldset, [role="group"], [role="region"], form > div, div';
+    const sections = Array.from(document.querySelectorAll(sectionSelector))
+      .filter((section) => isVisible(section))
+      .map((section) => ({ section, text: normalize(section.textContent || "") }))
+      .filter(({ text }) => includesAny(text, input.sectionPatterns || []))
+      .sort((left, right) => left.text.length - right.text.length);
+
+    for (const { section } of sections) {
+      const candidates = [
+        section,
+        ...Array.from(section.querySelectorAll('label, button, a, span, div, input[type="radio"], input[type="checkbox"], [role="button"], [role="radio"]'))
+      ];
+
+      for (const candidate of candidates) {
+        if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) {
+          continue;
+        }
+        const text = normalize(candidate.textContent || candidate.getAttribute("aria-label") || candidate.getAttribute("value") || "");
+        if (!includesAny(text, input.choicePatterns || [])) {
+          continue;
+        }
+        if ((input.excludePatterns || []).length && includesAny(text, input.excludePatterns || [])) {
+          continue;
+        }
+        if (clickNode(candidate)) {
+          return { ok: true };
+        }
+      }
+    }
+
+    return { ok: false };
+  }, spec);
+
+  if (result?.ok) {
+    writeLog(logPath, `Clicked section choice: ${spec.label}`);
+    return spec.label;
+  }
+
+  return "";
+}
+
+async function selectAmazonOwnCoverUpload(page, logPath) {
+  const direct = await clickFirstVisibleLocator([
+    page.getByLabel(/upload a cover you already have/i),
+    page.getByText(/upload a cover you already have/i),
+    page.locator('label').filter({ hasText: /upload a cover you already have/i }).first()
+  ], logPath, "cover-upload-option");
+
+  if (direct) {
+    await page.waitForTimeout(600);
+    return "cover-upload-option";
+  }
+
+  return clickChoiceBySectionDom(page, {
+    label: "cover-upload-option",
+    sectionPatterns: ["ebook cover", "cover"],
+    choicePatterns: ["upload a cover you already have", "upload your own cover", "jpg/tiff only"]
+  }, logPath);
+}
+
+async function selectAmazonNoDrm(page, logPath) {
+  const direct = await clickFirstVisibleLocator([
+    page.getByLabel(/no, do not apply digital rights management/i),
+    page.getByText(/no, do not apply digital rights management/i),
+    page.locator('label').filter({ hasText: /no, do not apply digital rights management/i }).first()
+  ], logPath, "drm-no");
+
+  if (direct) {
+    await page.waitForTimeout(400);
+    return "drm-no";
+  }
+
+  return clickChoiceBySectionDom(page, {
+    label: "drm-no",
+    sectionPatterns: ["digital rights management", "drm"],
+    choicePatterns: ["no, do not apply digital rights management", "no, do not apply"]
+  }, logPath);
+}
+
+async function findFileInputMatch(page, spec) {
+  const inputs = page.locator('input[type="file"]');
+  const count = await inputs.count().catch(() => 0);
+  if (!count) {
+    return null;
+  }
+
+  const candidates = await inputs.evaluateAll((elements, input) => {
+    const normalize = (text) => String(text || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const includesAny = (text, patterns) => patterns.some((pattern) => normalize(text).includes(normalize(pattern)));
+
+    const collectContext = (element) => {
+      const parts = [];
+      parts.push(element.getAttribute("aria-label") || "");
+      parts.push(element.getAttribute("name") || "");
+      parts.push(element.getAttribute("id") || "");
+      parts.push(element.getAttribute("accept") || "");
+      let parent = element.parentElement;
+      let depth = 0;
+      while (parent && depth < 5) {
+        parts.push((parent.textContent || "").slice(0, 280));
+        parent = parent.parentElement;
+        depth += 1;
+      }
+      return normalize(parts.join(" "));
+    };
+
+    return elements
+      .map((element, index) => {
+        const context = collectContext(element);
+        const excluded = (input.excludePatterns || []).length && includesAny(context, input.excludePatterns || []);
+        const score = (input.patterns || []).reduce((sum, pattern) => (
+          context.includes(normalize(pattern)) ? sum + 1 : sum
+        ), 0);
+        return { index, context, score, excluded };
+      })
+      .filter((candidate) => !candidate.excluded && candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.context.length - right.context.length);
+  }, spec);
+
+  if (candidates[0]) {
+    return candidates[0];
+  }
+
+  if (count === 1 && spec.allowSingleFallback) {
+    return { index: 0, context: "single-file-input-fallback" };
+  }
+
+  return null;
+}
+
+async function uploadFileToAmazonSection(page, spec, absoluteFilePath, logPath, screenshotPath) {
+  if (!absoluteFilePath) {
+    return "";
+  }
+
+  const match = await findFileInputMatch(page, spec);
+  if (!match) {
+    return "";
+  }
+
+  const locator = page.locator('input[type="file"]').nth(match.index);
+  await locator.setInputFiles(absoluteFilePath);
+  await page.waitForTimeout(1200);
+  await capturePage(page, screenshotPath);
+  writeLog(logPath, `Uploaded file for ${spec.label}: ${absoluteFilePath}`);
+  return `upload:${spec.label}`;
+}
+
+async function fillKindleContentPage(page, platformRoot, files, logPath, screenshotPath) {
+  const actions = [];
+  const manuscriptPath = files.epub ? path.join(platformRoot, files.epub) : "";
+  const coverPath = files.cover ? path.join(platformRoot, files.cover) : "";
+
+  const drmAction = await selectAmazonNoDrm(page, logPath);
+  if (drmAction) {
+    actions.push(drmAction);
+  }
+
+  const manuscriptAction = await uploadFileToAmazonSection(page, {
+    label: "manuscript",
+    patterns: ["manuscript", "ebook manuscript", "upload manuscript", ".epub"],
+    excludePatterns: ["cover"],
+    allowSingleFallback: false
+  }, manuscriptPath, logPath, screenshotPath);
+  if (manuscriptAction) {
+    actions.push(manuscriptAction);
+  }
+
+  await selectAmazonOwnCoverUpload(page, logPath);
+  const coverAction = await uploadFileToAmazonSection(page, {
+    label: "cover",
+    patterns: ["ebook cover", "upload a cover", "upload your own cover", "jpg/tiff", "cover"],
+    excludePatterns: ["manuscript", "cover creator"],
+    allowSingleFallback: false
+  }, coverPath, logPath, screenshotPath);
+  if (coverAction) {
+    actions.push(coverAction);
+  }
+
+  await capturePage(page, screenshotPath);
+  return actions;
+}
+
 async function fillKindleDetailsPage(page, metadata, logPath, screenshotPath) {
   const filledFields = [];
 
@@ -1794,6 +2135,8 @@ async function fillKindleDetailsPage(page, metadata, logPath, screenshotPath) {
 async function run() {
   const args = parseArgs(process.argv);
   const mode = args.mode || "prepare";
+  const attachBrowser = Boolean(args["attach-browser"]);
+  const remoteDebugUrl = String(args["remote-debug-url"] || "").trim();
   const platformRoot = args["platform-root"];
   const metadataPath = args["metadata-path"];
   const runRoot = args["run-root"];
@@ -1821,6 +2164,8 @@ async function run() {
     platformRoot,
     metadata,
     edgePath,
+    attachBrowser,
+    remoteDebugUrl,
     playwrightLoaded: playwright,
     files,
     sessionRoot,
@@ -1855,6 +2200,9 @@ async function run() {
         ? `Edge detected at ${edgePath}`
         : "Microsoft Edge executable was not found."
     ];
+    if (attachBrowser) {
+      result.notes.push("Prepare mode is configured to attach to an existing Chromium debugging session.");
+    }
     writeJson(resultPath, result);
     return;
   }
@@ -1869,13 +2217,36 @@ async function run() {
 
   if (!playwright) {
     result.state = "blocked";
-    result.next_step = "Install playwright-core in engine/automation before using draft or assist.";
+    result.next_step = "Install playwright-core in engine/automation before using draft, details, content, or assist.";
     result.notes = ["Run npm install inside engine/automation."];
     writeJson(resultPath, result);
     return;
   }
 
-  if (!edgePath) {
+  if (attachBrowser && !remoteDebugUrl) {
+    result.state = "blocked";
+    result.next_step = "Provide a remote debugging URL or pass -ChromeDebugPort when Amazon attach mode is enabled.";
+    result.notes = ["Attach mode was requested but no remote debugging URL was provided."];
+    writeJson(resultPath, result);
+    return;
+  }
+
+  if (attachBrowser) {
+    const debugReady = await canConnectToDebugUrl(remoteDebugUrl);
+    if (!debugReady) {
+      result.state = "awaiting_debug_browser";
+      result.next_step = "Start Edge or Chrome manually with --remote-debugging-port=9222, open the Amazon second page in that window, then rerun the Amazon second-page button.";
+      result.notes = [
+        "Could not reach the requested Chromium remote debugging endpoint.",
+        "Example: msedge.exe --remote-debugging-port=9222"
+      ];
+      writeJson(resultPath, result);
+      writeLog(logPath, `Amazon attach mode could not reach ${remoteDebugUrl}.`);
+      return;
+    }
+  }
+
+  if (!attachBrowser && !edgePath) {
     result.state = "blocked";
     result.next_step = "Install Microsoft Edge or set SAGEWRITE_BROWSER_PATH.";
     result.notes = ["Browser executable could not be resolved."];
@@ -1885,113 +2256,230 @@ async function run() {
 
   const { chromium } = playwright;
   let browserContext;
+  let browser = null;
+  let page = null;
+  let keepBrowserOpen = false;
   try {
-    try {
-      browserContext = await chromium.launchPersistentContext(sessionRoot, {
-        headless: false,
-        executablePath: edgePath,
-        viewport: { width: 1440, height: 960 }
-      });
-      result.session_launch_mode = "primary";
-    } catch (error) {
-      writeLog(logPath, `Primary session launch failed. Falling back to cloned session. Reason: ${error.message}`);
-      cloneDir(sessionRoot, fallbackSessionRoot);
-      browserContext = await chromium.launchPersistentContext(fallbackSessionRoot, {
-        headless: false,
-        executablePath: edgePath,
-        viewport: { width: 1440, height: 960 }
-      });
-      result.session_launch_mode = "fallback_clone";
-      result.session_root_active = fallbackSessionRoot;
-    }
-
-    if (!result.session_root_active) {
-      result.session_root_active = sessionRoot;
-    }
-
-    const page = browserContext.pages()[0] || await browserContext.newPage();
-    const targetUrl = "https://kdp.amazon.com/en_US/bookshelf";
-
-    writeLog(logPath, `Opening ${targetUrl}`);
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 120000 });
-    await capturePage(page, screenshotPath);
-
-    result.executed_browser = true;
-    result.state = "browser_opened";
-    result.current_url = page.url();
-    result.next_step = "Waiting for manual login and bookshelf detection.";
-    result.notes = [
-      "A persistent Edge profile has been created for Amazon automation.",
-      "Close the browser window after finishing this assist session.",
-      "The same session profile can be reused in the next run."
-    ];
-    writeJson(resultPath, result);
-
-    writeLog(logPath, "Browser session opened. Waiting for login, verification, and bookshelf detection.");
-    const bookshelfResult = await waitForBookshelf(page, logPath, screenshotPath);
-    result.login_detected = !bookshelfResult.detected;
-    result.bookshelf_detected = bookshelfResult.detected;
-    result.bookshelf_reason = bookshelfResult.reason;
-    result.current_url = bookshelfResult.currentUrl || page.url();
-
-    if (bookshelfResult.detected) {
-      const entryResult = await tryEnterDraftOrCreate(page, metadata.title || "", logPath, screenshotPath);
-      result.entry_action = entryResult.action;
-      result.entry_target = entryResult.matchedTitle || "";
-      result.entry_url = entryResult.currentUrl || page.url();
-      if (entryResult.trigger) {
-        result.entry_trigger = entryResult.trigger;
+    if (attachBrowser) {
+      browser = await chromium.connectOverCDP(remoteDebugUrl);
+      const attachedEntry = findAttachedAmazonPage(browser, mode === "content" ? "content" : mode === "details" ? "details" : "");
+      if (!attachedEntry) {
+        result.state = "awaiting_target_page";
+        result.next_step = mode === "content"
+          ? "Open the Kindle eBook Content page in the debugging browser, then rerun the Amazon second-page button."
+          : "Open the target Amazon KDP page in the debugging browser, then rerun.";
+        result.notes = ["Connected to the debugging browser, but no matching Amazon KDP page was found."];
+        writeJson(resultPath, result);
+        return;
       }
-      if (entryResult.ebookTrigger) {
-        result.entry_ebook_trigger = entryResult.ebookTrigger;
+
+      page = attachedEntry.page;
+      browserContext = page.context();
+      result.session_launch_mode = "cdp_attach";
+      result.session_root_active = "attached-browser";
+      result.executed_browser = true;
+      result.state = "browser_attached";
+      result.current_url = page.url();
+      result.attached_page_state = attachedEntry.state;
+      result.next_step = "Attached to the current Amazon browser page.";
+      result.notes = [
+        "Using the already opened Chromium debugging window.",
+        "This run will not reopen Amazon or require another login if the page is already open."
+      ];
+      await forcePageFront(page, logPath);
+      requestWindowsEdgeFront(logPath);
+      await capturePage(page, screenshotPath);
+      writeJson(resultPath, result);
+      writeLog(logPath, `Attached to existing Amazon page: ${page.url()}`);
+
+      if (mode === "content") {
+        const contentResult = await waitForContentPage(page, logPath, screenshotPath, 5000);
+        result.content_page_detected = contentResult.detected;
+        result.content_page_reason = contentResult.reason;
+        result.content_page_url = contentResult.currentUrl || page.url();
+
+        if (contentResult.detected) {
+          const contentActions = await fillKindleContentPage(page, platformRoot, files, logPath, screenshotPath);
+          result.content_actions = contentActions;
+          const missingContentSteps = [];
+          if (!contentActions.some((item) => item.includes("manuscript"))) {
+            missingContentSteps.push("manuscript upload");
+          }
+          if (!contentActions.some((item) => item.includes("cover"))) {
+            missingContentSteps.push("cover upload");
+          }
+          if (!contentActions.some((item) => item.includes("drm-no"))) {
+            missingContentSteps.push("DRM = No");
+          }
+          result.content_missing_steps = missingContentSteps;
+          result.state = missingContentSteps.length ? "content_partially_prefilled" : "content_prefilled_manual_save";
+          result.next_step = missingContentSteps.length
+            ? `Amazon content page is open, but some steps still need manual handling: ${missingContentSteps.join(", ")}. Finish them, wait for uploads to complete, then click Save manually.`
+            : "Amazon content page has been prepared. Wait for uploads to finish, review the page, then click Save manually.";
+        } else {
+          result.state = "content_page_not_found";
+          result.next_step = "The attached browser is not currently on the Kindle eBook Content page. Switch that window to the second page and rerun the Amazon second-page button.";
+        }
+
+        writeJson(resultPath, result);
+        return;
       }
-      result.state = "bookshelf_ready";
+    } else {
+      try {
+        browserContext = await chromium.launchPersistentContext(sessionRoot, {
+          headless: false,
+          executablePath: edgePath,
+          viewport: { width: 1440, height: 960 },
+          args: ["--new-window", "--start-maximized"]
+        });
+        result.session_launch_mode = "primary";
+      } catch (error) {
+        writeLog(logPath, `Primary session launch failed. Falling back to cloned session. Reason: ${error.message}`);
+        cloneDir(sessionRoot, fallbackSessionRoot);
+        browserContext = await chromium.launchPersistentContext(fallbackSessionRoot, {
+          headless: false,
+          executablePath: edgePath,
+          viewport: { width: 1440, height: 960 },
+          args: ["--new-window", "--start-maximized"]
+        });
+        result.session_launch_mode = "fallback_clone";
+        result.session_root_active = fallbackSessionRoot;
+      }
 
-      const detailsResult = await waitForDetailsPage(page, logPath, screenshotPath);
-      result.details_page_detected = detailsResult.detected;
-      result.details_page_reason = detailsResult.reason;
-      result.details_page_url = detailsResult.currentUrl || page.url();
+      if (!result.session_root_active) {
+        result.session_root_active = sessionRoot;
+      }
 
-      if (detailsResult.detected) {
-        const filledFields = await fillKindleDetailsPage(page, metadata, logPath, screenshotPath);
-        result.filled_fields = filledFields;
-        result.state = "details_prefilled";
+      page = browserContext.pages()[0] || await browserContext.newPage();
+      const targetUrl = "https://kdp.amazon.com/en_US/bookshelf";
 
-        const continueAction = await clickSaveAndContinue(page, logPath, screenshotPath);
-        if (continueAction) {
-          result.continue_action = continueAction;
-          const contentResult = await waitForContentPage(page, logPath, screenshotPath);
+      writeLog(logPath, `Opening ${targetUrl}`);
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 120000 });
+      await forcePageFront(page, logPath);
+      requestWindowsEdgeFront(logPath);
+      await capturePage(page, screenshotPath);
+
+      result.executed_browser = true;
+      result.state = "browser_opened";
+      result.current_url = page.url();
+      result.next_step = "Waiting for manual login and bookshelf detection.";
+      result.notes = [
+        "A persistent Edge profile has been created for Amazon automation.",
+        "Close the browser window after finishing this assist session.",
+        "The same session profile can be reused in the next run."
+      ];
+      writeJson(resultPath, result);
+
+      writeLog(logPath, "Browser session opened. Waiting for login, verification, and bookshelf detection.");
+      const bookshelfResult = await waitForBookshelf(page, logPath, screenshotPath);
+      result.login_detected = !bookshelfResult.detected;
+      result.bookshelf_detected = bookshelfResult.detected;
+      result.bookshelf_reason = bookshelfResult.reason;
+      result.current_url = bookshelfResult.currentUrl || page.url();
+
+      if (bookshelfResult.detected) {
+        const entryResult = await tryEnterDraftOrCreate(page, metadata.title || "", logPath, screenshotPath);
+        result.entry_action = entryResult.action;
+        result.entry_target = entryResult.matchedTitle || "";
+        result.entry_url = entryResult.currentUrl || page.url();
+        if (entryResult.trigger) {
+          result.entry_trigger = entryResult.trigger;
+        }
+        if (entryResult.ebookTrigger) {
+          result.entry_ebook_trigger = entryResult.ebookTrigger;
+        }
+        result.state = "bookshelf_ready";
+
+        if (mode === "content") {
+          const contentResult = await waitForContentPage(page, logPath, screenshotPath, 15000);
           result.content_page_detected = contentResult.detected;
           result.content_page_reason = contentResult.reason;
           result.content_page_url = contentResult.currentUrl || page.url();
 
           if (contentResult.detected) {
-            result.state = "content_page_ready";
-            result.next_step = "Details were prefilled and Save and Continue succeeded. Review the Kindle eBook Content page next.";
+            const contentActions = await fillKindleContentPage(page, platformRoot, files, logPath, screenshotPath);
+            result.content_actions = contentActions;
+            const missingContentSteps = [];
+            if (!contentActions.some((item) => item.includes("manuscript"))) {
+              missingContentSteps.push("manuscript upload");
+            }
+            if (!contentActions.some((item) => item.includes("cover"))) {
+              missingContentSteps.push("cover upload");
+            }
+            if (!contentActions.some((item) => item.includes("drm-no"))) {
+              missingContentSteps.push("DRM = No");
+            }
+            result.content_missing_steps = missingContentSteps;
+            result.state = missingContentSteps.length ? "content_partially_prefilled" : "content_prefilled_manual_save";
+            result.next_step = missingContentSteps.length
+              ? `Amazon content page is open, but some steps still need manual handling: ${missingContentSteps.join(", ")}. Finish them, wait for uploads to complete, then click Save manually.`
+              : "Amazon content page has been prepared. Wait for uploads to finish, review the page, then click Save manually.";
           } else {
-            result.next_step = "Details were prefilled and Save and Continue was clicked, but the content page was not confirmed automatically.";
+            const detailsResult = await waitForDetailsPage(page, logPath, screenshotPath, 6000);
+            result.details_page_detected = detailsResult.detected;
+            result.details_page_reason = detailsResult.reason;
+            result.details_page_url = detailsResult.currentUrl || page.url();
+            result.state = detailsResult.detected ? "details_page_opened" : "content_page_not_found";
+            result.next_step = detailsResult.detected
+              ? "The draft opened on Kindle details instead of Kindle content. Move to the content page manually, then run the Amazon second-page button again."
+              : "Kindle content page was not confirmed automatically. Open the content page manually, then run the Amazon second-page button again.";
           }
         } else {
-          result.next_step = "Core fields have been prefilled. Review the page, then continue manually to the next KDP step.";
-        }
-      } else {
-        result.next_step = mode === "draft"
-          ? "Bookshelf entered. Review the opened draft/create page and continue saving draft manually."
-          : "Bookshelf entered. Continue manually until just before final publish confirmation.";
-      }
-    } else if (bookshelfResult.reason === "verification") {
-      result.state = "verification_required";
-      result.next_step = "Amazon requested verification. Complete the verification step, then re-run assist.";
-    } else {
-      result.state = "waiting_for_login";
-      result.next_step = "Login was not completed before timeout or window close. Re-run assist and sign in.";
-    }
+          const detailsResult = await waitForDetailsPage(page, logPath, screenshotPath);
+          result.details_page_detected = detailsResult.detected;
+          result.details_page_reason = detailsResult.reason;
+          result.details_page_url = detailsResult.currentUrl || page.url();
 
-    writeJson(resultPath, result);
-    writeLog(logPath, "Close the browser window to finish this assist session.");
-    await new Promise((resolve) => browserContext.once("close", resolve));
+          if (detailsResult.detected) {
+            const filledFields = await fillKindleDetailsPage(page, metadata, logPath, screenshotPath);
+            result.filled_fields = filledFields;
+            result.state = "details_prefilled";
+
+            if (mode === "details") {
+              result.state = "details_prefilled_manual_save";
+              result.next_step = "Amazon details page has been prefilled. Review the page and click Save manually.";
+            } else {
+              const continueAction = await clickSaveAndContinue(page, logPath, screenshotPath);
+              if (continueAction) {
+                result.continue_action = continueAction;
+                const contentResult = await waitForContentPage(page, logPath, screenshotPath);
+                result.content_page_detected = contentResult.detected;
+                result.content_page_reason = contentResult.reason;
+                result.content_page_url = contentResult.currentUrl || page.url();
+
+                if (contentResult.detected) {
+                  result.state = "content_page_ready";
+                  result.next_step = "Details were prefilled and Save and Continue succeeded. Review the Kindle eBook Content page next.";
+                } else {
+                  result.next_step = "Details were prefilled and Save and Continue was clicked, but the content page was not confirmed automatically.";
+                }
+              } else {
+                result.next_step = "Core fields have been prefilled. Review the page, then continue manually to the next KDP step.";
+              }
+            }
+          } else {
+            result.next_step = mode === "draft"
+              ? "Bookshelf entered. Review the opened draft/create page and continue saving draft manually."
+              : mode === "details"
+                ? "Bookshelf entered, but the Kindle details page was not confirmed automatically. Open the details page manually and run this button again."
+                : "Bookshelf entered. Continue manually until just before final publish confirmation.";
+          }
+        }
+      } else if (bookshelfResult.reason === "verification") {
+        result.state = "verification_required";
+        result.next_step = "Amazon requested verification. Complete the verification step, then re-run assist.";
+      } else {
+        result.state = "waiting_for_login";
+        result.next_step = "Login was not completed before timeout or window close. Re-run assist and sign in.";
+      }
+
+      writeJson(resultPath, result);
+      writeLog(logPath, "Close the browser window to finish this assist session.");
+      keepBrowserOpen = true;
+      await new Promise((resolve) => browserContext.once("close", resolve));
+    }
   } catch (error) {
-    if (browserContext) {
+    if (browserContext && !attachBrowser) {
       try {
         await browserContext.close();
       } catch {}

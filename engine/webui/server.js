@@ -1358,6 +1358,25 @@ function validatePublishFileName(fileName) {
   }
 }
 
+function validateAbsoluteFolderPath(folderPath) {
+  if (!folderPath || typeof folderPath !== "string") {
+    throw new Error("folderPath is required.");
+  }
+
+  const resolved = path.resolve(folderPath);
+  if (!path.isAbsolute(resolved)) {
+    throw new Error("folderPath must be an absolute path.");
+  }
+  if (!fs.existsSync(resolved)) {
+    throw new Error("folderPath does not exist.");
+  }
+  if (!fs.statSync(resolved).isDirectory()) {
+    throw new Error("folderPath must point to a directory.");
+  }
+
+  return resolved;
+}
+
 function resolveCoverSectionRoot(paths, section) {
   switch (section) {
     case "drafts":
@@ -1396,42 +1415,20 @@ function openFileWithDefaultApp(filePath) {
 }
 
 function openFolder(folderPath) {
-  const child = spawn("powershell.exe", [
-    "-NoProfile",
-    "-Command",
-    "$folder = $args[0];",
-    "Start-Process -FilePath explorer.exe -ArgumentList @('/n,', $folder) | Out-Null;",
-    "Start-Sleep -Milliseconds 700;",
-    "try {",
-    "  $shell = New-Object -ComObject WScript.Shell;",
-    "  $title = Split-Path -Path $folder -Leaf;",
-    "  if (-not [string]::IsNullOrWhiteSpace($title)) { $shell.AppActivate($title) | Out-Null }",
-    "} catch {}",
-    folderPath
-  ], {
+  const child = spawn("explorer.exe", [folderPath], {
     detached: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    windowsHide: false
   });
 
   child.unref();
 }
 
 function revealFileInExplorer(filePath) {
-  const child = spawn("powershell.exe", [
-    "-NoProfile",
-    "-Command",
-    "$file = $args[0];",
-    "Start-Process -FilePath explorer.exe -ArgumentList @('/select,', $file) | Out-Null;",
-    "Start-Sleep -Milliseconds 700;",
-    "try {",
-    "  $shell = New-Object -ComObject WScript.Shell;",
-    "  $title = Split-Path -Path (Split-Path -Path $file -Parent) -Leaf;",
-    "  if (-not [string]::IsNullOrWhiteSpace($title)) { $shell.AppActivate($title) | Out-Null }",
-    "} catch {}",
-    filePath
-  ], {
+  const child = spawn("explorer.exe", ["/select,", filePath], {
     detached: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    windowsHide: false
   });
 
   child.unref();
@@ -1480,6 +1477,122 @@ function runScript(scriptName, params, meta) {
   child.on("close", (code) => finishJob(job, code ?? -1));
 
   return job;
+}
+
+function runDetachedScript(scriptName, params, meta, message = "") {
+  const scriptPath = path.join(ENGINE_ROOT, scriptName);
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Script not found: ${scriptName}`);
+  }
+
+  const job = createJob(meta);
+  const args = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath
+  ];
+
+  params.forEach((item) => {
+    if (item.type === "switch") {
+      if (item.enabled) {
+        args.push(item.flag);
+      }
+      return;
+    }
+    pushArg(args, item.flag, item.value);
+  });
+
+  const child = spawn("powershell.exe", args, {
+    cwd: ENGINE_ROOT,
+    env: process.env,
+    detached: true,
+    stdio: "ignore"
+  });
+
+  child.unref();
+  appendJobOutput(job, `${message || `${scriptName} started in detached mode.`}\n`);
+  finishJob(job, 0);
+  return job;
+}
+
+function toPowerShellSingleQuoted(value) {
+  return `'${String(value ?? "").replace(/'/g, "''")}'`;
+}
+
+function launchScriptInNewConsole(scriptName, params, meta, message = "") {
+  const scriptPath = path.join(ENGINE_ROOT, scriptName);
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Script not found: ${scriptName}`);
+  }
+
+  const job = createJob(meta);
+  const launcherPath = path.join(__dirname, "launch-powershell-file.vbs");
+  if (!fs.existsSync(launcherPath)) {
+    throw new Error("PowerShell launcher not found.");
+  }
+
+  const launchRoot = path.join(__dirname, "launchers");
+  ensureDir(launchRoot);
+
+  const wrapperPath = path.join(launchRoot, `${Date.now()}-${randomUUID()}.ps1`);
+  const commandParts = [`& ${toPowerShellSingleQuoted(scriptPath)}`];
+  params.forEach((item) => {
+    if (item.type === "switch") {
+      if (item.enabled) {
+        commandParts.push(item.flag);
+      }
+      return;
+    }
+    commandParts.push(item.flag);
+    commandParts.push(toPowerShellSingleQuoted(item.value));
+  });
+
+  const windowTitle = `SageWrite ${scriptName}`;
+  const wrapperLines = [
+    `$Host.UI.RawUI.WindowTitle = ${toPowerShellSingleQuoted(windowTitle)}`,
+    "",
+    commandParts.join(" "),
+    ""
+  ];
+  fs.writeFileSync(wrapperPath, wrapperLines.join("\r\n"), "utf8");
+
+  const child = spawn("wscript.exe", [
+    launcherPath,
+    wrapperPath,
+    windowTitle
+  ], {
+    cwd: __dirname,
+    env: process.env,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  });
+
+  child.unref();
+  appendJobOutput(job, `${message || `${scriptName} started in a new console window.`}\n`);
+  finishJob(job, 0);
+  return job;
+}
+
+function openPowerShellTestWindow() {
+  const launcherPath = path.join(__dirname, "powershell-test-launcher.vbs");
+  if (!fs.existsSync(launcherPath)) {
+    throw new Error("PowerShell test launcher not found.");
+  }
+
+  const child = spawn("wscript.exe", [
+    launcherPath
+  ], {
+    cwd: __dirname,
+    env: process.env,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  });
+
+  child.unref();
 }
 
 async function handleRun(route, body, res) {
@@ -1633,14 +1746,30 @@ async function handleRun(route, body, res) {
         if (!body.platform || body.platform === "all") {
           throw new Error("A specific platform is required for submit.");
         }
-        job = runScript("09f-submit.ps1", [
+        {
+          const submitParams = [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-Platform", value: body.platform },
           { flag: "-Mode", value: body.mode || "assist" },
+          { flag: "-AttachChrome", type: "switch", enabled: ["google", "amazon"].includes(body.platform) && Boolean(body.attachChrome) },
+          { flag: "-ChromeDebugPort", value: ["google", "amazon"].includes(body.platform) && Boolean(body.attachChrome) ? Number(body.chromeDebugPort || 9222) : undefined },
           { flag: "-ReuseSession", type: "switch", enabled: Boolean(body.reuseSession) },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+          ];
+
+          if (["assist", "details", "content"].includes(body.mode || "assist")) {
+            const submitMode = body.mode || "assist";
+            const launchMessage = submitMode === "content" && body.platform === "amazon" && Boolean(body.attachChrome)
+              ? "Amazon second-page session started in a new PowerShell window. It should attach to the current debugging browser window instead of opening a new login flow."
+              : submitMode === "details" && body.platform === "amazon"
+                ? "Amazon details-page session started in a new PowerShell window."
+                : "Submit assist session started in a new PowerShell window. Browser automation will continue from there.";
+            job = launchScriptInNewConsole("09f-submit.ps1", submitParams, { route, bookName }, launchMessage);
+          } else {
+            job = runScript("09f-submit.ps1", submitParams, { route, bookName });
+          }
+        }
         break;
       default:
         sendJson(res, 404, { error: "Unknown route." });
@@ -1978,6 +2107,29 @@ const server = http.createServer(async (req, res) => {
         language,
         platform
       });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-powershell-test") {
+    try {
+      await readJsonBody(req);
+      openPowerShellTestWindow();
+      sendJson(res, 200, { opened: true });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-folder-test") {
+    try {
+      const body = await readJsonBody(req);
+      const folderPath = validateAbsoluteFolderPath(body.folderPath);
+      openFolder(folderPath);
+      sendJson(res, 200, { opened: true, folderPath });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }

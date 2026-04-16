@@ -10,6 +10,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$RunRoot,
 
+    [switch]$AttachChrome,
+    [int]$ChromeDebugPort = 9222,
+
     [switch]$ReuseSession,
     [switch]$Force
 )
@@ -41,40 +44,69 @@ if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
 
 $PlatformRoot = Join-Path $Context.BookRoot ("09_publish\" + $LanguageCode + "\google")
 $MetadataPath = Join-Path $PlatformRoot "metadata.json"
+$PackagePath = Join-Path $PlatformRoot "google_play_books_package.json"
 $ResultPath = Join-Path $RunRoot "google_result.json"
-$ScreenshotPath = Join-Path (Join-Path $RunRoot "screenshots") "google-placeholder.txt"
+$SessionRoot = Join-Path $PlatformRoot ".automation\google-profile"
+$AutomationRoot = Join-Path $Context.EnginePath "automation"
+$AutomationScript = Join-Path $AutomationRoot "submit-google.js"
+$PackageJsonPath = Join-Path $AutomationRoot "package.json"
 
 if (-not (Test-Path -LiteralPath $MetadataPath)) {
     throw "Google metadata.json not found: $MetadataPath"
 }
 
-$Metadata = Get-Content -LiteralPath $MetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
-Set-Content -LiteralPath $ScreenshotPath -Value "Placeholder for future Playwright screenshots." -Encoding UTF8
-
-$Result = [ordered]@{
-    platform = "google"
-    state = "prepared"
-    mode = $Mode
-    automation_type = "browser"
-    supported_today = $true
-    executed_browser = $false
-    reuse_session = [bool]$ReuseSession
-    force = [bool]$Force
-    title = "$($Metadata.title)"
-    author = "$($Metadata.author)"
-    folder = $PlatformRoot
-    result_file = $ResultPath
-    next_step = switch ($Mode) {
-        "prepare" { "Validate Google package completeness and prepare automation session." }
-        "draft"   { "Future step: fill Google Play Books form and save draft." }
-        "assist"  { "Future step: fill form, upload assets, and pause before final publish." }
-    }
-    notes = @(
-        "This is a scaffold module.",
-        "No browser session has been started yet.",
-        "Future implementation target: Google Play Books draft workflow."
-    )
+if (-not (Test-Path -LiteralPath $PackagePath)) {
+    throw "Google package file not found: $PackagePath"
 }
 
-Write-JsonUtf8 -Path $ResultPath -Data $Result
-Write-Host "Google submit scaffold completed: $ResultPath"
+if (-not (Test-Path -LiteralPath $AutomationScript)) {
+    throw "Google automation script not found: $AutomationScript"
+}
+
+if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
+    throw "Automation package.json not found: $PackageJsonPath"
+}
+
+New-Item -ItemType Directory -Path $SessionRoot -Force | Out-Null
+
+$nodeArgs = @(
+    $AutomationScript,
+    "--mode", $Mode,
+    "--platform-root", $PlatformRoot,
+    "--metadata-path", $MetadataPath,
+    "--package-path", $PackagePath,
+    "--run-root", $RunRoot,
+    "--result-path", $ResultPath,
+    "--session-root", $SessionRoot
+)
+
+if ($ReuseSession) {
+    $nodeArgs += "--reuse-session"
+}
+
+if ($AttachChrome) {
+    $nodeArgs += "--attach-browser"
+    $nodeArgs += "--remote-debug-url"
+    $nodeArgs += ("http://127.0.0.1:{0}" -f $ChromeDebugPort)
+}
+
+if ($Force) {
+    $nodeArgs += "--force"
+}
+
+Push-Location $AutomationRoot
+try {
+    & node @nodeArgs
+    if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
+        throw "submit-google.js failed with exit code $LASTEXITCODE"
+    }
+}
+finally {
+    Pop-Location
+}
+
+if (-not (Test-Path -LiteralPath $ResultPath)) {
+    throw "Google automation did not write result file: $ResultPath"
+}
+
+Write-Host "Google submit automation completed: $ResultPath"

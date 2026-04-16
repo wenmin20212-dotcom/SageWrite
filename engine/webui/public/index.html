@@ -32,235 +32,313 @@
         <section class="panel project-picker-panel">
           <div class="panel-header">
             <h2>项目选择</h2>
-            <button id="refresh-status" class="ghost-button" type="button">刷新</button>
           </div>
+          <details id="project-picker-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Workspace</span>
+                <strong class="workbench-title">项目选择工作台</strong>
+                <span class="workbench-meta">切换 BookName、查看已有工作区并手动刷新当前状态</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <div class="project-picker-toolbar">
+                <button id="refresh-status" class="ghost-button" type="button">刷新</button>
+              </div>
+              <label class="field">
+                <span>BookName</span>
+                <input id="bookName" name="bookName" placeholder="例如 SageWriteManualCN">
+              </label>
 
-          <label class="field">
-            <span>BookName</span>
-            <input id="bookName" name="bookName" placeholder="例如 SageWriteManualCN">
-          </label>
-
-          <div class="workspace-list-wrap">
-            <div class="workspace-list-title">已有工作区</div>
-            <div id="workspace-list" class="workspace-list"></div>
-          </div>
+              <div class="workspace-list-wrap">
+                <div class="workspace-list-title">已有工作区</div>
+                <div id="workspace-list" class="workspace-list"></div>
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <h2>项目状态</h2>
           </div>
-          <div id="project-status" class="status-grid">
-            <div class="status-empty">选择一个 BookName 后，这里会显示项目状态。</div>
-          </div>
+          <details id="project-status-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Status</span>
+                <strong class="workbench-title">项目状态工作台</strong>
+                <span class="workbench-meta">查看当前工作区路径、运行状态、最近一次执行和输出概览</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <div id="project-status" class="status-grid">
+                <div class="status-empty">选择一个 BookName 后，这里会显示项目状态。</div>
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <h2>01 初始化项目</h2>
           </div>
-          <form id="intake-form" class="form-grid">
-            <label class="field">
-              <span>书名标题</span>
-              <input name="title" required>
-            </label>
-            <label class="field">
-              <span>作者</span>
-              <input name="author" placeholder="例如 文军">
-            </label>
-            <label class="field">
-              <span>目标读者</span>
-              <textarea name="audience" rows="3" required></textarea>
-            </label>
-            <label class="field">
-              <span>作品类型</span>
-              <input name="type" required>
-            </label>
-            <label class="field">
-              <span>核心论点</span>
-              <textarea name="coreThesis" rows="4" required></textarea>
-            </label>
-            <label class="field">
-              <span>写作范围</span>
-              <textarea name="scope" rows="4" required></textarea>
-            </label>
-            <label class="field">
-              <span>文风要求</span>
-              <textarea name="style" rows="3" required></textarea>
-            </label>
-            <div class="intake-actions">
-              <div class="intake-submit-actions">
-                <button id="intake-create" class="primary-button" type="submit">创建项目</button>
-                <button id="intake-save" class="ghost-button" type="submit">保存项目修改</button>
+          <details id="intake-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Project</span>
+                <strong class="workbench-title">项目初始化工作台</strong>
+                <span class="workbench-meta">书名、作者、读者与写作目标在这里集中维护</span>
               </div>
-              <div id="intake-action-hint" class="intake-action-hint">新项目会创建并生成 `objective.md`。</div>
+            </summary>
+            <div class="workbench-body">
+              <form id="intake-form" class="form-grid">
+                <label class="field">
+                  <span>书名标题</span>
+                  <input name="title" required>
+                </label>
+                <label class="field">
+                  <span>作者</span>
+                  <input name="author" placeholder="例如 文军">
+                </label>
+                <label class="field">
+                  <span>目标读者</span>
+                  <textarea name="audience" rows="3" required></textarea>
+                </label>
+                <label class="field">
+                  <span>作品类型</span>
+                  <input name="type" required>
+                </label>
+                <label class="field">
+                  <span>核心论点</span>
+                  <textarea name="coreThesis" rows="4" required></textarea>
+                </label>
+                <label class="field">
+                  <span>写作范围</span>
+                  <textarea name="scope" rows="4" required></textarea>
+                </label>
+                <label class="field">
+                  <span>文风要求</span>
+                  <textarea name="style" rows="3" required></textarea>
+                </label>
+                <div class="intake-actions">
+                  <div class="intake-submit-actions">
+                    <button id="intake-create" class="primary-button" type="submit">创建项目</button>
+                    <button id="intake-save" class="ghost-button" type="submit">保存项目修改</button>
+                  </div>
+                  <div id="intake-action-hint" class="intake-action-hint">新项目会创建并生成 `objective.md`。</div>
+                </div>
+              </form>
             </div>
-          </form>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <h2>02 生成目录</h2>
-            <div class="toc-actions">
-              <button id="show-toc" class="primary-button toc-action-button" type="button">显示目录</button>
-              <button id="save-toc" class="ghost-button" type="button">保存目录</button>
+          </div>
+          <details id="structure-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Structure</span>
+                <strong class="workbench-title">目录生成工作台</strong>
+                <span class="workbench-meta">运行目录生成、查看目录预览并手动保存当前目录</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <form id="structure-form">
+                <button class="primary-button" type="submit">运行 02-structure.ps1</button>
+              </form>
+              <div class="toc-actions">
+                <button id="show-toc" class="primary-button toc-action-button" type="button">显示目录</button>
+                <button id="save-toc" class="ghost-button" type="button">保存目录</button>
+              </div>
+              <div class="toc-preview-wrap">
+                <div class="toc-preview-title">当前目录预览</div>
+                <textarea id="toc-preview" class="toc-preview toc-editor" spellcheck="false">选择一个已有目录的 BookName 后，这里会显示 toc.md 内容。</textarea>
+              </div>
             </div>
-          </div>
-          <form id="structure-form">
-            <button class="primary-button" type="submit">运行 02-structure.ps1</button>
-          </form>
-          <div class="toc-preview-wrap">
-            <div class="toc-preview-title">当前目录预览</div>
-            <textarea id="toc-preview" class="toc-preview toc-editor" spellcheck="false">选择一个已有目录的 BookName 后，这里会显示 toc.md 内容。</textarea>
-          </div>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <h2>02b 扩展小节</h2>
           </div>
-          <form id="expand-form" class="form-grid">
-            <label class="field">
-              <span>模式</span>
-              <select name="mode">
-                <option value="all">全部章节</option>
-                <option value="chapter">单章</option>
-                <option value="range">区间</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>单章编号</span>
-              <input name="chapter" type="number" min="1">
-            </label>
-            <label class="field split">
-              <span>章节区间</span>
-              <div class="split-row">
-                <input name="startChapter" type="number" min="1" placeholder="开始">
-                <input name="endChapter" type="number" min="1" placeholder="结束">
+          <details id="expand-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Expand</span>
+                <strong class="workbench-title">扩展小节工作台</strong>
+                <span class="workbench-meta">选择章节范围、控制小节数量并运行 02b-expand.ps1</span>
               </div>
-            </label>
-            <label class="field split">
-              <span>小节数量</span>
-              <div class="split-row">
-                <input name="minSubsections" type="number" min="1" value="3">
-                <input name="maxSubsections" type="number" min="1" value="5">
-              </div>
-            </label>
-            <label class="field">
-              <span>模型</span>
-              <input name="model" value="gpt-4o-mini">
-            </label>
-            <button class="primary-button" type="submit">运行 02b-expand.ps1</button>
-          </form>
+            </summary>
+            <div class="workbench-body">
+              <form id="expand-form" class="form-grid">
+                <label class="field">
+                  <span>模式</span>
+                  <select name="mode">
+                    <option value="all">全部章节</option>
+                    <option value="chapter">单章</option>
+                    <option value="range">区间</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>单章编号</span>
+                  <input name="chapter" type="number" min="1">
+                </label>
+                <label class="field split">
+                  <span>章节区间</span>
+                  <div class="split-row">
+                    <input name="startChapter" type="number" min="1" placeholder="开始">
+                    <input name="endChapter" type="number" min="1" placeholder="结束">
+                  </div>
+                </label>
+                <label class="field split">
+                  <span>小节数量</span>
+                  <div class="split-row">
+                    <input name="minSubsections" type="number" min="1" value="3">
+                    <input name="maxSubsections" type="number" min="1" value="5">
+                  </div>
+                </label>
+                <label class="field">
+                  <span>模型</span>
+                  <input name="model" value="gpt-4o-mini">
+                </label>
+                <button class="primary-button" type="submit">运行 02b-expand.ps1</button>
+              </form>
+            </div>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <h2>03 写章节</h2>
           </div>
-          <form id="write-form" class="form-grid">
-            <label class="field">
-              <span>模式</span>
-              <select name="mode">
-                <option value="all">全部章节</option>
-                <option value="chapter">单章</option>
-                <option value="range">区间</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>单章编号</span>
-              <input name="chapter" type="number" min="1">
-            </label>
-            <label class="field split">
-              <span>章节区间</span>
-              <div class="split-row">
-                <input name="startChapter" type="number" min="1" placeholder="开始">
-                <input name="endChapter" type="number" min="1" placeholder="结束">
+          <details id="write-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Write</span>
+                <strong class="workbench-title">写章节工作台</strong>
+                <span class="workbench-meta">运行写作、重写单章，并在下方浏览与编辑章节内容</span>
               </div>
-            </label>
-            <label class="field">
-              <span>MaxTokens</span>
-              <input name="maxTokens" type="number" min="1000" step="500" value="6000">
-            </label>
-            <label class="checkbox-field">
-              <input name="force" type="checkbox">
-              <span>覆盖已存在章节</span>
-            </label>
-            <div class="write-extra-actions">
-              <button id="open-write-notes" class="ghost-button" type="button">附加说明</button>
-              <span id="write-notes-status" class="write-notes-status">未添加附加说明</span>
+            </summary>
+            <div class="workbench-body">
+              <form id="write-form" class="form-grid">
+                <label class="field">
+                  <span>模式</span>
+                  <select name="mode">
+                    <option value="all">全部章节</option>
+                    <option value="chapter">单章</option>
+                    <option value="range">区间</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>单章编号</span>
+                  <input name="chapter" type="number" min="1">
+                </label>
+                <label class="field split">
+                  <span>章节区间</span>
+                  <div class="split-row">
+                    <input name="startChapter" type="number" min="1" placeholder="开始">
+                    <input name="endChapter" type="number" min="1" placeholder="结束">
+                  </div>
+                </label>
+                <label class="field">
+                  <span>MaxTokens</span>
+                  <input name="maxTokens" type="number" min="1000" step="500" value="6000">
+                </label>
+                <label class="checkbox-field">
+                  <input name="force" type="checkbox">
+                  <span>覆盖已存在章节</span>
+                </label>
+                <div class="write-extra-actions">
+                  <button id="open-write-notes" class="ghost-button" type="button">附加说明</button>
+                  <span id="write-notes-status" class="write-notes-status">未添加附加说明</span>
+                </div>
+                <textarea id="additional-instructions" name="additionalInstructions" hidden></textarea>
+                <div class="write-submit-actions">
+                  <button id="run-write-normal" class="primary-button" type="submit">正常运行 03-write.ps1</button>
+                  <button id="run-write-rewrite" class="ghost-button" type="submit">重写单章并附加说明</button>
+                </div>
+              </form>
+              <div class="chapter-browser-wrap">
+                <div class="chapter-browser-title">章节浏览</div>
+                <div class="chapter-browser-controls">
+                  <button id="chapter-prev" class="ghost-button" type="button">上一章</button>
+                  <select id="chapter-preview-select">
+                    <option value="">请选择章节</option>
+                  </select>
+                  <button id="show-chapter" class="primary-button" type="button">显示章节</button>
+                  <button id="save-chapter" class="ghost-button" type="button">保存章节</button>
+                  <button id="rewrite-current-chapter" class="ghost-button" type="button">重写这一章</button>
+                  <button id="chapter-next" class="ghost-button" type="button">下一章</button>
+                </div>
+                <textarea id="chapter-preview" class="chapter-preview chapter-editor" spellcheck="false">选中一个已有章节的 BookName 后，这里会显示章节内容。</textarea>
+              </div>
             </div>
-            <textarea id="additional-instructions" name="additionalInstructions" hidden></textarea>
-            <div class="write-submit-actions">
-              <button id="run-write-normal" class="primary-button" type="submit">正常运行 03-write.ps1</button>
-              <button id="run-write-rewrite" class="ghost-button" type="submit">重写单章并附加说明</button>
-            </div>
-          </form>
-          <div class="chapter-browser-wrap">
-            <div class="chapter-browser-title">章节浏览</div>
-            <div class="chapter-browser-controls">
-              <button id="chapter-prev" class="ghost-button" type="button">上一章</button>
-              <select id="chapter-preview-select">
-                <option value="">请选择章节</option>
-              </select>
-              <button id="show-chapter" class="primary-button" type="button">显示章节</button>
-              <button id="save-chapter" class="ghost-button" type="button">保存章节</button>
-              <button id="rewrite-current-chapter" class="ghost-button" type="button">重写这一章</button>
-              <button id="chapter-next" class="ghost-button" type="button">下一章</button>
-            </div>
-            <textarea id="chapter-preview" class="chapter-preview chapter-editor" spellcheck="false">选中一个已有章节的 BookName 后，这里会显示章节内容。</textarea>
-          </div>
+          </details>
         </section>
 
         <section class="panel">
           <div class="panel-header">
             <h2>03T 多语言翻译</h2>
           </div>
-          <form id="translate-form" class="form-grid">
-            <label class="field">
-              <span>目标语言</span>
-              <select name="language">
-                <option value="en">英语 / en</option>
-                <option value="ms">马来语 / ms</option>
-                <option value="fr">法语 / fr</option>
-                <option value="de">德语 / de</option>
-                <option value="es">西班牙语 / es</option>
-                <option value="it">意大利语 / it</option>
-                <option value="pt">葡萄牙语 / pt</option>
-                <option value="ja">日语 / ja</option>
-                <option value="ko">韩语 / ko</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>模式</span>
-              <select name="mode">
-                <option value="all">全部翻译</option>
-                <option value="chapter">单章翻译</option>
-                <option value="range">区间翻译</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>单章编号</span>
-              <input name="chapter" type="number" min="1">
-            </label>
-            <label class="field split">
-              <span>章节区间</span>
-              <div class="split-row">
-                <input name="startChapter" type="number" min="1" placeholder="开始">
-                <input name="endChapter" type="number" min="1" placeholder="结束">
+          <details id="translate-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Translate</span>
+                <strong class="workbench-title">多语言翻译工作台</strong>
+                <span class="workbench-meta">选择目标语言、翻译范围与覆盖策略，统一运行 03t-translate.ps1</span>
               </div>
-            </label>
-            <label class="checkbox-field">
-              <input name="force" type="checkbox">
-              <span>覆盖已存在目标语言文件</span>
-            </label>
-            <div class="translate-submit-actions">
-              <button class="primary-button" type="submit">运行 03t-translate.ps1</button>
+            </summary>
+            <div class="workbench-body">
+              <form id="translate-form" class="form-grid">
+                <label class="field">
+                  <span>目标语言</span>
+                  <select name="language">
+                    <option value="en">英语 / en</option>
+                    <option value="ms">马来语 / ms</option>
+                    <option value="fr">法语 / fr</option>
+                    <option value="de">德语 / de</option>
+                    <option value="es">西班牙语 / es</option>
+                    <option value="it">意大利语 / it</option>
+                    <option value="pt">葡萄牙语 / pt</option>
+                    <option value="ja">日语 / ja</option>
+                    <option value="ko">韩语 / ko</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>模式</span>
+                  <select name="mode">
+                    <option value="all">全部翻译</option>
+                    <option value="chapter">单章翻译</option>
+                    <option value="range">区间翻译</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>单章编号</span>
+                  <input name="chapter" type="number" min="1">
+                </label>
+                <label class="field split">
+                  <span>章节区间</span>
+                  <div class="split-row">
+                    <input name="startChapter" type="number" min="1" placeholder="开始">
+                    <input name="endChapter" type="number" min="1" placeholder="结束">
+                  </div>
+                </label>
+                <label class="checkbox-field">
+                  <input name="force" type="checkbox">
+                  <span>覆盖已存在目标语言文件</span>
+                </label>
+                <div class="translate-submit-actions">
+                  <button class="primary-button" type="submit">运行 03t-translate.ps1</button>
+                </div>
+              </form>
+              <div class="translation-note">
+                译文会输出到 `03_translation/&lt;语言代码&gt;/...`，不会覆盖原始中文 Markdown。
+              </div>
             </div>
-          </form>
-          <div class="translation-note">
-            译文会输出到 `03_translation/&lt;语言代码&gt;/...`，不会覆盖原始中文 Markdown。
-          </div>
+          </details>
         </section>
 
         <div id="write-notes-modal" class="modal-shell hidden" aria-hidden="true">
@@ -283,52 +361,74 @@
           <div class="panel-header">
             <h2>04 检查</h2>
           </div>
-          <form id="edit-form">
-            <label class="checkbox-field">
-              <input name="strict" type="checkbox">
-              <span>严格模式</span>
-            </label>
-            <button class="primary-button" type="submit">运行 04-edit.ps1</button>
-          </form>
-          <div class="preflight-wrap">
-            <div class="preflight-title">Build 前检查报告（edit_report.txt）</div>
-            <textarea id="preflight-report" class="preflight-report preflight-textarea" readonly spellcheck="false">运行 04-edit.ps1 后，这里会显示 edit_report.txt 的完整内容。</textarea>
-          </div>
+          <details id="check-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Review</span>
+                <strong class="workbench-title">检查工作台</strong>
+                <span class="workbench-meta">运行 04-edit.ps1，并在下方查看完整的 edit_report.txt 检查报告</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <form id="edit-form">
+                <label class="checkbox-field">
+                  <input name="strict" type="checkbox">
+                  <span>严格模式</span>
+                </label>
+                <button class="primary-button" type="submit">运行 04-edit.ps1</button>
+              </form>
+              <div class="preflight-wrap">
+                <div class="preflight-title">Build 前检查报告（edit_report.txt）</div>
+                <textarea id="preflight-report" class="preflight-report preflight-textarea" readonly spellcheck="false">运行 04-edit.ps1 后，这里会显示 edit_report.txt 的完整内容。</textarea>
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="panel compact-panel">
           <div class="panel-header">
             <h2>05 构建文档</h2>
           </div>
-          <form id="build-form">
-            <label class="field">
-              <span>语言版本</span>
-              <select name="language">
-                <option value="zh">中文（zh）</option>
-                <option value="en">English（en）</option>
-                <option value="ms">Bahasa Melayu（ms）</option>
-                <option value="fr">Français（fr）</option>
-                <option value="de">Deutsch（de）</option>
-                <option value="es">Español（es）</option>
-                <option value="ja">日本語（ja）</option>
-              </select>
-            </label>
-            <label class="checkbox-field">
-              <input name="autoNumber" type="checkbox">
-              <span>自动编号</span>
-            </label>
-            <div class="build-submit-actions">
-              <button class="primary-button" type="submit">运行 05-build.ps1</button>
-              <button id="build-epub-button" class="ghost-button" type="button">运行 05b-epub.ps1</button>
-              <button id="build-pdf-button" class="ghost-button" type="button">运行 05c-pdf.ps1</button>
+          <details id="build-workbench-shell" class="build-workbench-shell" open>
+            <summary>
+              <div class="build-workbench-summary">
+                <span class="build-workbench-kicker">Build</span>
+                <strong class="build-workbench-title">文档构建工作台</strong>
+                <span class="build-workbench-meta">语言选择、构建入口与生成文件集中在一起</span>
+              </div>
+            </summary>
+            <div class="build-workbench-body">
+              <form id="build-form">
+                <label class="field">
+                  <span>语言版本</span>
+                  <select name="language">
+                    <option value="zh">中文（zh）</option>
+                    <option value="en">English（en）</option>
+                    <option value="ms">Bahasa Melayu（ms）</option>
+                    <option value="fr">Français（fr）</option>
+                    <option value="de">Deutsch（de）</option>
+                    <option value="es">Español（es）</option>
+                    <option value="ja">日本語（ja）</option>
+                  </select>
+                </label>
+                <label class="checkbox-field">
+                  <input name="autoNumber" type="checkbox">
+                  <span>自动编号</span>
+                </label>
+                <div class="build-submit-actions">
+                  <button class="primary-button" type="submit">运行 05-build.ps1</button>
+                  <button id="build-epub-button" class="ghost-button" type="button">运行 05b-epub.ps1</button>
+                  <button id="build-pdf-button" class="ghost-button" type="button">运行 05c-pdf.ps1</button>
+                </div>
+              </form>
+              <div class="build-output-wrap">
+                <div class="build-output-title">生成文件（DOCX / EPUB / PDF）</div>
+                <div id="build-output-list" class="build-output-list">
+                  <div class="build-output-empty">运行 05-build.ps1、05b-epub.ps1 或 05c-pdf.ps1 后，这里会显示生成的文档文件。</div>
+                </div>
+              </div>
             </div>
-          </form>
-          <div class="build-output-wrap">
-            <div class="build-output-title">生成文件（DOCX / EPUB / PDF）</div>
-            <div id="build-output-list" class="build-output-list">
-              <div class="build-output-empty">运行 05-build.ps1、05b-epub.ps1 或 05c-pdf.ps1 后，这里会显示生成的文档文件。</div>
-            </div>
-          </div>
+          </details>
         </section>
 
         <section class="panel cover-panel">
@@ -499,8 +599,11 @@
             <div class="publish-header-actions">
               <button id="open-publish-root" class="ghost-button" type="button">在资源管理器中打开语言目录</button>
               <button id="open-publish-platform" class="ghost-button" type="button">在资源管理器中打开平台目录</button>
+              <button id="toggle-publish-preview-column" class="ghost-button" type="button" aria-expanded="true">收起右侧预览</button>
+              <button id="toggle-publish-panel" class="ghost-button" type="button" aria-expanded="true">收起</button>
             </div>
           </div>
+          <div id="publish-panel-body" class="publish-panel-body">
           <form id="publish-form" class="form-grid">
             <label class="field">
               <span>语言版本</span>
@@ -528,9 +631,21 @@
               <input name="force" type="checkbox">
               <span>强制覆盖已有 09 上架包</span>
             </label>
+            <div class="publish-submit-advanced">
+              <label class="checkbox-field">
+                <input id="publish-attach-chrome" name="attachChrome" type="checkbox">
+                <span>Google 提交时连接手动打开的 Chrome</span>
+              </label>
+              <label class="field">
+                <span>Chrome 调试端口</span>
+                <input id="publish-chrome-debug-port" name="chromeDebugPort" type="number" min="1" step="1" value="9222">
+                <div id="publish-submit-hint" class="publish-inline-hint">仅对 Google 平台 submit 生效。先手动用 `--remote-debugging-port=9222` 启动 Chrome，再点击“提交到当前平台”。</div>
+              </label>
+            </div>
             <div class="publish-submit-actions">
               <button id="run-publish-package" class="primary-button" type="submit">运行 09-publish.ps1</button>
               <button id="run-publish-submit" class="ghost-button" type="submit">提交到当前平台</button>
+              <button id="open-powershell-test" class="ghost-button" type="button">测试按钮</button>
             </div>
           </form>
 
@@ -575,17 +690,33 @@
 
             <div class="publish-workbench">
               <div class="publish-editor-column">
-                <div class="publish-metadata-editor-wrap">
-                  <div class="cover-report-title">统一出版元数据主稿（publish_metadata.md）</div>
-                  <form id="publish-editor-form" class="publish-editor-form-single">
-                    <textarea id="publish-metadata-editor" class="cover-report publish-markdown-editor" spellcheck="false">运行 09-publish.ps1 后，这里会显示可直接审校的 publish_metadata.md。</textarea>
-                  </form>
-                  <div class="publish-editor-actions">
-                    <div class="publish-editor-action-copy">系统会先自动生成当前语种的 publish_metadata.md。你只需要在这一份 MD 主稿里集中审校，保存后会同步回 JSON、报告和平台包。</div>
-                    <button id="save-publish-metadata" class="ghost-button" type="button">立即保存</button>
-                    <span id="publish-editor-status" class="write-notes-status">09 元数据已自动生成</span>
+                <details class="publish-platform-group-shell" data-publish-platform-group="amazon" open>
+                  <summary>
+                    <div class="publish-platform-group-summary">
+                      <span class="publish-platform-group-kicker">Amazon</span>
+                      <strong class="publish-platform-group-title">亚马逊发布工作台</strong>
+                      <span class="publish-platform-group-meta">元数据 / 第一页 / 第二页集中在一起</span>
+                    </div>
+                  </summary>
+                  <div class="publish-platform-group-body">
+                    <div class="publish-platform-group-actions">
+                      <div class="publish-platform-group-copy">这里先集中放 Amazon 相关操作。展开后即可直接处理亚马逊元数据、第一页与第二页，右侧预览也会自动切到 Amazon。</div>
+                      <button id="run-publish-amazon-details" class="ghost-button" type="button">发布Amazon亚马逊</button>
+                      <button id="run-publish-amazon-content" class="ghost-button" type="button">发布Amazon第二页</button>
+                    </div>
+                    <div class="publish-metadata-editor-wrap">
+                      <div class="cover-report-title">统一出版元数据主稿（publish_metadata.md）</div>
+                      <form id="publish-editor-form" class="publish-editor-form-single">
+                        <textarea id="publish-metadata-editor" class="cover-report publish-markdown-editor" spellcheck="false">运行 09-publish.ps1 后，这里会显示可直接审校的 publish_metadata.md。</textarea>
+                      </form>
+                      <div class="publish-editor-actions">
+                        <div class="publish-editor-action-copy">系统会先自动生成当前语种的 publish_metadata.md。你只需要在这一份 MD 主稿里集中审校，保存后会同步回 JSON、报告和平台包。</div>
+                        <button id="save-publish-metadata" class="ghost-button" type="button">立即保存</button>
+                        <span id="publish-editor-status" class="write-notes-status">09 元数据已自动生成</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </details>
               </div>
 
               <div class="publish-preview-column">
@@ -636,6 +767,7 @@
                 </div>
               </div>
             </div>
+          </div>
           </div>
         </section>
 

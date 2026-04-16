@@ -30,7 +30,19 @@ const state = {
 };
 
 const COVER_PANEL_STORAGE_KEY = "sagewrite-cover-panel-expanded";
+const BUILD_WORKBENCH_STORAGE_KEY = "sagewrite-build-workbench-open";
+const INTAKE_WORKBENCH_STORAGE_KEY = "sagewrite-intake-workbench-open";
+const STRUCTURE_WORKBENCH_STORAGE_KEY = "sagewrite-structure-workbench-open";
+const EXPAND_WORKBENCH_STORAGE_KEY = "sagewrite-expand-workbench-open";
+const WRITE_WORKBENCH_STORAGE_KEY = "sagewrite-write-workbench-open";
+const TRANSLATE_WORKBENCH_STORAGE_KEY = "sagewrite-translate-workbench-open";
+const CHECK_WORKBENCH_STORAGE_KEY = "sagewrite-check-workbench-open";
+const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
+const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
+const PUBLISH_PANEL_STORAGE_KEY = "sagewrite-publish-panel-expanded";
+const PUBLISH_PREVIEW_COLUMN_STORAGE_KEY = "sagewrite-publish-preview-column-expanded";
 const PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY = "sagewrite-publish-preview-platform";
+const PUBLISH_PLATFORM_GROUP_STORAGE_KEY = "sagewrite-publish-platform-groups";
 const PUBLISH_RECOMMENDED_CARD_STORAGE_KEY = "sagewrite-publish-recommended-cards";
 const PUBLISH_RAW_TOGGLE_STORAGE_KEY = "sagewrite-publish-raw-toggle-open";
 const LANGUAGE_LABELS = {
@@ -103,6 +115,78 @@ function initCoverPanelState() {
   setCoverPanelExpanded(stored === "1");
 }
 
+function setBuildWorkbenchOpen(isOpen) {
+  const panel = $("#build-workbench-shell");
+  if (!panel) {
+    return;
+  }
+  panel.open = Boolean(isOpen);
+  localStorage.setItem(BUILD_WORKBENCH_STORAGE_KEY, isOpen ? "1" : "0");
+}
+
+function initBuildWorkbenchState() {
+  const panel = $("#build-workbench-shell");
+  if (!panel) {
+    return;
+  }
+  const stored = localStorage.getItem(BUILD_WORKBENCH_STORAGE_KEY);
+  panel.open = stored !== "0";
+}
+
+function setWorkbenchOpen(selector, storageKey, isOpen) {
+  const panel = $(selector);
+  if (!panel) {
+    return;
+  }
+  panel.open = Boolean(isOpen);
+  localStorage.setItem(storageKey, isOpen ? "1" : "0");
+}
+
+function initWorkbenchState(selector, storageKey) {
+  const panel = $(selector);
+  if (!panel) {
+    return;
+  }
+  const stored = localStorage.getItem(storageKey);
+  panel.open = stored !== "0";
+}
+
+function setPublishPanelExpanded(expanded) {
+  const panel = document.querySelector(".publish-panel");
+  const toggle = $("#toggle-publish-panel");
+  if (!panel || !toggle) {
+    return;
+  }
+
+  panel.classList.toggle("collapsed", !expanded);
+  toggle.textContent = expanded ? "收起" : "展开";
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  localStorage.setItem(PUBLISH_PANEL_STORAGE_KEY, expanded ? "1" : "0");
+}
+
+function initPublishPanelState() {
+  const stored = localStorage.getItem(PUBLISH_PANEL_STORAGE_KEY);
+  setPublishPanelExpanded(stored !== "0");
+}
+
+function setPublishPreviewColumnExpanded(expanded) {
+  const workbench = document.querySelector(".publish-workbench");
+  const toggle = $("#toggle-publish-preview-column");
+  if (!workbench || !toggle) {
+    return;
+  }
+
+  workbench.classList.toggle("preview-collapsed", !expanded);
+  toggle.textContent = expanded ? "收起右侧预览" : "显示右侧预览";
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  localStorage.setItem(PUBLISH_PREVIEW_COLUMN_STORAGE_KEY, expanded ? "1" : "0");
+}
+
+function initPublishPreviewColumnState() {
+  const stored = localStorage.getItem(PUBLISH_PREVIEW_COLUMN_STORAGE_KEY);
+  setPublishPreviewColumnExpanded(stored !== "0");
+}
+
 function getWriteMode() {
   const field = $('#write-form [name="mode"]');
   return field ? field.value : "all";
@@ -113,12 +197,83 @@ function getPublishLanguage() {
   return field ? field.value : "zh";
 }
 
+function getPublishTargetPlatform() {
+  const field = $('#publish-form [name="platform"]');
+  return field ? field.value : "all";
+}
+
 function getPublishPreviewPlatform() {
   const field = $("#publish-preview-platform");
   if (field && field.value) {
     return field.value;
   }
   return localStorage.getItem(PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY) || "amazon";
+}
+
+function focusPublishPreviewPlatform(platformName, rerender = true) {
+  const normalized = String(platformName || "").trim().toLowerCase();
+  const field = $("#publish-preview-platform");
+  if (!field || !normalized) {
+    return;
+  }
+
+  const hasOption = Array.from(field.options).some((option) => option.value === normalized);
+  if (!hasOption) {
+    return;
+  }
+
+  if (field.value !== normalized) {
+    field.value = normalized;
+    localStorage.setItem(PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY, normalized);
+    if (rerender) {
+      const selected = getSelectedWorkspaceItem();
+      if (selected) {
+        renderPublishPanel(selected);
+      }
+    }
+    return;
+  }
+
+  localStorage.setItem(PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY, normalized);
+}
+
+function getPublishPlatformGroupState() {
+  try {
+    const raw = localStorage.getItem(PUBLISH_PLATFORM_GROUP_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setPublishPlatformGroupState(platformName, isOpen) {
+  const normalized = String(platformName || "").trim().toLowerCase();
+  if (!normalized) {
+    return;
+  }
+  const current = getPublishPlatformGroupState();
+  current[normalized] = Boolean(isOpen);
+  localStorage.setItem(PUBLISH_PLATFORM_GROUP_STORAGE_KEY, JSON.stringify(current));
+}
+
+function isPublishPlatformGroupOpen(platformName) {
+  const normalized = String(platformName || "").trim().toLowerCase();
+  const current = getPublishPlatformGroupState();
+  if (!normalized) {
+    return true;
+  }
+  if (!(normalized in current)) {
+    return true;
+  }
+  return Boolean(current[normalized]);
+}
+
+function syncPublishPlatformGroups() {
+  document.querySelectorAll("[data-publish-platform-group]").forEach((panel) => {
+    const platformName = panel.dataset.publishPlatformGroup || "";
+    panel.open = isPublishPlatformGroupOpen(platformName);
+  });
 }
 
 function joinWindowsPath(...parts) {
@@ -356,6 +511,43 @@ function initPublishUiState() {
   const rawToggle = document.querySelector(".publish-raw-toggle");
   if (rawToggle) {
     rawToggle.open = isPublishRawToggleOpen();
+  }
+
+  syncPublishPlatformGroups();
+  if (isPublishPlatformGroupOpen("amazon")) {
+    focusPublishPreviewPlatform("amazon", false);
+  }
+
+  updatePublishSubmitControls();
+}
+
+function updatePublishSubmitControls() {
+  const platform = getPublishTargetPlatform();
+  const attachCheckbox = $("#publish-attach-chrome");
+  const portInput = $("#publish-chrome-debug-port");
+  const hint = $("#publish-submit-hint");
+  const advancedWrap = document.querySelector(".publish-submit-advanced");
+  const isGoogle = platform === "google";
+  const attachEnabled = Boolean(attachCheckbox?.checked) && isGoogle;
+
+  if (advancedWrap) {
+    advancedWrap.classList.toggle("is-disabled", !isGoogle);
+  }
+
+  if (attachCheckbox) {
+    attachCheckbox.disabled = !isGoogle;
+  }
+
+  if (portInput) {
+    portInput.disabled = !attachEnabled;
+  }
+
+  if (hint) {
+    hint.textContent = isGoogle
+      ? (attachEnabled
+        ? "当前会把 submit 连接到你手动启动并开启远程调试端口的 Chrome。"
+        : "仅对 Google 平台 submit 生效。勾选后会连接手动打开的 Chrome，而不是新开自动化浏览器。")
+      : "这组设置只在“生成范围”选择 Google Play Books 且点击“提交到当前平台”时生效。";
   }
 }
 
@@ -1496,24 +1688,43 @@ function renderBuildOutputs(item) {
     return;
   }
 
-  const getFolderLabel = (fileName) => {
-    const normalized = String(fileName || "").replaceAll("\\", "/");
-    const parts = normalized.split("/");
-    if (parts.length <= 1) {
+  const getFolderLabel = (folderKey) => {
+    if (!folderKey) {
       return "位于 04_output 目录";
     }
-    return `位于 04_output/${escapeHtml(parts.slice(0, -1).join("/"))} 目录`;
+    return `位于 04_output/${escapeHtml(folderKey)} 目录`;
   };
 
-  panel.innerHTML = outputFiles.map((fileName) => `
+  const groups = new Map();
+  outputFiles.forEach((fileName) => {
+    const normalized = String(fileName || "").replaceAll("\\", "/");
+    const parts = normalized.split("/");
+    const folderKey = parts.length <= 1 ? "" : parts.slice(0, -1).join("/");
+    const baseName = parts.at(-1) || normalized;
+    if (!groups.has(folderKey)) {
+      groups.set(folderKey, []);
+    }
+    groups.get(folderKey).push({
+      originalPath: fileName,
+      baseName
+    });
+  });
+
+  const groupedRows = Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right, "zh-Hans-CN"))
+    .map(([folderKey, files]) => {
+      const sortedFiles = files.sort((left, right) => left.baseName.localeCompare(right.baseName, "zh-Hans-CN"));
+      return `
     <div class="build-output-item">
       <div class="build-output-meta">
-        <strong>${escapeHtml(fileName)}</strong>
-        <span>${getFolderLabel(fileName)}</span>
+        <strong>${sortedFiles.map((entry) => escapeHtml(entry.baseName)).join(" · ")}</strong>
+        <span>${getFolderLabel(folderKey)}</span>
       </div>
-      <div class="build-output-status">已生成</div>
-    </div>
-  `).join("");
+      <button class="ghost-button build-open-button" type="button" data-output-folder-file="${escapeHtml(sortedFiles[0].originalPath)}">打开生成文件夹</button>
+    </div>`;
+    });
+
+  panel.innerHTML = groupedRows.join("");
 }
 
 async function loadPublishArtifacts(item, language = getPublishLanguage()) {
@@ -1585,6 +1796,31 @@ function renderPublishOpenPaths(item, publish, language = getPublishLanguage(), 
   platformPanel.textContent = platformPath || "当前无法解析平台目录路径。";
   rootPanel.dataset.path = rootPath;
   platformPanel.dataset.path = platformPath;
+}
+
+async function openPublishRootFolder() {
+  await api("/api/open-publish-folder", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName: requireBookName(),
+      language: getPublishLanguage()
+    })
+  });
+  setStatusBadge("已打开", "success");
+  setLog(`已打开 09_publish/${getPublishLanguage()} 目录。`);
+}
+
+async function openPublishPlatformFolder() {
+  await api("/api/open-publish-folder", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName: requireBookName(),
+      language: getPublishLanguage(),
+      platform: getPublishPreviewPlatform()
+    })
+  });
+  setStatusBadge("已打开", "success");
+  setLog(`已打开 ${getPublishPreviewPlatform()} 平台目录。`);
 }
 
 function formatRecommendedCategoriesHtml(recommended) {
@@ -2136,6 +2372,42 @@ function intOrEmpty(value) {
 }
 
 function setupForms() {
+  $("#project-picker-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#project-picker-workbench-shell", PROJECT_PICKER_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#project-status-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#project-status-workbench-shell", PROJECT_STATUS_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#intake-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#intake-workbench-shell", INTAKE_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#structure-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#structure-workbench-shell", STRUCTURE_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#expand-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#expand-workbench-shell", EXPAND_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#write-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#write-workbench-shell", WRITE_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#translate-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#translate-workbench-shell", TRANSLATE_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#check-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#check-workbench-shell", CHECK_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#build-workbench-shell")?.addEventListener("toggle", (event) => {
+    setBuildWorkbenchOpen(Boolean(event.currentTarget?.open));
+  });
+
   $("#intake-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -2301,6 +2573,28 @@ function setupForms() {
     }
   });
 
+  $("#build-output-list").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-output-folder-file]");
+    if (!button) {
+      return;
+    }
+
+    try {
+      await api("/api/open-output-folder", {
+        method: "POST",
+        body: JSON.stringify({
+          bookName: requireBookName(),
+          fileName: button.dataset.outputFolderFile || ""
+        })
+      });
+      setStatusBadge("已打开", "success");
+      setLog(`已打开生成文件夹：${button.dataset.outputFolderFile || ""}`);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#publish-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -2313,11 +2607,55 @@ function setupForms() {
         if (payload.platform === "all") {
           throw new Error("要提交到平台时，请先把“生成范围”改成一个具体平台。");
         }
+        if (payload.platform !== "google") {
+          payload.attachChrome = false;
+          payload.chromeDebugPort = "";
+        } else if (payload.attachChrome) {
+          const debugPort = Number(payload.chromeDebugPort || 9222);
+          if (!Number.isInteger(debugPort) || debugPort <= 0) {
+            throw new Error("Chrome 调试端口必须是一个正整数。");
+          }
+          payload.chromeDebugPort = debugPort;
+        } else {
+          payload.chromeDebugPort = "";
+        }
         payload.mode = "assist";
         await run("submit", payload);
         return;
       }
       await run("publish", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#run-publish-amazon-details").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#publish-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      payload.platform = "amazon";
+      payload.mode = "details";
+      payload.attachChrome = false;
+      payload.chromeDebugPort = "";
+      await run("submit", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#run-publish-amazon-content").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#publish-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      payload.platform = "amazon";
+      payload.mode = "content";
+      payload.attachChrome = true;
+      payload.chromeDebugPort = Number(payload.chromeDebugPort || 9222);
+      await run("submit", payload);
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -2355,8 +2693,28 @@ function setupForms() {
     renderPublishPanel(selected);
   });
 
+  $('#publish-form [name="platform"]').addEventListener("change", () => {
+    updatePublishSubmitControls();
+  });
+
+  $("#publish-attach-chrome").addEventListener("change", () => {
+    updatePublishSubmitControls();
+  });
+
   document.querySelector(".publish-raw-toggle")?.addEventListener("toggle", (event) => {
     setPublishRawToggleOpen(Boolean(event.currentTarget?.open));
+  });
+
+  document.querySelectorAll("[data-publish-platform-group]").forEach((panel) => {
+    panel.addEventListener("toggle", (event) => {
+      const currentPanel = event.currentTarget;
+      const platformName = currentPanel?.dataset.publishPlatformGroup || "";
+      const isOpen = Boolean(currentPanel?.open);
+      setPublishPlatformGroupState(platformName, isOpen);
+      if (isOpen && platformName) {
+        focusPublishPreviewPlatform(platformName);
+      }
+    });
   });
 
   $("#open-publish-root").addEventListener("click", async () => {
@@ -2394,6 +2752,24 @@ function setupForms() {
     }
   });
 
+  $("#publish-root-path").addEventListener("click", async () => {
+    try {
+      await openPublishRootFolder();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#publish-platform-path").addEventListener("click", async () => {
+    try {
+      await openPublishPlatformFolder();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#copy-publish-root-path").addEventListener("click", async () => {
     try {
       await copyTextToClipboard($("#publish-root-path")?.dataset.path || $("#publish-root-path")?.textContent || "");
@@ -2410,6 +2786,20 @@ function setupForms() {
       await copyTextToClipboard($("#publish-platform-path")?.dataset.path || $("#publish-platform-path")?.textContent || "");
       setStatusBadge("已复制", "success");
       setLog("已复制平台目录路径。");
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#open-powershell-test").addEventListener("click", async () => {
+    try {
+      await api("/api/open-powershell-test", {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setStatusBadge("已启动", "success");
+      setLog("已点击测试按钮，已交给独立测试启动器去打开新的 PowerShell 测试窗口。");
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -2433,6 +2823,18 @@ function setupForms() {
     const panel = document.querySelector(".cover-panel");
     const currentlyExpanded = panel ? !panel.classList.contains("collapsed") : false;
     setCoverPanelExpanded(!currentlyExpanded);
+  });
+
+  $("#toggle-publish-panel").addEventListener("click", () => {
+    const panel = document.querySelector(".publish-panel");
+    const currentlyExpanded = panel ? !panel.classList.contains("collapsed") : false;
+    setPublishPanelExpanded(!currentlyExpanded);
+  });
+
+  $("#toggle-publish-preview-column").addEventListener("click", () => {
+    const workbench = document.querySelector(".publish-workbench");
+    const currentlyExpanded = workbench ? !workbench.classList.contains("preview-collapsed") : true;
+    setPublishPreviewColumnExpanded(!currentlyExpanded);
   });
 
   $("#save-cover-copy").addEventListener("click", async () => {
@@ -2591,8 +2993,19 @@ function setupForms() {
 }
 
 async function init() {
-  initCoverPanelState();
-  initPublishUiState();
+initWorkbenchState("#project-picker-workbench-shell", PROJECT_PICKER_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#project-status-workbench-shell", PROJECT_STATUS_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#intake-workbench-shell", INTAKE_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#structure-workbench-shell", STRUCTURE_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#expand-workbench-shell", EXPAND_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#write-workbench-shell", WRITE_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#translate-workbench-shell", TRANSLATE_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#check-workbench-shell", CHECK_WORKBENCH_STORAGE_KEY);
+initCoverPanelState();
+initBuildWorkbenchState();
+initPublishPanelState();
+initPublishPreviewColumnState();
+initPublishUiState();
   setupForms();
   setWriteNotesStatus();
   try {

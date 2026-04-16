@@ -5,7 +5,9 @@
   "description": "Browser automation helpers for SageWrite publishing workflows",
   "type": "module",
   "scripts": {
-    "amazon": "node submit-amazon.js"
+    "amazon": "node submit-amazon.js",
+    "apple": "node submit-apple.js",
+    "google": "node submit-google.js"
   },
   "dependencies": {
     "playwright-core": "^1.54.1"
