@@ -631,17 +631,6 @@
               <input name="force" type="checkbox">
               <span>强制覆盖已有 09 上架包</span>
             </label>
-            <div class="publish-submit-advanced">
-              <label class="checkbox-field">
-                <input id="publish-attach-chrome" name="attachChrome" type="checkbox">
-                <span>Google 提交时连接手动打开的 Chrome</span>
-              </label>
-              <label class="field">
-                <span>Chrome 调试端口</span>
-                <input id="publish-chrome-debug-port" name="chromeDebugPort" type="number" min="1" step="1" value="9222">
-                <div id="publish-submit-hint" class="publish-inline-hint">仅对 Google 平台 submit 生效。先手动用 `--remote-debugging-port=9222` 启动 Chrome，再点击“提交到当前平台”。</div>
-              </label>
-            </div>
             <div class="publish-submit-actions">
               <button id="run-publish-package" class="primary-button" type="submit">运行 09-publish.ps1</button>
               <button id="run-publish-submit" class="ghost-button" type="submit">提交到当前平台</button>
@@ -704,6 +693,20 @@
                       <button id="run-publish-amazon-details" class="ghost-button" type="button">发布Amazon亚马逊</button>
                       <button id="run-publish-amazon-content" class="ghost-button" type="button">发布Amazon第二页</button>
                     </div>
+                    <div class="publish-open-card">
+                      <div class="cover-report-title">Amazon 发布入口链接</div>
+                      <a class="publish-open-path publish-open-path-link" href="https://kdp.amazon.com/en_US/bookshelf" target="_blank" rel="noopener noreferrer">https://kdp.amazon.com/en_US/bookshelf</a>
+                    </div>
+                    <div class="publish-platform-status-card" data-publish-platform-status="amazon">
+                      <div class="cover-report-title">Amazon 平台状态</div>
+                      <div class="publish-platform-status-copy">选择一个 BookName 后，这里会显示 Amazon 平台包是否就绪。</div>
+                    </div>
+                    <div class="publish-platform-asset-actions">
+                      <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="folder">打开平台目录</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="epub">打开 epub</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="cover">打开 cover</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="meta">打开 metadata/checklist</button>
+                    </div>
                     <div class="publish-metadata-editor-wrap">
                       <div class="cover-report-title">统一出版元数据主稿（publish_metadata.md）</div>
                       <form id="publish-editor-form" class="publish-editor-form-single">
@@ -714,6 +717,104 @@
                         <button id="save-publish-metadata" class="ghost-button" type="button">立即保存</button>
                         <span id="publish-editor-status" class="write-notes-status">09 元数据已自动生成</span>
                       </div>
+                    </div>
+                  </div>
+                </details>
+
+                <details class="publish-platform-group-shell" data-publish-platform-group="google" open>
+                  <summary>
+                    <div class="publish-platform-group-summary">
+                      <span class="publish-platform-group-kicker">Google</span>
+                      <strong class="publish-platform-group-title">谷歌发布工作台</strong>
+                      <span class="publish-platform-group-meta">连接手动打开的 Chrome，并集中管理 Google Play Books 提交辅助设置</span>
+                    </div>
+                  </summary>
+                  <div class="publish-platform-group-body">
+                    <div class="publish-platform-group-actions">
+                      <div class="publish-platform-group-copy">这里集中放 Google Play Books 的提交辅助设置。使用时先把上方“生成范围”切到 Google Play Books，再点击“提交到当前平台”；展开这个工作台时，右侧预览也会自动切到 Google。</div>
+                    </div>
+                    <div id="google-publish-link-card" class="publish-open-card">
+                      <div class="cover-report-title">Google 发布入口链接</div>
+                      <a id="google-publish-link" class="publish-open-path publish-open-path-link" href="https://play.google.com/books/publish/" target="_blank" rel="noopener noreferrer">https://play.google.com/books/publish/</a>
+                    </div>
+                    <div class="publish-platform-status-card" data-publish-platform-status="google">
+                      <div class="cover-report-title">Google 平台状态</div>
+                      <div class="publish-platform-status-copy">选择一个 BookName 后，这里会显示 Google 平台包是否就绪。</div>
+                    </div>
+                    <div class="publish-platform-asset-actions">
+                      <button class="ghost-button" type="button" data-publish-asset-platform="google" data-publish-asset-action="folder">打开平台目录</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="google" data-publish-asset-action="epub">打开 epub</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="google" data-publish-asset-action="cover">打开 cover</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="google" data-publish-asset-action="meta">打开 metadata/checklist</button>
+                    </div>
+                    <div class="publish-submit-advanced">
+                      <label class="checkbox-field">
+                        <input id="publish-attach-chrome" form="publish-form" name="attachChrome" type="checkbox">
+                        <span>Google 提交时连接手动打开的 Chrome</span>
+                      </label>
+                      <label class="field">
+                        <span>Chrome 调试端口</span>
+                        <input id="publish-chrome-debug-port" form="publish-form" name="chromeDebugPort" type="number" min="1" step="1" value="9222">
+                        <div id="publish-submit-hint" class="publish-inline-hint">仅对 Google 平台 submit 生效。先手动用 `--remote-debugging-port=9222` 启动 Chrome，再点击“提交到当前平台”。</div>
+                      </label>
+                    </div>
+                  </div>
+                </details>
+
+                <details class="publish-platform-group-shell" data-publish-platform-group="apple" open>
+                  <summary>
+                    <div class="publish-platform-group-summary">
+                      <span class="publish-platform-group-kicker">Apple</span>
+                      <strong class="publish-platform-group-title">苹果发布工作台</strong>
+                      <span class="publish-platform-group-meta">为 Apple Books 预留独立的发布辅助区域，后续可继续接入口链接与提交流程</span>
+                    </div>
+                  </summary>
+                  <div class="publish-platform-group-body">
+                    <div class="publish-platform-group-actions">
+                      <div class="publish-platform-group-copy">这里集中放 Apple Books 相关操作。展开这个工作台时，右侧预览会自动切到 Apple，后面我们可以继续把苹果入口链接、登录后的工作页和提交流程一步步接进来。</div>
+                    </div>
+                    <div class="publish-open-card">
+                      <div class="cover-report-title">Apple 发布入口链接</div>
+                      <a class="publish-open-path publish-open-path-link" href="https://authors.apple.com/epub-upload" target="_blank" rel="noopener noreferrer">https://authors.apple.com/epub-upload</a>
+                    </div>
+                    <div class="publish-platform-status-card" data-publish-platform-status="apple">
+                      <div class="cover-report-title">Apple 平台状态</div>
+                      <div class="publish-platform-status-copy">选择一个 BookName 后，这里会显示 Apple 平台包是否就绪。</div>
+                    </div>
+                    <div class="publish-platform-asset-actions">
+                      <button class="ghost-button" type="button" data-publish-asset-platform="apple" data-publish-asset-action="folder">打开平台目录</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="apple" data-publish-asset-action="epub">打开 epub</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="apple" data-publish-asset-action="cover">打开 cover</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="apple" data-publish-asset-action="meta">打开 metadata/checklist</button>
+                    </div>
+                  </div>
+                </details>
+
+                <details class="publish-platform-group-shell" data-publish-platform-group="kobo" open>
+                  <summary>
+                    <div class="publish-platform-group-summary">
+                      <span class="publish-platform-group-kicker">Kobo</span>
+                      <strong class="publish-platform-group-title">Kobo 发布工作台</strong>
+                      <span class="publish-platform-group-meta">为 Kobo 预留独立发布区域，后续可接平台链接、元数据和人工提交流程</span>
+                    </div>
+                  </summary>
+                  <div class="publish-platform-group-body">
+                    <div class="publish-platform-group-actions">
+                      <div class="publish-platform-group-copy">这里集中放 Kobo 相关操作。展开这个工作台时，右侧预览会自动切到 Kobo。现在先把工作区壳子做好，后面再继续补 Kobo 的入口链接、平台说明和具体提交按钮。</div>
+                    </div>
+                    <div class="publish-open-card">
+                      <div class="cover-report-title">Kobo 发布入口链接</div>
+                      <a class="publish-open-path publish-open-path-link" href="https://www.kobo.com/writinglife" target="_blank" rel="noopener noreferrer">https://www.kobo.com/writinglife</a>
+                    </div>
+                    <div class="publish-platform-status-card" data-publish-platform-status="kobo">
+                      <div class="cover-report-title">Kobo 平台状态</div>
+                      <div class="publish-platform-status-copy">选择一个 BookName 后，这里会显示 Kobo 平台工作区当前的准备情况。</div>
+                    </div>
+                    <div class="publish-platform-asset-actions">
+                      <button class="ghost-button" type="button" data-publish-asset-platform="kobo" data-publish-asset-action="folder">打开平台目录</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="kobo" data-publish-asset-action="epub">打开 epub</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="kobo" data-publish-asset-action="cover">打开 cover</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="kobo" data-publish-asset-action="meta">打开 metadata/checklist</button>
                     </div>
                   </div>
                 </details>
@@ -729,6 +830,7 @@
                         <option value="amazon">Amazon</option>
                         <option value="apple">Apple Books</option>
                         <option value="google">Google Play Books</option>
+                        <option value="kobo">Kobo</option>
                       </select>
                     </label>
                   </div>

@@ -1341,7 +1341,7 @@ function validatePublishPlatform(platform) {
   if (!platform) {
     return;
   }
-  if (!["amazon", "apple", "google"].includes(platform)) {
+  if (!["amazon", "apple", "google", "kobo"].includes(platform)) {
     throw new Error("Invalid publish platform.");
   }
 }
@@ -1401,21 +1401,33 @@ function resolvePublishSectionRoot(paths, languageCode, platform) {
 }
 
 function openFileWithDefaultApp(filePath) {
-  const child = spawn("powershell.exe", [
-    "-NoProfile",
-    "-Command",
-    "Start-Process -LiteralPath $args[0]",
+  const launcherPath = path.join(__dirname, "open-target.vbs");
+  if (!fs.existsSync(launcherPath)) {
+    throw new Error("Open target launcher not found.");
+  }
+
+  const child = spawn("wscript.exe", [
+    launcherPath,
     filePath
   ], {
     detached: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    windowsHide: false
   });
 
   child.unref();
 }
 
 function openFolder(folderPath) {
-  const child = spawn("explorer.exe", [folderPath], {
+  const launcherPath = path.join(__dirname, "open-target.vbs");
+  if (!fs.existsSync(launcherPath)) {
+    throw new Error("Open target launcher not found.");
+  }
+
+  const child = spawn("wscript.exe", [
+    launcherPath,
+    folderPath
+  ], {
     detached: true,
     stdio: "ignore",
     windowsHide: false
@@ -1425,13 +1437,7 @@ function openFolder(folderPath) {
 }
 
 function revealFileInExplorer(filePath) {
-  const child = spawn("explorer.exe", ["/select,", filePath], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: false
-  });
-
-  child.unref();
+  openFileWithDefaultApp(filePath);
 }
 
 function pushArg(args, flag, value) {
@@ -2164,6 +2170,47 @@ const server = http.createServer(async (req, res) => {
       }
 
       revealFileInExplorer(targetPath);
+      sendJson(res, 200, {
+        opened: true,
+        bookName,
+        language,
+        platform,
+        fileName
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-publish-file") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const language = body.language || "zh";
+      const platform = body.platform || "";
+      const fileName = body.fileName;
+
+      validateBookName(bookName);
+      validateLanguageCode(language);
+      validatePublishPlatform(platform);
+      validatePublishFileName(fileName);
+
+      const paths = getWorkspacePaths(bookName);
+      const targetRoot = resolvePublishSectionRoot(paths, language, platform || "");
+      const targetPath = path.join(targetRoot, path.basename(fileName));
+
+      if (!targetPath.startsWith(targetRoot)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "Publish file not found." });
+        return;
+      }
+
+      openFileWithDefaultApp(targetPath);
       sendJson(res, 200, {
         opened: true,
         bookName,

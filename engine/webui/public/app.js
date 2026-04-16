@@ -77,7 +77,10 @@ function formToObject(form) {
   for (const [key, value] of data.entries()) {
     obj[key] = value;
   }
-  form.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+  Array.from(form.elements || []).forEach((input) => {
+    if (!(input instanceof HTMLInputElement) || input.type !== "checkbox") {
+      return;
+    }
     obj[input.name] = input.checked;
   });
   return obj;
@@ -407,12 +410,23 @@ function setPublishSelectedCategories(cacheKey, metadata = {}) {
   state.publishSelectedCategories[cacheKey] = {
     amazon: metadata.platform_selected_categories?.amazon || metadata.discovery?.platform_selected_categories?.amazon || "",
     apple: metadata.platform_selected_categories?.apple || metadata.discovery?.platform_selected_categories?.apple || "",
-    google: metadata.platform_selected_categories?.google || metadata.discovery?.platform_selected_categories?.google || ""
+    google: metadata.platform_selected_categories?.google || metadata.discovery?.platform_selected_categories?.google || "",
+    kobo: metadata.platform_selected_categories?.kobo || metadata.discovery?.platform_selected_categories?.kobo || ""
   };
 }
 
 function getPublishSelectedCategories(cacheKey) {
-  return state.publishSelectedCategories[cacheKey] || { amazon: "", apple: "", google: "" };
+  return state.publishSelectedCategories[cacheKey] || { amazon: "", apple: "", google: "", kobo: "" };
+}
+
+function getPublishPlatformLabel(platformName) {
+  return platformName === "amazon"
+    ? "Amazon"
+    : platformName === "apple"
+      ? "Apple"
+      : platformName === "google"
+        ? "Google"
+        : "Kobo";
 }
 
 function clearPublishAutoSaveTimer() {
@@ -850,7 +864,7 @@ function renderCoverGallerySection(targetId, bookName, section, files) {
         <div class="cover-card-meta">
           <strong>${escapeHtml(fileName)}</strong>
           <div class="cover-card-actions">
-            <button class="ghost-button cover-file-button" type="button" data-cover-section="${escapeHtml(section)}" data-cover-file="${escapeHtml(fileName)}">定位文件</button>
+            <button class="ghost-button cover-file-button" type="button" data-cover-section="${escapeHtml(section)}" data-cover-file="${escapeHtml(fileName)}">打开文件</button>
           </div>
         </div>
       </div>
@@ -869,8 +883,8 @@ function renderCoverGallerySection(targetId, bookName, section, files) {
             fileName: button.dataset.coverFile
           })
         });
-        setStatusBadge("已定位", "success");
-        setLog(`已在资源管理器中定位封面文件：${button.dataset.coverFile}`);
+        setStatusBadge("已打开", "success");
+        setLog(`已打开封面文件：${button.dataset.coverFile}`);
       } catch (error) {
         setStatusBadge("失败", "failed");
         setLog(error.message);
@@ -1823,6 +1837,96 @@ async function openPublishPlatformFolder() {
   setLog(`已打开 ${getPublishPreviewPlatform()} 平台目录。`);
 }
 
+async function openPublishPlatformFolderFor(platformName) {
+  await api("/api/open-publish-folder", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName: requireBookName(),
+      language: getPublishLanguage(),
+      platform: platformName
+    })
+  });
+  setStatusBadge("已打开", "success");
+  setLog(`已打开 ${getPublishPlatformLabel(platformName)} 平台目录。`);
+}
+
+function findPublishPlatformFile(platformData, predicate) {
+  const files = Array.isArray(platformData?.files) ? platformData.files : [];
+  return files.find((fileName) => {
+    try {
+      return predicate(String(fileName || ""));
+    } catch {
+      return false;
+    }
+  }) || "";
+}
+
+function resolvePublishAssetTarget(platformName, action, item, publish) {
+  const label = getPublishPlatformLabel(platformName);
+  if (!item) {
+    throw new Error("请先选择一个 BookName。");
+  }
+
+  if (action === "folder") {
+    return { kind: "folder", platform: platformName, fileName: "", label: `${label} 平台目录` };
+  }
+
+  const platformData = publish?.platforms?.[platformName] || null;
+  const checklistName = findPublishPlatformFile(platformData, (fileName) => /checklist/i.test(fileName) && /\.md$/i.test(fileName));
+  const metadataName = findPublishPlatformFile(platformData, (fileName) => /metadata/i.test(fileName) && /\.(json|md)$/i.test(fileName));
+  const epubName = findPublishPlatformFile(platformData, (fileName) => /\.epub$/i.test(fileName));
+  const coverName = findPublishPlatformFile(platformData, (fileName) => /^cover\.(png|jpg|jpeg|webp|pdf)$/i.test(fileName) || /cover\.(png|jpg|jpeg|webp|pdf)$/i.test(fileName));
+
+  if (action === "epub") {
+    if (!epubName) {
+      throw new Error(`${label} 平台目录里还没有 epub 文件。`);
+    }
+    return { kind: "file", platform: platformName, fileName: epubName, label: `${label} epub` };
+  }
+
+  if (action === "cover") {
+    if (!coverName) {
+      throw new Error(`${label} 平台目录里还没有 cover 文件。`);
+    }
+    return { kind: "file", platform: platformName, fileName: coverName, label: `${label} cover` };
+  }
+
+  if (action === "meta") {
+    if (checklistName) {
+      return { kind: "file", platform: platformName, fileName: checklistName, label: `${label} checklist` };
+    }
+    if (metadataName) {
+      return { kind: "file", platform: platformName, fileName: metadataName, label: `${label} metadata` };
+    }
+    return { kind: "file", platform: "", fileName: "publish_metadata.md", label: "publish metadata" };
+  }
+
+  throw new Error("未知的平台文件操作。");
+}
+
+async function openPublishAsset(platformName, action) {
+  const item = getSelectedWorkspaceItem();
+  const publish = item ? state.publishCache[getPublishCacheKey(item.bookName, getPublishLanguage())] || null : null;
+  const target = resolvePublishAssetTarget(platformName, action, item, publish);
+
+  if (target.kind === "folder") {
+    await openPublishPlatformFolderFor(target.platform);
+    return;
+  }
+
+  await api("/api/open-publish-file", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName: requireBookName(),
+      language: getPublishLanguage(),
+      platform: target.platform,
+      fileName: target.fileName
+    })
+  });
+  setStatusBadge("已打开", "success");
+  setLog(`已打开 ${target.label}。`);
+}
+
 function formatRecommendedCategoriesHtml(recommended) {
   const selectedMap = getPublishSelectedCategories(state.publishEditorKey);
   const activePlatform = getPublishPreviewPlatform();
@@ -1833,7 +1937,9 @@ function formatRecommendedCategoriesHtml(recommended) {
       ? "Amazon"
       : platformName === "apple"
         ? "Apple Books"
-        : "Google Play Books";
+        : platformName === "google"
+          ? "Google Play Books"
+          : "Kobo";
 
     const listHtml = entries.length
       ? entries.map((entry) => `
@@ -1883,7 +1989,7 @@ function renderPublishInsights(item, publish, language) {
   if (!item) {
     note.textContent = "09 的元数据应由系统根据当前语种书稿自动生成，人工主要负责审校与少量微调。";
     sourcePanel.innerHTML = "选择一个 BookName 后，这里会显示当前语言版本的生成来源、输出文件和发布目录。";
-    categoriesPanel.innerHTML = "运行 09-publish.ps1 后，这里会显示 Amazon / Apple / Google 的推荐分类路径。";
+    categoriesPanel.innerHTML = "运行 09-publish.ps1 后，这里会显示 Amazon / Apple / Google / Kobo 的推荐分类路径。";
     renderPublishOpenPaths(null, null, language);
     return;
   }
@@ -2051,6 +2157,103 @@ function renderPublishFiles(bookName, language, platformName, platformData) {
   panel.innerHTML = "";
 }
 
+function getPublishPlatformStatus(platformName, item, publish) {
+  const label = getPublishPlatformLabel(platformName);
+  if (!item) {
+    return {
+      chips: [
+        { label: "平台包", value: "待选择", tone: "neutral" },
+        { label: "元数据", value: "待选择", tone: "neutral" },
+        { label: "文案", value: "待选择", tone: "neutral" },
+        { label: "文件", value: "0", tone: "neutral" }
+      ],
+      nextStep: "先选择一个 BookName，然后这里会显示当前平台的准备情况。"
+    };
+  }
+
+  if (!publish) {
+    return {
+      chips: [
+        { label: "平台包", value: "读取中", tone: "warn" },
+        { label: "元数据", value: "读取中", tone: "warn" },
+        { label: "文案", value: "读取中", tone: "warn" },
+        { label: "文件", value: "…", tone: "neutral" }
+      ],
+      nextStep: "正在读取 09 上架数据；如果长时间没有结果，可以先运行 09-publish.ps1。"
+    };
+  }
+
+  const metadataReady = Boolean(publish.metadataJson || publish.metadataMarkdown);
+  const platformData = publish.platforms?.[platformName] || null;
+  const fileCount = Array.isArray(platformData?.files) ? platformData.files.length : 0;
+  const pkg = platformData?.packageJson || {};
+  const descriptionReady = Boolean((platformData?.descriptionText || pkg.book_details?.description || "").trim());
+  const keywordsReady = Boolean((platformData?.keywordsText || "").trim() || (Array.isArray(pkg.book_details?.keywords) && pkg.book_details.keywords.length));
+  const packageReady = Boolean(platformData?.exists && pkg.package_ready);
+  const packageExists = Boolean(platformData?.exists && platformData?.packageJson);
+  const checks = pkg.quality_checks || {};
+  const missingItems = [];
+
+  if (checks.has_manuscript === false || checks.has_book === false) {
+    missingItems.push("书稿");
+  }
+  if (checks.has_cover === false) {
+    missingItems.push("封面");
+  }
+  if (checks.has_metadata === false) {
+    missingItems.push("元数据");
+  }
+
+  let nextStep = "";
+  if (platformName === "kobo" && !platformData?.exists) {
+    nextStep = "当前 09-publish.ps1 还没有自动生成 Kobo 平台包；现在可以先准备入口链接、元数据策略和人工提交流程。";
+  } else if (!platformData?.exists) {
+    nextStep = `先运行 09-publish.ps1 生成 ${label} 平台包。`;
+  } else if (!packageExists) {
+    nextStep = `${label} 目录已存在，但还没有 package 文件；建议重新运行 09-publish.ps1。`;
+  } else if (!packageReady && missingItems.length) {
+    nextStep = `先补齐${missingItems.join("、")}，再进入 ${label} 发布入口。`;
+  } else if (!packageReady) {
+    nextStep = `${label} 平台包已生成，但还有检查项待确认；建议先核对 checklist、描述文案和关键词。`;
+  } else {
+    nextStep = `${label} 平台包已就绪，可以进入发布入口继续人工发布。`;
+  }
+
+  return {
+    chips: [
+      { label: "平台包", value: packageReady ? "就绪" : packageExists ? "草稿" : "未生成", tone: packageReady ? "good" : packageExists ? "warn" : "neutral" },
+      { label: "元数据", value: metadataReady ? "已生成" : "未生成", tone: metadataReady ? "good" : "warn" },
+      { label: "文案", value: descriptionReady ? "已生成" : "待补", tone: descriptionReady ? "good" : "warn" },
+      { label: "关键词", value: keywordsReady ? "已生成" : "待补", tone: keywordsReady ? "good" : "warn" },
+      { label: "文件数", value: String(fileCount), tone: fileCount > 0 ? "good" : "neutral" }
+    ],
+    nextStep
+  };
+}
+
+function renderPublishWorkbenchStatuses(item, publish) {
+  ["amazon", "google", "apple", "kobo"].forEach((platformName) => {
+    const panel = document.querySelector(`[data-publish-platform-status="${platformName}"]`);
+    if (!panel) {
+      return;
+    }
+
+    const status = getPublishPlatformStatus(platformName, item, publish);
+    panel.innerHTML = `
+      <div class="cover-report-title">${escapeHtml(getPublishPlatformLabel(platformName))} 平台状态</div>
+      <div class="publish-platform-status-grid">
+        ${status.chips.map((chip) => `
+          <div class="publish-platform-status-chip is-${escapeHtml(chip.tone || "neutral")}">
+            <span>${escapeHtml(chip.label || "")}</span>
+            <strong>${escapeHtml(chip.value || "")}</strong>
+          </div>
+        `).join("")}
+      </div>
+      <div class="publish-platform-status-next"><strong>建议下一步：</strong>${escapeHtml(status.nextStep || "继续检查平台包。")}</div>
+    `;
+  });
+}
+
 function renderPublishPlatformDetail(language, platformName, platformData, rawText) {
   const rawPanel = $("#publish-platform-preview");
   const folderLabel = $("#publish-platform-folder");
@@ -2167,6 +2370,7 @@ function renderPublishPanel(item) {
     setPublishEditorFields("运行 09-publish.ps1 后，这里会显示可直接审校的 publish_metadata.md。", {}, "", true);
     reportPanel.value = "运行 09-publish.ps1 后，这里会显示 publish_report.md。";
     renderPublishInsights(null, null, getPublishLanguage());
+    renderPublishWorkbenchStatuses(null, null);
     renderPublishPlatformDetail(getPublishLanguage(), getPublishPreviewPlatform(), null, "选择平台后，这里会显示对应平台的提交清单。");
     renderPublishFiles("", getPublishLanguage(), getPublishPreviewPlatform(), null);
     return;
@@ -2190,6 +2394,7 @@ function renderPublishPanel(item) {
     setPublishEditorFields("正在读取统一出版元数据...", {}, cacheKey, true);
     reportPanel.value = "正在读取 publish_report.md ...";
     renderPublishInsights(item, null, language);
+    renderPublishWorkbenchStatuses(item, null);
     renderPublishPlatformDetail(language, previewPlatform, null, "正在读取平台提交清单...");
     renderPublishFiles(item.bookName, language, previewPlatform, null);
     if (state.publishLoadingKey !== cacheKey) {
@@ -2210,6 +2415,7 @@ function renderPublishPanel(item) {
   setPublishEditorFields(publish.metadataMarkdown || "当前语言还没有 publish_metadata.md。", publish.metadataJson || {}, cacheKey);
   reportPanel.value = publish.reportText || "当前语言还没有 publish_report.md。";
   renderPublishInsights(item, publish, language);
+  renderPublishWorkbenchStatuses(item, publish);
 
   let rawPlatformText = "";
   if (!platformData || !platformData.exists) {
@@ -2790,6 +2996,19 @@ function setupForms() {
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
+  });
+
+  document.querySelectorAll("[data-publish-asset-action]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      try {
+        const platformName = event.currentTarget?.dataset.publishAssetPlatform || "";
+        const action = event.currentTarget?.dataset.publishAssetAction || "";
+        await openPublishAsset(platformName, action);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
   });
 
   $("#open-powershell-test").addEventListener("click", async () => {
