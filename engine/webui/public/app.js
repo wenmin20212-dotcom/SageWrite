@@ -101,6 +101,14 @@ function setStatusBadge(text, kind = "idle") {
   badge.dataset.kind = kind;
 }
 
+function updateCancelJobButton(isRunning = false) {
+  const button = $("#cancel-current-job");
+  if (!button) {
+    return;
+  }
+  button.disabled = !isRunning || !state.currentJobId;
+}
+
 function setLog(text) {
   $("#log-output").textContent = text || "这里会显示 PowerShell 输出。";
 }
@@ -2567,6 +2575,7 @@ async function refreshStatus() {
 async function pollJob(jobId) {
   if (state.pollTimer) {
     clearTimeout(state.pollTimer);
+    state.pollTimer = null;
   }
 
   const job = await api(`/api/jobs/${jobId}`);
@@ -2575,13 +2584,18 @@ async function pollJob(jobId) {
 
   if (job.status === "running") {
     setStatusBadge("运行中", "running");
+    updateCancelJobButton(true);
     await new Promise((resolve) => {
       state.pollTimer = setTimeout(resolve, 1200);
     });
     return pollJob(jobId);
   }
 
-  setStatusBadge(job.status === "success" ? "成功" : "失败", job.status === "success" ? "success" : "failed");
+  updateCancelJobButton(false);
+  setStatusBadge(
+    job.status === "success" ? "成功" : job.status === "cancelled" ? "已停止" : "失败",
+    job.status === "success" ? "success" : job.status === "cancelled" ? "idle" : "failed"
+  );
   if (job.meta?.route === "edit" && job.meta?.bookName) {
     delete state.preflightCache[job.meta.bookName];
   }
@@ -2629,7 +2643,34 @@ async function run(route, payload) {
     method: "POST",
     body: JSON.stringify(payload)
   });
-  await pollJob(result.jobId);
+  state.currentJobId = result.jobId;
+  updateCancelJobButton(true);
+  return await pollJob(result.jobId);
+}
+
+async function cancelCurrentJob() {
+  if (!state.currentJobId) {
+    return;
+  }
+
+  if (state.pollTimer) {
+    clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+
+  const jobId = state.currentJobId;
+  setStatusBadge("停止中", "running");
+  setLog("正在停止当前任务，请稍候...");
+  updateCancelJobButton(false);
+
+  const result = await api(`/api/jobs/${jobId}/cancel`, {
+    method: "POST"
+  });
+
+  state.currentJobId = result.job?.id || jobId;
+  setLog(result.job?.output || "当前任务已停止。");
+  setStatusBadge("已停止", "idle");
+  await refreshStatus();
 }
 
 function intOrEmpty(value) {
@@ -3323,6 +3364,15 @@ function setupForms() {
     }
   });
 
+  $("#cancel-current-job")?.addEventListener("click", async () => {
+    try {
+      await cancelCurrentJob();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#show-toc").addEventListener("click", async () => {
     try {
       await showCurrentTocPreview();
@@ -3472,6 +3522,7 @@ initPublishPanelState();
 initPublishPreviewColumnState();
 initPublishUiState();
 setDefaultModelName(getDefaultModelName());
+updateCancelJobButton(false);
   setupForms();
   setWriteNotesStatus();
   try {

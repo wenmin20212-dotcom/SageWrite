@@ -78,14 +78,139 @@ function Save-Utf8File {
     [System.IO.File]::WriteAllText($Path, $Content, $Encoding)
 }
 
-function Split-TextLines {
+function Split-TextSentences {
     param(
         [Parameter(Mandatory=$true)]
         [string]$Content
     )
 
     $Normalized = $Content -replace "`r", ""
-    return @($Normalized -split "`n")
+    if ([string]::IsNullOrWhiteSpace($Normalized)) {
+        return @()
+    }
+
+    $RawSentences = @()
+    $Buffer = New-Object System.Text.StringBuilder
+
+    foreach ($Char in $Normalized.ToCharArray()) {
+        [void]$Buffer.Append($Char)
+
+        $CodePoint = [int][char]$Char
+        $ShouldBreak = $false
+
+        if ($CodePoint -in @(10, 33, 46, 59, 63, 12290, 65281, 65307, 65311)) {
+            $ShouldBreak = $true
+        }
+
+        if ($ShouldBreak) {
+            $Value = $Buffer.ToString().Trim()
+            if (-not [string]::IsNullOrWhiteSpace($Value)) {
+                $RawSentences += ,$Value
+            }
+            [void]$Buffer.Clear()
+        }
+    }
+
+    if ($Buffer.Length -gt 0) {
+        $Value = $Buffer.ToString().Trim()
+        if (-not [string]::IsNullOrWhiteSpace($Value)) {
+            $RawSentences += ,$Value
+        }
+    }
+
+    $Sentences = @()
+    foreach ($Sentence in $RawSentences) {
+        if ($Sentences.Count -gt 0 -and $Sentence -match '^[\)"''\]\}]+$') {
+            $Sentences[$Sentences.Count - 1] = $Sentences[$Sentences.Count - 1] + $Sentence
+        }
+        else {
+            $Sentences += ,$Sentence
+        }
+    }
+
+    return ,$Sentences
+}
+
+function Normalize-ComparableSentence {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    return ([regex]::Replace(($Content -replace "`r", "").Trim(), "\s+", " "))
+}
+
+function Get-SentenceDiffPoints {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$OriginalSentences,
+
+        [Parameter(Mandatory=$true)]
+        [string[]]$RefinedSentences
+    )
+
+    $DiffPoints = @()
+    $OriginalIndex = 0
+    $RefinedIndex = 0
+
+    while ($OriginalIndex -lt $OriginalSentences.Count -or $RefinedIndex -lt $RefinedSentences.Count) {
+        $OriginalSentence = if ($OriginalIndex -lt $OriginalSentences.Count) { $OriginalSentences[$OriginalIndex] } else { $null }
+        $RefinedSentence = if ($RefinedIndex -lt $RefinedSentences.Count) { $RefinedSentences[$RefinedIndex] } else { $null }
+
+        if ($null -ne $OriginalSentence -and $null -ne $RefinedSentence) {
+            if ((Normalize-ComparableSentence -Content $OriginalSentence) -eq (Normalize-ComparableSentence -Content $RefinedSentence)) {
+                $OriginalIndex++
+                $RefinedIndex++
+                continue
+            }
+
+            $NextOriginal = if (($OriginalIndex + 1) -lt $OriginalSentences.Count) { $OriginalSentences[$OriginalIndex + 1] } else { $null }
+            $NextRefined = if (($RefinedIndex + 1) -lt $RefinedSentences.Count) { $RefinedSentences[$RefinedIndex + 1] } else { $null }
+
+            if ($null -ne $NextOriginal -and (Normalize-ComparableSentence -Content $NextOriginal) -eq (Normalize-ComparableSentence -Content $RefinedSentence)) {
+                $DiffPoints += ,([pscustomobject]@{
+                    original = $OriginalSentence
+                    refined  = ""
+                })
+                $OriginalIndex++
+                continue
+            }
+
+            if ($null -ne $NextRefined -and (Normalize-ComparableSentence -Content $OriginalSentence) -eq (Normalize-ComparableSentence -Content $NextRefined)) {
+                $DiffPoints += ,([pscustomobject]@{
+                    original = ""
+                    refined  = $RefinedSentence
+                })
+                $RefinedIndex++
+                continue
+            }
+
+            $DiffPoints += ,([pscustomobject]@{
+                original = $OriginalSentence
+                refined  = $RefinedSentence
+            })
+            $OriginalIndex++
+            $RefinedIndex++
+            continue
+        }
+
+        if ($null -ne $OriginalSentence) {
+            $DiffPoints += ,([pscustomobject]@{
+                original = $OriginalSentence
+                refined  = ""
+            })
+            $OriginalIndex++
+            continue
+        }
+
+        $DiffPoints += ,([pscustomobject]@{
+            original = ""
+            refined  = $RefinedSentence
+        })
+        $RefinedIndex++
+    }
+
+    return ,$DiffPoints
 }
 
 function New-DiffReportContent {
@@ -100,9 +225,9 @@ function New-DiffReportContent {
         [string]$RefinedText
     )
 
-    $OriginalLines = Split-TextLines -Content $OriginalText
-    $RefinedLines = Split-TextLines -Content $RefinedText
-    $DiffLines = Compare-Object -ReferenceObject $OriginalLines -DifferenceObject $RefinedLines -SyncWindow 2
+    $OriginalSentences = Split-TextSentences -Content $OriginalText
+    $RefinedSentences = Split-TextSentences -Content $RefinedText
+    $DiffPoints = Get-SentenceDiffPoints -OriginalSentences $OriginalSentences -RefinedSentences $RefinedSentences
 
     $ReportLines = New-Object System.Collections.Generic.List[string]
     $ReportLines.Add("# Difference Report")
@@ -110,23 +235,34 @@ function New-DiffReportContent {
     $ReportLines.Add("File: $RelativePath")
     $ReportLines.Add("Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
     $ReportLines.Add("")
-    $ReportLines.Add('```diff')
+    $ReportLines.Add("## Sentence-Level Differences")
+    $ReportLines.Add("")
 
-    if ($DiffLines.Count -eq 0) {
-        $ReportLines.Add("  No line-level differences detected.")
+    if ($DiffPoints.Count -eq 0) {
+        $ReportLines.Add("No sentence-level differences detected.")
     }
     else {
-        foreach ($Line in $DiffLines) {
-            $Text = [string]$Line.InputObject
-            switch ($Line.SideIndicator) {
-                "<=" { $ReportLines.Add("- $Text") }
-                "=>" { $ReportLines.Add("+ $Text") }
-                default { $ReportLines.Add("  $Text") }
-            }
+        for ($Index = 0; $Index -lt $DiffPoints.Count; $Index++) {
+            $Point = $DiffPoints[$Index]
+            $ReportLines.Add("### Difference $($Index + 1)")
+            $ReportLines.Add("")
+            $ReportLines.Add("Original sentence:")
+            $ReportLines.Add("")
+            $ReportLines.Add("> " + $(if ([string]::IsNullOrWhiteSpace($Point.original)) { "(none)" } else { $Point.original }))
+            $ReportLines.Add("")
+            $ReportLines.Add("Refined sentence:")
+            $ReportLines.Add("")
+            $ReportLines.Add("> " + $(if ([string]::IsNullOrWhiteSpace($Point.refined)) { "(none)" } else { $Point.refined }))
+            $ReportLines.Add("")
         }
     }
 
-    $ReportLines.Add('```')
+    $ReportLines.Add("## Summary")
+    $ReportLines.Add("")
+    $ReportLines.Add("- Original sentence count: $($OriginalSentences.Count)")
+    $ReportLines.Add("- Refined sentence count: $($RefinedSentences.Count)")
+    $ReportLines.Add("- Total difference points: $($DiffPoints.Count)")
+    $ReportLines.Add("- Difference total: $($DiffPoints.Count)")
 
     return ($ReportLines -join "`r`n")
 }
@@ -174,7 +310,7 @@ Relative path: $RelativePath
 
 Your job:
 - Refine this file in $TargetLanguageName with the smallest possible number of edits.
-- Only fix clear grammar, spelling, punctuation, or obviously unnatural phrasing.
+- Only fix clear grammar, spelling, punctuation, or clearly incorrect word usage.
 - Keep the meaning intact.
 - Keep the language in $TargetLanguageName. Do not translate it into another language.
 
@@ -191,15 +327,27 @@ Rules:
 10. The output should stay as close to the source text as possible.
 11. If the whole file does not clearly need edits, return it unchanged.
 12. When in doubt, keep the original wording.
+13. Non-essential edits are forbidden.
+14. If a difference is only a slight semantic nuance, word-order preference, rhythm preference, or stylistic preference, do not change it.
+15. Do not normalize phrasing just because another wording sounds a little better.
+16. Do not make a change unless the original wording contains a clear language mistake that a careful editor would definitely correct.
+17. If the original sentence is understandable, grammatically acceptable, and not clearly wrong, keep it exactly as written.
+18. Do not replace one valid word with another valid near-synonym just because the replacement is safer, more common, flatter, or more neutral.
+19. Do not weaken the force, sharpness, criticism, vividness, or expressive strength of a sentence if the original wording is already correct.
+20. If both the original wording and an alternative wording are acceptable, keep the original wording.
+21. Treat expressive but grammatical wording as intentional authorial choice, not as an error.
+22. Only change wording when the original contains a hard error or is obviously unnatural to a careful native reader.
 
 Priority:
 - Highest priority: preserve the original text.
 - Second priority: fix only clear language errors.
-- Lowest priority: improve obvious machine-translated phrasing, but only when the issue is clearly unnatural.
+- Lowest priority: improve only clearly broken machine-translated phrasing that would read as an actual language mistake.
+- If there is any doubt, or if both versions can work, keep the original.
 
 Publication standard note:
 - "Publication-grade" here means error-free and naturally readable.
-- It does NOT mean rewriting for style, elegance, or stronger voice.
+- It does NOT mean rewriting for style, elegance, stronger voice, smoother rhythm, or better phrasing.
+- It also does NOT mean replacing vivid wording with milder wording, or replacing deliberate wording with more standard wording.
 
 Source markdown:
 $SourceText
@@ -267,6 +415,8 @@ Initialize-SageObservability -Context $Context
 $LanguageProfile = Get-LanguageProfile -LanguageCode $Language
 $TargetCode = $LanguageProfile.code
 $TargetLanguageName = $LanguageProfile.name
+$RefinePolicyVersion = "2026-04-18-strict-minimal-v3"
+$NoChangeThreshold = 4
 $SelectedModel = $Model.Trim()
 if ([string]::IsNullOrWhiteSpace($SelectedModel)) {
     $SelectedModel = "gpt-5.2"
@@ -389,7 +539,7 @@ else {
 $PreviousManifestEntries = @{}
 if (Test-Path $ManifestPath) {
     try {
-        $PreviousManifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 20
+        $PreviousManifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($PreviousManifest.entries) {
             foreach ($Entry in $PreviousManifest.entries) {
                 if ($Entry.relative_path) {
@@ -452,12 +602,14 @@ $BackupCreated = $false
 $RefinedFiles = @()
 $SkippedFiles = @()
 $UnchangedFiles = @()
+$NoChangeMarkedFiles = @()
 $MissingFiles = @()
 $ManifestEntries = @()
 $DiffFiles = @()
 $TotalInputTokens = 0
 $TotalOutputTokens = 0
 $TotalTokens = 0
+$TotalDifferencePoints = 0
 
 foreach ($Item in $Candidates) {
     if (!(Test-Path $Item.source)) {
@@ -466,21 +618,58 @@ foreach ($Item in $Candidates) {
         continue
     }
 
+    Write-Output "Checking previous refine state for $($Item.relative)"
     $SourceText = Get-Content -LiteralPath $Item.source -Raw -Encoding UTF8
     $SourceHash = Get-TextHash -Content $SourceText
     $PreviousEntry = $PreviousManifestEntries[$Item.relative]
-    if ((-not $Force) -and $PreviousEntry -and ($PreviousEntry.source_hash -eq $SourceHash)) {
+    $HasSameSourceHash = $PreviousEntry -and ($PreviousEntry.source_hash -eq $SourceHash)
+    $HasCompatiblePreviousEntry = $HasSameSourceHash -and `
+        ($PreviousEntry.model -eq $SelectedModel) -and `
+        ($PreviousEntry.policy_version -eq $RefinePolicyVersion)
+
+    if ($PreviousEntry) {
+        Write-Output "$($Item.relative) has a previous refine record."
+        if ($HasSameSourceHash) {
+            Write-Output "$($Item.relative) source hash is unchanged since the previous refine record."
+        }
+        else {
+            Write-Output "$($Item.relative) source content changed since the previous refine record."
+        }
+    }
+    else {
+        Write-Output "$($Item.relative) has no previous refine record."
+    }
+
+    if ((-not $Force) -and $HasSameSourceHash -and $PreviousEntry.no_change_confirmed) {
         $SkippedFiles += $Item.relative
-        Write-Output "$($Item.relative) already refined and unchanged. Skipping."
+        $NoChangeMarkedFiles += $Item.relative
+        Write-Output "$($Item.relative) previously confirmed as no-change. Skipping before API call."
+        continue
+    }
+
+    if ((-not $Force) -and $HasCompatiblePreviousEntry) {
+        if ($PreviousEntry.no_change_confirmed) {
+            $SkippedFiles += $Item.relative
+            $NoChangeMarkedFiles += $Item.relative
+            Write-Output "$($Item.relative) previously confirmed as no-change under the current refine policy. Skipping."
+            continue
+        }
+
+        $SkippedFiles += $Item.relative
+        Write-Output "$($Item.relative) already refined with the current model and policy, and the source is unchanged. Skipping."
         continue
     }
 
     Write-Output "Refining $($Item.relative) -> $TargetCode"
+    Write-Output "API call starting for $($Item.relative) with model $SelectedModel"
 
     try {
         $Result = Get-RefineResult -SourceText $SourceText -ModelName $SelectedModel -TargetLanguageName $TargetLanguageName -FileRole $Item.role -RelativePath $Item.relative
         $RefinedText = $Result.content
         $RefinedHash = Get-TextHash -Content $RefinedText
+        $DiffPointCount = 0
+        $NoChangeConfirmed = $false
+        $Decision = "changed"
 
         if ($RefinedHash -ne $SourceHash) {
             if (-not $BackupCreated) {
@@ -496,14 +685,29 @@ foreach ($Item in $Candidates) {
 
             Copy-Item -LiteralPath $Item.source -Destination $BackupPath -Force
             $DiffPath = [System.IO.Path]::ChangeExtension($BackupPath, ".diff.md")
+            $OriginalSentences = Split-TextSentences -Content $SourceText
+            $RefinedSentences = Split-TextSentences -Content $RefinedText
+            $DiffPoints = Get-SentenceDiffPoints -OriginalSentences $OriginalSentences -RefinedSentences $RefinedSentences
+            $DiffPointCount = $DiffPoints.Count
+            $NoChangeConfirmed = ($DiffPointCount -lt $NoChangeThreshold)
+            if ($NoChangeConfirmed) {
+                $NoChangeMarkedFiles += $Item.relative
+                $Decision = "minor_change_stable"
+                Write-Output "$($Item.relative) has only $DiffPointCount difference point(s), so it will be treated as no-change on the next run."
+            }
             $DiffContent = New-DiffReportContent -RelativePath $Item.relative -OriginalText $SourceText -RefinedText $RefinedText
             Save-Utf8File -Path $DiffPath -Content $DiffContent
             Save-Utf8File -Path $Item.source -Content $RefinedText
             $RefinedFiles += $Item.relative
             $DiffFiles += ($DiffPath.Substring($BackupSessionRoot.Length).TrimStart("\"))
+            Write-Output "$($Item.relative) refined content saved. Difference points: $DiffPointCount"
         }
         else {
             $UnchangedFiles += $Item.relative
+            $NoChangeMarkedFiles += $Item.relative
+            $NoChangeConfirmed = $true
+            $Decision = "no_change"
+            Write-Output "$($Item.relative) returned unchanged after API review. Difference points: 0"
         }
 
         $ManifestEntries += [ordered]@{
@@ -511,12 +715,19 @@ foreach ($Item in $Candidates) {
             file_role = $Item.role
             source_hash = $RefinedHash
             changed = ($RefinedHash -ne $SourceHash)
+            no_change_confirmed = $NoChangeConfirmed
+            decision = $Decision
+            diff_point_count = $DiffPointCount
+            model = $SelectedModel
+            policy_version = $RefinePolicyVersion
             refined_at = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         }
 
         $TotalInputTokens += $Result.usage.input_tokens
         $TotalOutputTokens += $Result.usage.output_tokens
         $TotalTokens += $Result.usage.total_tokens
+        $TotalDifferencePoints += $DiffPointCount
+        Write-Output "Usage for $($Item.relative): input=$($Result.usage.input_tokens), output=$($Result.usage.output_tokens), total=$($Result.usage.total_tokens)"
     }
     catch {
         Fail-SageStep -Context $Context -Step "refine_translation" -Message "Failed to refine translated markdown file." -Data @{
@@ -525,6 +736,7 @@ foreach ($Item in $Candidates) {
             error = $_.Exception.Message
         }
         Write-Output "ERROR: Failed refining $($Item.relative)"
+        Write-Output "DETAIL: $($_.Exception.Message)"
         exit 1
     }
 }
@@ -534,6 +746,8 @@ $Manifest = [ordered]@{
     book_name = $BookName
     target_language = $TargetCode
     target_language_name = $TargetLanguageName
+    policy_version = $RefinePolicyVersion
+    no_change_threshold = $NoChangeThreshold
     scope = if ($All) { "all" } elseif ($Chapter) { "single" } elseif ($StartChapter -or $EndChapter) { "range" } else { "all" }
     chapter_range = @{
         start = $StartIndex
@@ -543,9 +757,11 @@ $Manifest = [ordered]@{
     refined_files = $RefinedFiles
     diff_files = $DiffFiles
     unchanged_files = $UnchangedFiles
+    no_change_marked_files = $NoChangeMarkedFiles
     skipped_files = $SkippedFiles
     missing_files = $MissingFiles
     backup_root = if ($BackupCreated) { $BackupSessionRoot } else { "" }
+    difference_points_total = $TotalDifferencePoints
     usage = @{
         input_tokens = $TotalInputTokens
         output_tokens = $TotalOutputTokens
@@ -563,8 +779,10 @@ Complete-SageStep -Context $Context -Step "refine_translation" -State "success" 
     refined_file_count = $RefinedFiles.Count
     diff_file_count = $DiffFiles.Count
     unchanged_file_count = $UnchangedFiles.Count
+    no_change_marked_file_count = $NoChangeMarkedFiles.Count
     skipped_file_count = $SkippedFiles.Count
     missing_file_count = $MissingFiles.Count
+    difference_points_total = $TotalDifferencePoints
     processed_range = "$StartIndex-$EndIndex"
     duration_seconds = $Duration
     translation_root = $TranslationRoot
@@ -578,6 +796,21 @@ Complete-SageStep -Context $Context -Step "refine_translation" -State "success" 
 Write-Output "SUCCESS: Translation refinement completed for $TargetCode."
 Write-Output "Model: $SelectedModel"
 Write-Output "Translation root: $TranslationRoot"
+Write-Output "Manifest: $ManifestPath"
+Write-Output "No-change threshold: fewer than $NoChangeThreshold difference points"
+Write-Output "Refined files: $($RefinedFiles.Count)"
+Write-Output "Unchanged files: $($UnchangedFiles.Count)"
+Write-Output "No-change marked files: $($NoChangeMarkedFiles.Count)"
+Write-Output "Skipped files: $($SkippedFiles.Count)"
+Write-Output "Missing files: $($MissingFiles.Count)"
+Write-Output "Difference points total: $TotalDifferencePoints"
+Write-Output "Token usage total: input=$TotalInputTokens, output=$TotalOutputTokens, total=$TotalTokens"
+if ($RefinedFiles.Count -eq 0 -and $UnchangedFiles.Count -gt 0) {
+    Write-Output "Result: This run found no files that required modification."
+}
+elseif ($RefinedFiles.Count -eq 0 -and $NoChangeMarkedFiles.Count -gt 0 -and $SkippedFiles.Count -gt 0) {
+    Write-Output "Result: These files were previously confirmed as no-change and were skipped."
+}
 if ($BackupCreated) {
     Write-Output "Backup root: $BackupSessionRoot"
 }

@@ -1033,7 +1033,10 @@
         <section class="panel log-panel">
           <div class="panel-header">
             <h2>运行日志</h2>
-            <div id="job-badge" class="job-badge">空闲</div>
+            <div class="log-panel-actions">
+              <button id="cancel-current-job" class="ghost-button" type="button" disabled>停止当前任务</button>
+              <div id="job-badge" class="job-badge">空闲</div>
+            </div>
           </div>
           <pre id="log-output" class="log-output">这里会显示 PowerShell 输出。</pre>
         </section>

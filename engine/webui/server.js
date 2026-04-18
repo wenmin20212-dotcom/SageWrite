@@ -1400,6 +1400,12 @@ function createJob(meta) {
     output: "",
     archived: false
   };
+  Object.defineProperty(job, "child", {
+    value: null,
+    writable: true,
+    enumerable: false,
+    configurable: true
+  });
   jobs.set(id, job);
   return job;
 }
@@ -1409,19 +1415,78 @@ function appendJobOutput(job, chunk) {
   job.updatedAt = new Date().toISOString();
 }
 
+function appendJobLifecycleLine(job, message) {
+  appendJobOutput(job, `[webui] ${message}\n`);
+}
+
 function finishJob(job, exitCode) {
+  if (job.status === "cancelled") {
+    job.child = null;
+    job.childPid = null;
+    return;
+  }
   job.status = exitCode === 0 ? "success" : "failed";
   job.exitCode = exitCode;
   job.updatedAt = new Date().toISOString();
+  job.child = null;
+  job.childPid = null;
+  appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: ${job.status}. Exit code: ${job.exitCode}.`);
   archiveJobOutput(job);
 }
 
 function failJob(job, error) {
+  if (job.status === "cancelled") {
+    job.child = null;
+    job.childPid = null;
+    return;
+  }
   job.status = "failed";
   job.exitCode = -1;
   job.updatedAt = new Date().toISOString();
   job.output += `\n[webui-error] ${error.message}\n`;
+  job.child = null;
+  job.childPid = null;
+  appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: failed. Exit code: -1.`);
   archiveJobOutput(job);
+}
+
+function cancelJob(job) {
+  if (!job) {
+    throw new Error("Job not found.");
+  }
+  if (job.status !== "running") {
+    return job;
+  }
+  if (!job.childPid) {
+    throw new Error("No running process found for this job.");
+  }
+
+  const result = spawnSync("taskkill.exe", ["/PID", String(job.childPid), "/T", "/F"], {
+    encoding: "utf8",
+    windowsHide: true
+  });
+
+  if (result.stdout) {
+    appendJobOutput(job, result.stdout);
+  }
+  if (result.stderr) {
+    appendJobOutput(job, result.stderr);
+  }
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || "Failed to stop current job.").trim());
+  }
+
+  appendJobLifecycleLine(job, `Run cancelled. Job ID: ${job.id}.`);
+  job.status = "cancelled";
+  job.exitCode = -999;
+  job.updatedAt = new Date().toISOString();
+  job.child = null;
+  job.childPid = null;
+  archiveJobOutput(job);
+  return job;
 }
 
 function archiveJobOutput(job) {
@@ -1655,10 +1720,15 @@ function runScript(scriptName, params, meta) {
     pushArg(args, item.flag, item.value);
   });
 
+  appendJobLifecycleLine(job, `Run started. Job ID: ${job.id}. Route: ${meta?.route || ""}. Script: ${scriptName}.`);
+
   const child = spawn("powershell.exe", args, {
     cwd: ENGINE_ROOT,
     env: process.env
   });
+
+  job.child = child;
+  job.childPid = child.pid;
 
   child.stdout.on("data", (chunk) => appendJobOutput(job, chunk.toString("utf8")));
   child.stderr.on("data", (chunk) => appendJobOutput(job, chunk.toString("utf8")));
@@ -2506,6 +2576,23 @@ const server = http.createServer(async (req, res) => {
         fileName: "kobo_account_basic_info.md",
         relativePath: path.relative(paths.bookRoot, outputPath)
       });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && /^\/api\/jobs\/[^/]+\/cancel$/.test(url.pathname)) {
+    const jobId = url.pathname.split("/")[3];
+    const job = jobs.get(jobId);
+    if (!job) {
+      sendJson(res, 404, { error: "Job not found." });
+      return;
+    }
+
+    try {
+      cancelJob(job);
+      sendJson(res, 200, { ok: true, job });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
