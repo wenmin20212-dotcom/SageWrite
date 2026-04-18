@@ -108,6 +108,28 @@ body {
   font-size: 1.7rem;
 }
 
+.status-card-model {
+  display: block;
+}
+
+.status-card-model input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1.05rem;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--ink);
+}
+
+.status-card-hint {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .layout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -770,6 +792,45 @@ textarea {
 .cover-browser {
   display: grid;
   gap: 14px;
+}
+
+.cover-workbench-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.cover-workbench-stack .workbench-shell,
+.cover-panel-body > .workbench-shell {
+  margin-top: 0;
+}
+
+.cover-meta-grid,
+.cover-visual-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.cover-submit-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cover-folder-notes {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(29, 42, 34, 0.08);
+  background: rgba(251, 246, 238, 0.82);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.cover-submit-actions .primary-button,
+.cover-submit-actions .ghost-button {
+  flex: 1 1 280px;
 }
 
 .publish-browser {
@@ -2027,6 +2088,11 @@ textarea {
 
   .cover-gallery-grid {
     grid-template-columns: 1fr;
+  }
+
+  .cover-submit-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .cover-copy-grid {

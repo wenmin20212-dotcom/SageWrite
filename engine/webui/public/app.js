@@ -36,9 +36,16 @@ const STRUCTURE_WORKBENCH_STORAGE_KEY = "sagewrite-structure-workbench-open";
 const EXPAND_WORKBENCH_STORAGE_KEY = "sagewrite-expand-workbench-open";
 const WRITE_WORKBENCH_STORAGE_KEY = "sagewrite-write-workbench-open";
 const TRANSLATE_WORKBENCH_STORAGE_KEY = "sagewrite-translate-workbench-open";
+const REFINE_WORKBENCH_STORAGE_KEY = "sagewrite-refine-workbench-open";
 const CHECK_WORKBENCH_STORAGE_KEY = "sagewrite-check-workbench-open";
+const COVER_METADATA_WORKBENCH_STORAGE_KEY = "sagewrite-cover-metadata-workbench-open";
+const COVER_VISUAL_WORKBENCH_STORAGE_KEY = "sagewrite-cover-visual-workbench-open";
+const COVER_OPERATIONS_WORKBENCH_STORAGE_KEY = "sagewrite-cover-operations-workbench-open";
+const COVER_RESULTS_WORKBENCH_STORAGE_KEY = "sagewrite-cover-results-workbench-open";
 const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
 const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
+const SELECTED_BOOKNAME_STORAGE_KEY = "sagewrite-selected-bookname";
+const DEFAULT_MODEL_STORAGE_KEY = "sagewrite-default-model-name";
 const PUBLISH_PANEL_STORAGE_KEY = "sagewrite-publish-panel-expanded";
 const PUBLISH_PREVIEW_COLUMN_STORAGE_KEY = "sagewrite-publish-preview-column-expanded";
 const PUBLISH_PREVIEW_PLATFORM_STORAGE_KEY = "sagewrite-publish-preview-platform";
@@ -47,6 +54,8 @@ const PUBLISH_RECOMMENDED_CARD_STORAGE_KEY = "sagewrite-publish-recommended-card
 const PUBLISH_RAW_TOGGLE_STORAGE_KEY = "sagewrite-publish-raw-toggle-open";
 const LANGUAGE_LABELS = {
   zh: "中文",
+  "zh-tw": "繁體中文（台灣）",
+  "zh-hant": "繁體中文",
   en: "English",
   ms: "Bahasa Melayu",
   fr: "Français",
@@ -98,6 +107,38 @@ function setLog(text) {
 
 function getBookName() {
   return $("#bookName").value.trim();
+}
+
+function setRememberedBookName(bookName) {
+  const value = String(bookName || "").trim();
+  if (!value) {
+    localStorage.removeItem(SELECTED_BOOKNAME_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(SELECTED_BOOKNAME_STORAGE_KEY, value);
+}
+
+function getRememberedBookName() {
+  return String(localStorage.getItem(SELECTED_BOOKNAME_STORAGE_KEY) || "").trim();
+}
+
+function getDefaultModelName() {
+  return String(localStorage.getItem(DEFAULT_MODEL_STORAGE_KEY) || "gpt-5.2").trim() || "gpt-5.2";
+}
+
+function setDefaultModelName(value) {
+  const normalized = String(value || "").trim() || "gpt-5.2";
+  localStorage.setItem(DEFAULT_MODEL_STORAGE_KEY, normalized);
+
+  const heroField = $("#default-model-name");
+  if (heroField && heroField.value !== normalized) {
+    heroField.value = normalized;
+  }
+
+  const refineField = $('#refine-form [name="model"]');
+  if (refineField) {
+    refineField.value = normalized;
+  }
 }
 
 function setCoverPanelExpanded(expanded) {
@@ -2492,20 +2533,34 @@ function renderWorkspaces(workspaces) {
     `;
     button.addEventListener("click", () => {
       $("#bookName").value = item.bookName;
+      setRememberedBookName(item.bookName);
       state.selectedRunKey = "";
       renderWorkspaceSelection(item);
     });
     wrap.appendChild(button);
   });
 
-  const selected = workspaces.find((item) => item.bookName === getBookName());
+  const currentBookName = getBookName();
+  const rememberedBookName = getRememberedBookName();
+  const preferredBookName = currentBookName || rememberedBookName;
+  if (!currentBookName && preferredBookName) {
+    $("#bookName").value = preferredBookName;
+  }
+
+  const selected = workspaces.find((item) => item.bookName === preferredBookName);
+  if (selected) {
+    $("#bookName").value = selected.bookName;
+    setRememberedBookName(selected.bookName);
+  } else if (preferredBookName) {
+    setRememberedBookName("");
+  }
   renderWorkspaceSelection(selected || null);
 }
 
 async function refreshStatus() {
   const status = await api("/api/status");
-  $("#api-key-status").textContent = status.hasOpenAIKey ? "已配置" : "未配置";
   $("#workspace-count").textContent = String(status.workspaces.length);
+  setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
 }
 
@@ -2520,15 +2575,17 @@ async function pollJob(jobId) {
 
   if (job.status === "running") {
     setStatusBadge("运行中", "running");
-    state.pollTimer = setTimeout(() => pollJob(jobId), 1200);
-    return;
+    await new Promise((resolve) => {
+      state.pollTimer = setTimeout(resolve, 1200);
+    });
+    return pollJob(jobId);
   }
 
   setStatusBadge(job.status === "success" ? "成功" : "失败", job.status === "success" ? "success" : "failed");
   if (job.meta?.route === "edit" && job.meta?.bookName) {
     delete state.preflightCache[job.meta.bookName];
   }
-  if (job.meta?.route === "cover" && job.meta?.bookName) {
+  if (job.meta?.route?.startsWith("cover") && job.meta?.bookName) {
     delete state.coverCache[job.meta.bookName];
     delete state.coverCopyCache[job.meta.bookName];
     delete state.frontmatterCache[job.meta.bookName];
@@ -2547,7 +2604,7 @@ async function pollJob(jobId) {
       loadPreflightReport(selected);
     }
   }
-  if (job.meta?.route === "cover" && job.meta?.bookName) {
+  if (job.meta?.route?.startsWith("cover") && job.meta?.bookName) {
     const selected = state.workspaces.find((item) => item.bookName === job.meta.bookName) || null;
     if (selected) {
       loadCoverArtifacts(selected);
@@ -2561,6 +2618,8 @@ async function pollJob(jobId) {
       loadPublishArtifacts(selected, getPublishLanguage());
     }
   }
+
+  return job;
 }
 
 async function run(route, payload) {
@@ -2575,6 +2634,69 @@ async function run(route, payload) {
 
 function intOrEmpty(value) {
   return value ? Number(value) : undefined;
+}
+
+function buildCoverPayload(form) {
+  const payload = formToObject(form);
+  payload.bookName = requireBookName();
+  payload.subtitle = ($("#cover-copy-subtitle")?.value || "").trim();
+  payload.variants = intOrEmpty(payload.variants) || 4;
+  return payload;
+}
+
+async function generateCoverMidjourneyPrompt() {
+  const form = $("#cover-form");
+  if (!form) {
+    throw new Error("Cover form not found.");
+  }
+
+  const payload = buildCoverPayload(form);
+  const result = await api("/api/cover-midjourney-prompt", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  const promptField = $("#cover-midjourney-prompt");
+  if (promptField) {
+    promptField.value = result.prompt || "";
+  }
+
+  setStatusBadge("已生成", "success");
+  setLog("已生成 MidJourney 封面底图提示词。");
+}
+
+async function submitCoverAiRequest() {
+  const form = $("#cover-form");
+  if (!form) {
+    throw new Error("Cover form not found.");
+  }
+
+  const requestField = $("#cover-ai-request");
+  const responseField = $("#cover-ai-response");
+  const userRequest = (requestField?.value || "").trim();
+  if (!userRequest) {
+    throw new Error("请先输入一段要求。");
+  }
+
+  if (responseField) {
+    responseField.value = "AI 正在思考，请稍候...";
+  }
+
+  const payload = buildCoverPayload(form);
+  payload.request = userRequest;
+  const job = await run("cover-assist", payload);
+  if (job?.status !== "success") {
+    throw new Error("AI 助手脚本执行失败。");
+  }
+
+  const result = await api(`/api/cover-assistant-result?bookName=${encodeURIComponent(payload.bookName)}&t=${Date.now()}`);
+
+  if (responseField) {
+    responseField.value = result.assistantResult?.response || result.responseMarkdown || "";
+  }
+
+  setStatusBadge("已生成", "success");
+  setLog("AI 助手已返回结果。");
 }
 
 function setupForms() {
@@ -2606,8 +2728,28 @@ function setupForms() {
     setWorkbenchOpen("#translate-workbench-shell", TRANSLATE_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
   });
 
+  $("#refine-workbench-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#refine-workbench-shell", REFINE_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
   $("#check-workbench-shell")?.addEventListener("toggle", (event) => {
     setWorkbenchOpen("#check-workbench-shell", CHECK_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#cover-metadata-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#cover-metadata-shell", COVER_METADATA_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#cover-visual-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#cover-visual-shell", COVER_VISUAL_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#cover-operations-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#cover-operations-shell", COVER_OPERATIONS_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#cover-results-shell")?.addEventListener("toggle", (event) => {
+    setWorkbenchOpen("#cover-results-shell", COVER_RESULTS_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
   });
 
   $("#build-workbench-shell")?.addEventListener("toggle", (event) => {
@@ -2728,6 +2870,46 @@ function setupForms() {
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
+  });
+
+  $("#refine-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = formToObject(event.currentTarget);
+      payload.bookName = requireBookName();
+      payload.model = (payload.model || getDefaultModelName()).trim();
+      payload.chapter = intOrEmpty(payload.chapter);
+      payload.startChapter = intOrEmpty(payload.startChapter);
+      payload.endChapter = intOrEmpty(payload.endChapter);
+
+      if (!payload.language) {
+        throw new Error("请选择目标语言。");
+      }
+      if (!payload.model) {
+        throw new Error("请填写模型名称。");
+      }
+      if (payload.mode === "chapter" && !payload.chapter) {
+        throw new Error("单章修饰需要填写章节编号。");
+      }
+      if (payload.mode === "range" && (!payload.startChapter || !payload.endChapter)) {
+        throw new Error("区间修饰需要同时填写开始和结束章节。");
+      }
+
+      await run("refine-translation", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#default-model-name")?.addEventListener("change", (event) => {
+    setDefaultModelName(event.currentTarget?.value || "gpt-5.2");
+    setStatusBadge("已保存", "success");
+    setLog(`默认模型已切换为 ${getDefaultModelName()}。`);
+  });
+
+  $("#default-model-name")?.addEventListener("blur", (event) => {
+    setDefaultModelName(event.currentTarget?.value || "gpt-5.2");
   });
 
   $("#edit-form").addEventListener("submit", async (event) => {
@@ -3011,6 +3193,23 @@ function setupForms() {
     });
   });
 
+  $("#generate-kobo-account-md")?.addEventListener("click", async () => {
+    try {
+      await api("/api/generate-kobo-account-md", {
+        method: "POST",
+        body: JSON.stringify({
+          bookName: requireBookName(),
+          language: getPublishLanguage()
+        })
+      });
+      setStatusBadge("已生成", "success");
+      setLog("已生成并打开 Kobo 开户基本情况 MD。");
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#open-powershell-test").addEventListener("click", async () => {
     try {
       await api("/api/open-powershell-test", {
@@ -3028,14 +3227,33 @@ function setupForms() {
   $("#cover-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      const payload = formToObject(event.currentTarget);
-      payload.bookName = requireBookName();
-      payload.variants = intOrEmpty(payload.variants) || 4;
+      const payload = buildCoverPayload(event.currentTarget);
       await run("cover", payload);
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
+  });
+
+  [
+    ["#run-cover-drafts", "cover-drafts", "已开始生成 drafts。"],
+    ["#run-cover-layout", "cover-layout", "已开始基于当前草稿生成 layout。"],
+    ["#run-cover-mockup", "cover-mockup", "已开始基于当前 layout 生成 mockup。"]
+  ].forEach(([selector, route, startMessage]) => {
+    $(selector)?.addEventListener("click", async () => {
+      try {
+        setLog(startMessage);
+        const form = $("#cover-form");
+        if (!form) {
+          throw new Error("Cover form not found.");
+        }
+        const payload = buildCoverPayload(form);
+        await run(route, payload);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+    });
   });
 
   $("#toggle-cover-panel").addEventListener("click", () => {
@@ -3062,6 +3280,28 @@ function setupForms() {
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
+    }
+  });
+
+  $("#generate-cover-midjourney-prompt")?.addEventListener("click", async () => {
+    try {
+      await generateCoverMidjourneyPrompt();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#submit-cover-ai-request")?.addEventListener("click", async () => {
+    try {
+      await submitCoverAiRequest();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+      const responseField = $("#cover-ai-response");
+      if (responseField) {
+        responseField.value = `请求失败：${error.message}`;
+      }
     }
   });
 
@@ -3179,6 +3419,7 @@ function setupForms() {
   });
 
   $("#bookName").addEventListener("input", () => {
+    setRememberedBookName(getBookName());
     const selected = state.workspaces.find((item) => item.bookName === getBookName());
     state.selectedRunKey = "";
     renderWorkspaceSelection(selected || null);
@@ -3219,12 +3460,18 @@ initWorkbenchState("#structure-workbench-shell", STRUCTURE_WORKBENCH_STORAGE_KEY
 initWorkbenchState("#expand-workbench-shell", EXPAND_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#write-workbench-shell", WRITE_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#translate-workbench-shell", TRANSLATE_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#refine-workbench-shell", REFINE_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#check-workbench-shell", CHECK_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#cover-metadata-shell", COVER_METADATA_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#cover-visual-shell", COVER_VISUAL_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#cover-operations-shell", COVER_OPERATIONS_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#cover-results-shell", COVER_RESULTS_WORKBENCH_STORAGE_KEY);
 initCoverPanelState();
 initBuildWorkbenchState();
 initPublishPanelState();
 initPublishPreviewColumnState();
 initPublishUiState();
+setDefaultModelName(getDefaultModelName());
   setupForms();
   setWriteNotesStatus();
   try {

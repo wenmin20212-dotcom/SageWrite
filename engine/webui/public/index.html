@@ -10,7 +10,7 @@
     <div class="page-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.04.09-multilingual-build</span></p>
+        <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.04.16-multilingual-build</span></p>
           <h1>写作引擎 Web 控制台</h1>
           <p class="hero-copy">
             用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -18,8 +18,15 @@
         </div>
         <div class="hero-status">
           <div class="status-card">
-            <span>OpenAI Key</span>
-            <strong id="api-key-status">检查中</strong>
+            <span>模型名称</span>
+            <label class="status-card-model">
+              <input id="default-model-name" list="default-model-options" value="gpt-5.2" placeholder="例如 gpt-5.2 或 gpt-5.4">
+            </label>
+            <datalist id="default-model-options">
+              <option value="gpt-5.2"></option>
+              <option value="gpt-5.4"></option>
+            </datalist>
+            <small id="default-model-hint" class="status-card-hint">可切换默认模型</small>
           </div>
           <div class="status-card">
             <span>工作区数量</span>
@@ -297,6 +304,7 @@
                   <span>目标语言</span>
                   <select name="language">
                     <option value="en">英语 / en</option>
+                    <option value="zh-tw">繁體中文（台灣） / zh-tw</option>
                     <option value="ms">马来语 / ms</option>
                     <option value="fr">法语 / fr</option>
                     <option value="de">德语 / de</option>
@@ -336,6 +344,77 @@
               </form>
               <div class="translation-note">
                 译文会输出到 `03_translation/&lt;语言代码&gt;/...`，不会覆盖原始中文 Markdown。
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>03R 多语言修饰</h2>
+          </div>
+          <details id="refine-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Refine</span>
+                <strong class="workbench-title">多语言修饰工作台</strong>
+                <span class="workbench-meta">选择目标语言、修饰范围与重跑策略，独立运行 03r-refine.ps1 做语法检查、文字检查与语言润色</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <form id="refine-form" class="form-grid">
+                <label class="field">
+                  <span>目标语言</span>
+                  <select name="language">
+                    <option value="en">英语 / en</option>
+                    <option value="zh-tw">繁體中文（台灣） / zh-tw</option>
+                    <option value="ms">马来语 / ms</option>
+                    <option value="fr">法语 / fr</option>
+                    <option value="de">德语 / de</option>
+                    <option value="es">西班牙语 / es</option>
+                    <option value="it">意大利语 / it</option>
+                    <option value="pt">葡萄牙语 / pt</option>
+                    <option value="ja">日语 / ja</option>
+                    <option value="ko">韩语 / ko</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>模型名称</span>
+                  <input name="model" list="refine-model-options" value="gpt-5.2" placeholder="例如 gpt-5.2 或 gpt-5.4">
+                  <datalist id="refine-model-options">
+                    <option value="gpt-5.2"></option>
+                    <option value="gpt-5.4"></option>
+                  </datalist>
+                </label>
+                <label class="field">
+                  <span>模式</span>
+                  <select name="mode">
+                    <option value="all">全部修饰</option>
+                    <option value="chapter">单章修饰</option>
+                    <option value="range">区间修饰</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>单章编号</span>
+                  <input name="chapter" type="number" min="1">
+                </label>
+                <label class="field split">
+                  <span>章节区间</span>
+                  <div class="split-row">
+                    <input name="startChapter" type="number" min="1" placeholder="开始">
+                    <input name="endChapter" type="number" min="1" placeholder="结束">
+                  </div>
+                </label>
+                <label class="checkbox-field">
+                  <input name="force" type="checkbox">
+                  <span>即使已修饰过且文件未变也重新处理</span>
+                </label>
+                <div class="translate-submit-actions">
+                  <button class="primary-button" type="submit">运行 03r-refine.ps1</button>
+                </div>
+              </form>
+              <div class="translation-note">
+                修饰会直接作用于 `03_translation/&lt;语言代码&gt;/...` 内现有 Markdown，并在 `_refine_backups` 下自动保留备份。
               </div>
             </div>
           </details>
@@ -403,6 +482,7 @@
                   <span>语言版本</span>
                   <select name="language">
                     <option value="zh">中文（zh）</option>
+                    <option value="zh-tw">繁體中文（台灣）（zh-tw）</option>
                     <option value="en">English（en）</option>
                     <option value="ms">Bahasa Melayu（ms）</option>
                     <option value="fr">Français（fr）</option>
@@ -437,159 +517,234 @@
             <button id="toggle-cover-panel" class="ghost-button" type="button" aria-expanded="false">展开</button>
           </div>
           <div id="cover-panel-body" class="cover-panel-body">
-          <form id="cover-form" class="form-grid">
-            <label class="field">
-              <span>封面标题</span>
-              <input name="title" placeholder="默认可留空，自动取 objective.md 中的标题">
-            </label>
-            <label class="field">
-              <span>副标题</span>
-              <input name="subtitle" placeholder="可选">
-            </label>
-            <label class="field">
-              <span>作者名</span>
-              <input name="author" placeholder="可选">
-            </label>
-            <label class="field">
-              <span>候选数量</span>
-              <input name="variants" type="number" min="1" max="20" value="4">
-            </label>
-            <label class="field">
-              <span>模式</span>
-              <select name="mode">
-                <option value="auto">auto</option>
-                <option value="fast">fast</option>
-                <option value="full">full</option>
-              </select>
-            </label>
-            <label class="checkbox-field">
-              <input name="force" type="checkbox">
-              <span>强制覆盖已有封面输出</span>
-            </label>
-            <label class="checkbox-field">
-              <input name="skipLayout" type="checkbox">
-              <span>跳过 layout</span>
-            </label>
-            <label class="checkbox-field">
-              <input name="skipMockup" type="checkbox">
-              <span>跳过 mockup</span>
-            </label>
-            <button class="primary-button" type="submit">运行 08-cover.ps1</button>
-          </form>
+            <form id="cover-form" class="cover-workbench-stack">
+              <details id="cover-metadata-shell" class="workbench-shell" open>
+                <summary>
+                  <div class="workbench-summary">
+                    <span class="workbench-kicker">Metadata</span>
+                    <strong class="workbench-title">封面元数据工作台</strong>
+                    <span class="workbench-meta">先确认标题、副标题、作者名和封面文案，这些是后面所有视觉输出的共同基础。</span>
+                  </div>
+                </summary>
+                <div class="workbench-body">
+                  <div class="form-grid cover-meta-grid">
+                    <label class="field">
+                      <span>封面标题</span>
+                      <input name="title" placeholder="默认可留空，自动取 objective.md 中的标题">
+                    </label>
+                    <label class="field">
+                      <span>作者名</span>
+                      <input name="author" placeholder="可选">
+                    </label>
+                  </div>
 
-          <div class="cover-browser">
-            <div class="cover-browser-header">
-              <div class="cover-browser-title">封面结果浏览</div>
-              <div class="cover-folder-actions">
-                <button class="ghost-button" id="open-cover-drafts" type="button">打开 drafts</button>
-                <button class="ghost-button" id="open-cover-layout" type="button">打开 layout</button>
-                <button class="ghost-button" id="open-cover-mockup" type="button">打开 mockup</button>
-                <button class="ghost-button" id="open-cover-final" type="button">打开 final</button>
-              </div>
-            </div>
+                  <div class="cover-copy-editor-wrap">
+                    <div class="cover-report-title">封面文案编辑</div>
+                    <div class="cover-copy-grid">
+                      <label class="field">
+                        <span>副标题</span>
+                        <input id="cover-copy-subtitle" type="text">
+                      </label>
+                      <label class="field">
+                        <span>封底短句</span>
+                        <input id="cover-copy-hook" type="text">
+                      </label>
+                      <label class="field">
+                        <span>腰封文案</span>
+                        <input id="cover-copy-obi" type="text">
+                      </label>
+                      <label class="field">
+                        <span>宣传语</span>
+                        <input id="cover-copy-tagline" type="text">
+                      </label>
+                      <label class="field">
+                        <span>书脊文案</span>
+                        <input id="cover-copy-spine" type="text">
+                      </label>
+                      <label class="field cover-copy-wide">
+                        <span>封底摘要</span>
+                        <textarea id="cover-copy-blurb" rows="5"></textarea>
+                      </label>
+                      <label class="field cover-copy-wide">
+                        <span>作者简介</span>
+                        <textarea id="cover-copy-author-bio" rows="4"></textarea>
+                      </label>
+                      <label class="field cover-copy-wide">
+                        <span>编辑备注</span>
+                        <textarea id="cover-copy-editor-notes" rows="4" placeholder="每行一条"></textarea>
+                      </label>
+                    </div>
+                    <div class="cover-copy-actions">
+                      <button id="save-cover-copy" class="ghost-button" type="button">保存封面文案</button>
+                    </div>
+                    <div class="cover-copy-candidates">
+                      <div class="cover-report-title">文案候选池</div>
+                      <textarea id="cover-copy-candidates" class="cover-report" readonly spellcheck="false">运行 08g-copy.ps1 后，这里会显示候选池。</textarea>
+                    </div>
+                  </div>
+                </div>
+              </details>
 
-            <div id="cover-summary" class="cover-summary">
-              运行 08-cover.ps1 后，这里会显示封面系统的输出摘要。
-            </div>
+              <details id="cover-visual-shell" class="workbench-shell" open>
+                <summary>
+                  <div class="workbench-summary">
+                    <span class="workbench-kicker">Base Image</span>
+                    <strong class="workbench-title">封面底图工作台</strong>
+                    <span class="workbench-meta">在这里控制底图候选数量、生成节奏和阶段推进方式，先把封面底图方向定下来，再进入后续排版和展示。</span>
+                  </div>
+                </summary>
+                <div class="workbench-body">
+                  <div class="form-grid cover-visual-grid">
+                    <label class="field">
+                      <span>候选数量</span>
+                      <input name="variants" type="number" min="1" max="20" value="4">
+                    </label>
+                    <label class="field">
+                      <span>模式</span>
+                      <select name="mode">
+                        <option value="auto">auto</option>
+                        <option value="fast">fast</option>
+                        <option value="full">full</option>
+                      </select>
+                    </label>
+                    <label class="checkbox-field">
+                      <input name="force" type="checkbox">
+                      <span>强制覆盖已有封面输出</span>
+                    </label>
+                    <label class="checkbox-field">
+                      <input name="skipLayout" type="checkbox">
+                      <span>跳过 layout</span>
+                    </label>
+                    <label class="checkbox-field">
+                      <input name="skipMockup" type="checkbox">
+                      <span>跳过 mockup</span>
+                    </label>
+                  </div>
+                  <div class="cover-copy-actions">
+                    <button id="generate-cover-midjourney-prompt" class="ghost-button" type="button">生成一段MidJourney的用于生成封面的提示词</button>
+                  </div>
+                  <div class="cover-report-wrap">
+                    <div class="cover-report-title">AI 对话框</div>
+                    <textarea id="cover-ai-request" class="cover-report" rows="7" spellcheck="false">你帮我生成一段 MidJourney 提示词，用于这本书的封面底图。</textarea>
+                    <div class="cover-copy-actions">
+                      <button id="submit-cover-ai-request" class="ghost-button" type="button">提交给 AI 助手</button>
+                    </div>
+                    <textarea id="cover-ai-response" class="cover-report" rows="9" readonly spellcheck="false">你在上面输入一段要求后，点击“提交给 AI 助手”，这里会显示模型返回的结果。</textarea>
+                  </div>
+                  <div class="cover-report-wrap">
+                    <div class="cover-report-title">MidJourney 封面底图提示词</div>
+                    <textarea id="cover-midjourney-prompt" class="cover-report" rows="9" readonly spellcheck="false">点击上方按钮后，这里会显示一段可直接参考的 MidJourney 封面底图提示词。</textarea>
+                  </div>
+                  <div class="cover-summary">
+                    这一层决定的是生成节奏和执行路径：想快速试方向时可以减少候选数或跳过中间阶段，想完整生成整套素材时就保持 full 流程。
+                  </div>
+                </div>
+              </details>
 
-            <div class="cover-copy-editor-wrap">
-              <div class="cover-report-title">封面文案编辑</div>
-              <div class="cover-copy-grid">
-                <label class="field">
-                  <span>副标题</span>
-                  <input id="cover-copy-subtitle" type="text">
-                </label>
-                <label class="field">
-                  <span>封底短句</span>
-                  <input id="cover-copy-hook" type="text">
-                </label>
-                <label class="field">
-                  <span>腰封文案</span>
-                  <input id="cover-copy-obi" type="text">
-                </label>
-                <label class="field">
-                  <span>宣传语</span>
-                  <input id="cover-copy-tagline" type="text">
-                </label>
-                <label class="field">
-                  <span>书脊文案</span>
-                  <input id="cover-copy-spine" type="text">
-                </label>
-                <label class="field cover-copy-wide">
-                  <span>封底摘要</span>
-                  <textarea id="cover-copy-blurb" rows="5"></textarea>
-                </label>
-                <label class="field cover-copy-wide">
-                  <span>作者简介</span>
-                  <textarea id="cover-copy-author-bio" rows="4"></textarea>
-                </label>
-                <label class="field cover-copy-wide">
-                  <span>编辑备注</span>
-                  <textarea id="cover-copy-editor-notes" rows="4" placeholder="每行一条"></textarea>
-                </label>
-              </div>
-              <div class="cover-copy-actions">
-                <button id="save-cover-copy" class="ghost-button" type="button">保存封面文案</button>
-              </div>
-              <div class="cover-copy-candidates">
-                <div class="cover-report-title">文案候选池</div>
-                <textarea id="cover-copy-candidates" class="cover-report" readonly spellcheck="false">运行 08g-copy.ps1 后，这里会显示候选池。</textarea>
-              </div>
-            </div>
+              <details id="cover-operations-shell" class="workbench-shell" open>
+                <summary>
+                  <div class="workbench-summary">
+                    <span class="workbench-kicker">Run</span>
+                    <strong class="workbench-title">生成操作工作台</strong>
+                    <span class="workbench-meta">这里集中放执行入口和目录打开动作，适合连续试错、快速迭代封面结果。</span>
+                  </div>
+                </summary>
+                <div class="workbench-body">
+                  <div class="cover-browser-header">
+                    <div class="cover-browser-title">封面执行入口</div>
+                    <div class="cover-folder-actions">
+                      <button class="ghost-button" id="open-cover-drafts" type="button">打开 drafts</button>
+                      <button class="ghost-button" id="open-cover-layout" type="button">打开 layout</button>
+                      <button class="ghost-button" id="open-cover-mockup" type="button">打开 mockup</button>
+                      <button class="ghost-button" id="open-cover-final" type="button">打开 final</button>
+                    </div>
+                  </div>
+                  <div class="cover-folder-notes">
+                    <div>drafts：草稿方向</div>
+                    <div>layout：排版稿</div>
+                    <div>mockup：展示样机</div>
+                    <div>final：最终成品</div>
+                  </div>
+                  <div class="cover-submit-actions">
+                    <button class="ghost-button" id="run-cover-drafts" type="button">生成草稿 drafts</button>
+                    <button class="ghost-button" id="run-cover-layout" type="button">基于当前草稿生成 layout</button>
+                    <button class="ghost-button" id="run-cover-mockup" type="button">基于 layout 生成 mockup</button>
+                    <button class="primary-button" type="submit">运行 08-cover.ps1</button>
+                  </div>
+                  <div class="cover-summary">
+                    你现在可以分三步推进：先生成 drafts，人工看方向后再推进到 layout，再基于 layout 生成 mockup。需要整链路重跑时，下面仍然保留原来的 `运行 08-cover.ps1`。
+                  </div>
+                </div>
+              </details>
+            </form>
 
-            <div class="cover-frontmatter-wrap">
-              <div class="cover-report-title">前置三页（ebook）</div>
-              <div class="cover-frontmatter-grid">
-                <label class="field cover-frontmatter-wide">
-                  <span>封面页（cover_page.md）</span>
-                  <textarea id="frontmatter-cover-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示封面页 markdown。</textarea>
-                </label>
-                <label class="field cover-frontmatter-wide">
-                  <span>扉页（title_page.md）</span>
-                  <textarea id="frontmatter-title-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示扉页 markdown。</textarea>
-                </label>
-                <label class="field cover-frontmatter-wide">
-                  <span>版权页（copyright_page.md）</span>
-                  <textarea id="frontmatter-copyright-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示版权页 markdown。</textarea>
-                </label>
-              </div>
-              <div class="cover-copy-actions">
-                <button id="save-frontmatter" class="ghost-button" type="button">保存前置三页</button>
-              </div>
-            </div>
+            <details id="cover-results-shell" class="workbench-shell" open>
+              <summary>
+                <div class="workbench-summary">
+                  <span class="workbench-kicker">Review</span>
+                  <strong class="workbench-title">结果检查工作台</strong>
+                  <span class="workbench-meta">查看封面输出摘要、前置三页、各阶段图像结果和最终导出报告。</span>
+                </div>
+              </summary>
+              <div class="workbench-body">
+                <div id="cover-summary" class="cover-summary">
+                  运行 08-cover.ps1 后，这里会显示封面系统的输出摘要。
+                </div>
 
-            <div class="cover-gallery-grid">
-              <div class="cover-gallery-section">
-                <div class="cover-gallery-title">Drafts</div>
-                <div id="cover-drafts" class="cover-gallery-list">
-                  <div class="cover-gallery-empty">暂无 drafts 结果。</div>
+                <div class="cover-frontmatter-wrap">
+                  <div class="cover-report-title">前置三页（ebook）</div>
+                  <div class="cover-frontmatter-grid">
+                    <label class="field cover-frontmatter-wide">
+                      <span>封面页（cover_page.md）</span>
+                      <textarea id="frontmatter-cover-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示封面页 markdown。</textarea>
+                    </label>
+                    <label class="field cover-frontmatter-wide">
+                      <span>扉页（title_page.md）</span>
+                      <textarea id="frontmatter-title-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示扉页 markdown。</textarea>
+                    </label>
+                    <label class="field cover-frontmatter-wide">
+                      <span>版权页（copyright_page.md）</span>
+                      <textarea id="frontmatter-copyright-page" class="cover-report" rows="10" spellcheck="false">运行 08h-frontmatter.ps1 后，这里会显示版权页 markdown。</textarea>
+                    </label>
+                  </div>
+                  <div class="cover-copy-actions">
+                    <button id="save-frontmatter" class="ghost-button" type="button">保存前置三页</button>
+                  </div>
+                </div>
+
+                <div class="cover-gallery-grid">
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">Drafts</div>
+                    <div id="cover-drafts" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">暂无 drafts 结果。</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">Layout</div>
+                    <div id="cover-layout" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">暂无 layout 结果。</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">Mockup</div>
+                    <div id="cover-mockup" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">暂无 mockup 结果。</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">Final</div>
+                    <div id="cover-final" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">暂无 final 结果。</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="cover-report-wrap">
+                  <div class="cover-report-title">导出报告（cover_report.md）</div>
+                  <textarea id="cover-report" class="cover-report" readonly spellcheck="false">运行 08-cover.ps1 后，这里会显示 final/cover_report.md 的内容。</textarea>
                 </div>
               </div>
-              <div class="cover-gallery-section">
-                <div class="cover-gallery-title">Layout</div>
-                <div id="cover-layout" class="cover-gallery-list">
-                  <div class="cover-gallery-empty">暂无 layout 结果。</div>
-                </div>
-              </div>
-              <div class="cover-gallery-section">
-                <div class="cover-gallery-title">Mockup</div>
-                <div id="cover-mockup" class="cover-gallery-list">
-                  <div class="cover-gallery-empty">暂无 mockup 结果。</div>
-                </div>
-              </div>
-              <div class="cover-gallery-section">
-                <div class="cover-gallery-title">Final</div>
-                <div id="cover-final" class="cover-gallery-list">
-                  <div class="cover-gallery-empty">暂无 final 结果。</div>
-                </div>
-              </div>
-            </div>
-
-            <div class="cover-report-wrap">
-              <div class="cover-report-title">导出报告（cover_report.md）</div>
-              <textarea id="cover-report" class="cover-report" readonly spellcheck="false">运行 08-cover.ps1 后，这里会显示 final/cover_report.md 的内容。</textarea>
-            </div>
-          </div>
+            </details>
           </div>
         </section>
 
@@ -609,6 +764,7 @@
               <span>语言版本</span>
               <select id="publish-language" name="language">
                 <option value="zh">中文（zh）</option>
+                <option value="zh-tw">繁體中文（台灣）（zh-tw）</option>
                 <option value="en">English（en）</option>
                 <option value="ms">Bahasa Melayu（ms）</option>
                 <option value="fr">Français（fr）</option>
@@ -801,6 +957,7 @@
                   <div class="publish-platform-group-body">
                     <div class="publish-platform-group-actions">
                       <div class="publish-platform-group-copy">这里集中放 Kobo 相关操作。展开这个工作台时，右侧预览会自动切到 Kobo。现在先把工作区壳子做好，后面再继续补 Kobo 的入口链接、平台说明和具体提交按钮。</div>
+                      <button id="generate-kobo-account-md" class="ghost-button" type="button">生成开户基本情况 MD</button>
                     </div>
                     <div class="publish-open-card">
                       <div class="cover-report-title">Kobo 发布入口链接</div>

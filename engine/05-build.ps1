@@ -40,6 +40,43 @@ $OutputRoot = Join-Path $BookRoot ("04_output\" + $LanguageCode)
 $LogRoot = $Context.LogRoot
 $BuildTempRoot = Join-Path $LogRoot ("_build_tmp_" + $LanguageCode)
 
+function Get-CoverImagePath {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$RootPath
+    )
+
+    $CandidateNames = @(
+        "cover.png",
+        "cover.jpg",
+        "cover.jpeg",
+        "cover.webp"
+    )
+
+    foreach ($Name in $CandidateNames) {
+        $CandidatePath = Join-Path $RootPath $Name
+        if (Test-Path $CandidatePath) {
+            return $CandidatePath
+        }
+    }
+
+    return $null
+}
+
+function New-CoverMarkdownContent {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ImageFileName
+    )
+
+    return @(
+        "![]($ImageFileName){ width=100% }",
+        "",
+        "\newpage",
+        ""
+    ) -join "`r`n"
+}
+
 function Get-FrontMatterValue {
     param(
         [Parameter(Mandatory=$true)]
@@ -243,6 +280,161 @@ function Set-TitleParagraphText {
             [void]$ParagraphNode.AppendChild($BreakRun)
         }
     }
+}
+
+function Ensure-ParagraphPageBreakBefore {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$ParagraphNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $ParagraphProps = $ParagraphNode.SelectSingleNode("w:pPr", $DocNs)
+    if ($null -eq $ParagraphProps) {
+        $ParagraphProps = $DocumentDoc.CreateElement("w", "pPr", $DocNs.LookupNamespace("w"))
+        [void]$ParagraphNode.PrependChild($ParagraphProps)
+    }
+
+    $PageBreakBeforeNode = $ParagraphProps.SelectSingleNode("w:pageBreakBefore", $DocNs)
+    if ($null -eq $PageBreakBeforeNode) {
+        $PageBreakBeforeNode = $DocumentDoc.CreateElement("w", "pageBreakBefore", $DocNs.LookupNamespace("w"))
+        [void]$ParagraphProps.AppendChild($PageBreakBeforeNode)
+    }
+}
+
+function Move-CoverBlockToFront {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$BodyNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $CoverParagraph = $BodyNode.SelectSingleNode("w:p[.//w:drawing][1]", $DocNs)
+    if ($null -eq $CoverParagraph) {
+        return $false
+    }
+
+    $NodesToMove = New-Object System.Collections.Generic.List[System.Xml.XmlNode]
+    $NodesToMove.Add($CoverParagraph)
+
+    $NextNode = $CoverParagraph.NextSibling
+    while ($null -ne $NextNode -and $NextNode.NodeType -ne [System.Xml.XmlNodeType]::Element) {
+        $NextNode = $NextNode.NextSibling
+    }
+
+    if ($null -ne $NextNode -and $NextNode.LocalName -eq "p") {
+        $CaptionStyle = $NextNode.SelectSingleNode("w:pPr/w:pStyle", $DocNs)
+        if ($null -ne $CaptionStyle -and $CaptionStyle.GetAttribute("val", $DocNs.LookupNamespace("w")) -eq "ImageCaption") {
+            $NodesToMove.Add($NextNode)
+        }
+    }
+
+    $FirstBodyChild = $BodyNode.FirstChild
+    foreach ($Node in $NodesToMove) {
+        [void]$BodyNode.RemoveChild($Node)
+    }
+
+    foreach ($Node in $NodesToMove) {
+        $ImportedNode = $DocumentDoc.ImportNode($Node, $true)
+        if ($null -ne $FirstBodyChild) {
+            [void]$BodyNode.InsertBefore($ImportedNode, $FirstBodyChild)
+        }
+        else {
+            [void]$BodyNode.AppendChild($ImportedNode)
+        }
+    }
+
+    return $true
+}
+
+function Clear-SectionHeaderFooter {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$SectPrNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    @($SectPrNode.SelectNodes("w:headerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
+    @($SectPrNode.SelectNodes("w:footerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
+
+    $TitlePgNode = $SectPrNode.SelectSingleNode("w:titlePg", $DocNs)
+    if ($null -ne $TitlePgNode) {
+        [void]$SectPrNode.RemoveChild($TitlePgNode)
+    }
+}
+
+function Set-SectionPageNumberStart {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$SectPrNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs,
+
+        [int]$StartAt = 1
+    )
+
+    $PageNumTypeNode = $SectPrNode.SelectSingleNode("w:pgNumType", $DocNs)
+    if ($null -eq $PageNumTypeNode) {
+        $PageNumTypeNode = $DocumentDoc.CreateElement("w", "pgNumType", $DocNs.LookupNamespace("w"))
+        [void]$SectPrNode.AppendChild($PageNumTypeNode)
+    }
+
+    [void]$PageNumTypeNode.SetAttribute("start", $DocNs.LookupNamespace("w"), [string]$StartAt)
+}
+
+function Remove-SectionPageNumberStart {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$SectPrNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $PageNumTypeNode = $SectPrNode.SelectSingleNode("w:pgNumType", $DocNs)
+    if ($null -ne $PageNumTypeNode) {
+        [void]$SectPrNode.RemoveChild($PageNumTypeNode)
+    }
+}
+
+function Set-SectionBreakType {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$SectPrNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs,
+
+        [Parameter(Mandatory=$true)]
+        [string]$TypeValue
+    )
+
+    $TypeNode = $SectPrNode.SelectSingleNode("w:type", $DocNs)
+    if ($null -eq $TypeNode) {
+        $TypeNode = $DocumentDoc.CreateElement("w", "type", $DocNs.LookupNamespace("w"))
+        [void]$SectPrNode.PrependChild($TypeNode)
+    }
+
+    [void]$TypeNode.SetAttribute("val", $DocNs.LookupNamespace("w"), $TypeValue)
 }
 
 function Update-DocxFormatting {
@@ -502,12 +694,17 @@ function Update-DocxFormatting {
         throw "document body node not found in generated document."
     }
 
+    $CoverMovedToFront = Move-CoverBlockToFront -DocumentDoc $DocumentDoc -BodyNode $BodyNode -DocNs $DocNs
+
     $TitlePageText = Get-TitlePageTitle -Title $DocumentTitle
     $TitleLines = @(($TitlePageText -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($TitleLines.Count -gt 1) {
-        $TitleParagraph = $BodyNode.SelectSingleNode("w:p[w:pPr/w:pStyle[@w:val='Title']][1]", $DocNs)
-        if ($null -ne $TitleParagraph) {
+    $TitleParagraph = $BodyNode.SelectSingleNode("w:p[w:pPr/w:pStyle[@w:val='Title']][1]", $DocNs)
+    if ($null -ne $TitleParagraph) {
+        if ($TitleLines.Count -gt 1) {
             Set-TitleParagraphText -DocumentDoc $DocumentDoc -ParagraphNode $TitleParagraph -DocNs $DocNs -Lines $TitleLines
+        }
+        if ($CoverMovedToFront) {
+            Ensure-ParagraphPageBreakBefore -DocumentDoc $DocumentDoc -ParagraphNode $TitleParagraph -DocNs $DocNs
         }
     }
 
@@ -520,18 +717,19 @@ function Update-DocxFormatting {
         [void]$BodyNode.AppendChild($SectPrNode)
     }
 
-    $PageNumTypeNode = $SectPrNode.SelectSingleNode("w:pgNumType", $DocNs)
-    if ($null -eq $PageNumTypeNode) {
-        $PageNumTypeNode = $DocumentDoc.CreateElement("w", "pgNumType", $DocNs.LookupNamespace("w"))
-        [void]$SectPrNode.AppendChild($PageNumTypeNode)
-    }
-    [void]$PageNumTypeNode.SetAttribute("start", $DocNs.LookupNamespace("w"), "1")
-
-    Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -FooterRelId $FooterRelId
-
     $HeadingParagraphs = @($BodyNode.SelectNodes("w:p[w:pPr/w:pStyle[@w:val='Heading1']]", $DocNs))
     $ParagraphNodes = @($BodyNode.SelectNodes("w:p", $DocNs))
-    foreach ($HeadingParagraph in $HeadingParagraphs) {
+
+    Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -FooterRelId $FooterRelId
+    if ($HeadingParagraphs.Count -le 1) {
+        Set-SectionPageNumberStart -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -StartAt 1
+    }
+    else {
+        Remove-SectionPageNumberStart -SectPrNode $SectPrNode -DocNs $DocNs
+    }
+
+    for ($HeadingNumber = 0; $HeadingNumber -lt $HeadingParagraphs.Count; $HeadingNumber++) {
+        $HeadingParagraph = $HeadingParagraphs[$HeadingNumber]
         $HeadingIndex = [Array]::IndexOf($ParagraphNodes, $HeadingParagraph)
         if ($HeadingIndex -le 0) {
             continue
@@ -550,16 +748,17 @@ function Update-DocxFormatting {
         }
 
         $SectionBreakSectPr = $DocumentDoc.ImportNode($SectPrNode.CloneNode($true), $true)
-        $TypeNode = $SectionBreakSectPr.SelectSingleNode("w:type", $DocNs)
-        if ($null -eq $TypeNode) {
-            $TypeNode = $DocumentDoc.CreateElement("w", "type", $DocNs.LookupNamespace("w"))
-            [void]$SectionBreakSectPr.PrependChild($TypeNode)
-        }
-        [void]$TypeNode.SetAttribute("val", $DocNs.LookupNamespace("w"), "nextPage")
+        Set-SectionBreakType -DocumentDoc $DocumentDoc -SectPrNode $SectionBreakSectPr -DocNs $DocNs -TypeValue "nextPage"
 
-        $SectionPgNumType = $SectionBreakSectPr.SelectSingleNode("w:pgNumType", $DocNs)
-        if ($null -ne $SectionPgNumType) {
-            [void]$SectionBreakSectPr.RemoveChild($SectionPgNumType)
+        if ($HeadingNumber -eq 0) {
+            Clear-SectionHeaderFooter -SectPrNode $SectionBreakSectPr -DocNs $DocNs
+            Remove-SectionPageNumberStart -SectPrNode $SectionBreakSectPr -DocNs $DocNs
+        }
+        elseif ($HeadingNumber -eq 1) {
+            Set-SectionPageNumberStart -DocumentDoc $DocumentDoc -SectPrNode $SectionBreakSectPr -DocNs $DocNs -StartAt 1
+        }
+        else {
+            Remove-SectionPageNumberStart -SectPrNode $SectionBreakSectPr -DocNs $DocNs
         }
 
         [void]$PrevParagraphPPr.AppendChild($SectionBreakSectPr)
@@ -656,6 +855,22 @@ if (Test-Path $BuildTempRoot) {
 New-Item -ItemType Directory -Path $BuildTempRoot -Force | Out-Null
 
 $BuildFiles = @()
+$CoverImagePath = Get-CoverImagePath -RootPath $SourceRoot
+if ($CoverImagePath) {
+    $CoverFileName = [System.IO.Path]::GetFileName($CoverImagePath)
+    $CoverTempPath = Join-Path $BuildTempRoot $CoverFileName
+    Copy-Item -LiteralPath $CoverImagePath -Destination $CoverTempPath -Force
+
+    $CoverMarkdownPath = Join-Path $BuildTempRoot "_cover.md"
+    $CoverMarkdown = New-CoverMarkdownContent -ImageFileName $CoverFileName
+    Set-Content -LiteralPath $CoverMarkdownPath -Encoding utf8 -Value $CoverMarkdown
+    $BuildFiles += $CoverMarkdownPath
+
+    Write-Host ""
+    Write-Host "Including cover image:"
+    Write-Host $CoverImagePath
+}
+
 foreach ($file in $mdFiles) {
     $Raw = Get-Content -LiteralPath $file.FullName -Raw
     $Body = Get-MarkdownBodyText -Content $Raw
@@ -701,6 +916,7 @@ $PandocArgs += $BuildFiles
 $PandocArgs += "--metadata-file=$MetaFile"
 $PandocArgs += "-o"
 $PandocArgs += $OutputFile
+$PandocArgs += "--resource-path=$BuildTempRoot"
 $PandocArgs += "--toc"
 $PandocArgs += "--standalone"
 
@@ -752,6 +968,8 @@ Complete-SageStep -Context $Context -Step "build" -State "success" -Message "Doc
     output = $OutputFile
     backup_output = $BackupFile
     chapter_count = $mdFiles.Count
+    cover_included = [bool]$CoverImagePath
+    cover_source = $CoverImagePath
     document_title = $DocumentTitle
     document_author = $DocumentAuthor
     auto_number = [bool]$AutoNumber

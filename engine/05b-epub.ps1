@@ -39,6 +39,43 @@ $OutputRoot = Join-Path $BookRoot ("04_output\" + $LanguageCode)
 $LogRoot = $Context.LogRoot
 $BuildTempRoot = Join-Path $LogRoot ("_build_epub_tmp_" + $LanguageCode)
 
+function Get-CoverImagePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath
+    )
+
+    $CandidateNames = @(
+        "cover.png",
+        "cover.jpg",
+        "cover.jpeg",
+        "cover.webp"
+    )
+
+    foreach ($Name in $CandidateNames) {
+        $CandidatePath = Join-Path $RootPath $Name
+        if (Test-Path $CandidatePath) {
+            return $CandidatePath
+        }
+    }
+
+    return $null
+}
+
+function New-CoverMarkdownContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ImageFileName
+    )
+
+    return @(
+        "![]($ImageFileName){ width=100% }",
+        "",
+        "\newpage",
+        ""
+    ) -join "`r`n"
+}
+
 function Get-FrontMatterValue {
     param(
         [Parameter(Mandatory = $true)]
@@ -168,6 +205,22 @@ if (Test-Path $BuildTempRoot) {
 New-Item -ItemType Directory -Path $BuildTempRoot -Force | Out-Null
 
 $BuildFiles = @()
+$CoverImagePath = Get-CoverImagePath -RootPath $SourceRoot
+if ($CoverImagePath) {
+    $CoverFileName = [System.IO.Path]::GetFileName($CoverImagePath)
+    $CoverTempPath = Join-Path $BuildTempRoot $CoverFileName
+    Copy-Item -LiteralPath $CoverImagePath -Destination $CoverTempPath -Force
+
+    $CoverMarkdownPath = Join-Path $BuildTempRoot "_cover.md"
+    $CoverMarkdown = New-CoverMarkdownContent -ImageFileName $CoverFileName
+    Set-Content -LiteralPath $CoverMarkdownPath -Encoding utf8 -Value $CoverMarkdown
+    $BuildFiles += $CoverMarkdownPath
+
+    Write-Host ""
+    Write-Host "Including cover image:"
+    Write-Host $CoverImagePath
+}
+
 foreach ($file in $mdFiles) {
     $Raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     $Body = Get-MarkdownBodyText -Content $Raw
@@ -212,8 +265,12 @@ $PandocArgs += $BuildFiles
 $PandocArgs += "--metadata-file=$MetaFile"
 $PandocArgs += "-o"
 $PandocArgs += $OutputFile
+$PandocArgs += "--resource-path=$BuildTempRoot"
 $PandocArgs += "--toc"
 $PandocArgs += "--standalone"
+if ($CoverImagePath) {
+    $PandocArgs += "--epub-cover-image=$CoverTempPath"
+}
 
 if ($AutoNumber) {
     Write-Host ""
@@ -261,6 +318,8 @@ Complete-SageStep -Context $Context -Step "build_epub" -State "success" -Message
     output = $OutputFile
     backup_output = $BackupFile
     chapter_count = $mdFiles.Count
+    cover_included = [bool]$CoverImagePath
+    cover_source = $CoverImagePath
     document_title = $DocumentTitle
     document_author = $DocumentAuthor
     auto_number = [bool]$AutoNumber

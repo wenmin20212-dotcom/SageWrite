@@ -28,6 +28,8 @@ function getWorkspacePaths(bookName) {
   const coverFinalRoot = path.join(coverRoot, "final");
   const coverCopyJsonPath = path.join(coverBriefRoot, "cover_copy.json");
   const coverCopyMdPath = path.join(coverBriefRoot, "cover_copy.md");
+  const coverAssistantJsonPath = path.join(coverBriefRoot, "cover_assistant_last.json");
+  const coverAssistantMdPath = path.join(coverBriefRoot, "cover_assistant_last.md");
   const frontmatterBaseRoot = path.join(bookRoot, "00_frontmatter");
   const frontmatterRoot = path.join(frontmatterBaseRoot, "ebook");
   const frontmatterManifestPath = path.join(frontmatterRoot, "frontmatter_manifest.json");
@@ -51,6 +53,8 @@ function getWorkspacePaths(bookName) {
     coverFinalRoot,
     coverCopyJsonPath,
     coverCopyMdPath,
+    coverAssistantJsonPath,
+    coverAssistantMdPath,
     frontmatterBaseRoot,
     frontmatterRoot,
     frontmatterManifestPath,
@@ -351,6 +355,111 @@ function readJsonFileSafe(filePath) {
   }
 }
 
+function getStringValue(value) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return String(value).trim();
+}
+
+function getStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => getStringValue(item))
+    .filter(Boolean);
+}
+
+function uniqueStrings(values) {
+  return [...new Set(values.map((item) => getStringValue(item)).filter(Boolean))];
+}
+
+function joinClause(values, limit = 6) {
+  return uniqueStrings(values).slice(0, limit).join(", ");
+}
+
+function buildCoverMidjourneyPrompt(paths, overrides = {}) {
+  const briefPath = path.join(paths.coverBriefRoot, "cover_brief.json");
+  const strategyPath = path.join(paths.coverBriefRoot, "cover_strategy.json");
+  const brief = readJsonFileSafe(briefPath) || {};
+  const strategy = readJsonFileSafe(strategyPath) || {};
+  const copy = readJsonFileSafe(paths.coverCopyJsonPath) || {};
+
+  const title =
+    getStringValue(overrides.title) ||
+    getStringValue(brief.cover_text?.title) ||
+    getStringValue(strategy.cover_text?.title);
+  const subtitle =
+    getStringValue(overrides.subtitle) ||
+    getStringValue(copy.selected?.subtitle) ||
+    getStringValue(brief.cover_text?.subtitle) ||
+    getStringValue(strategy.cover_text?.subtitle);
+  const author =
+    getStringValue(overrides.author) ||
+    getStringValue(brief.cover_text?.author) ||
+    getStringValue(strategy.cover_text?.author);
+
+  const metadata = brief.metadata || {};
+  const positioning = brief.positioning || {};
+  const primary = strategy.primary_strategy || {};
+  const promptPackage = strategy.generation_plan?.prompt_package || {};
+  const routePrompts = Array.isArray(promptPackage.route_prompts) ? promptPackage.route_prompts : [];
+  const routePrompt =
+    routePrompts.find((item) => getStringValue(item.route_id) === getStringValue(primary.route_id)) ||
+    routePrompts[0] ||
+    null;
+
+  const visualDirection = joinClause([
+    ...getStringArray(primary.main_visual),
+    ...getStringArray(brief.design_directions?.[0]?.visual_keywords)
+  ], 8);
+  const colorDirection = joinClause([
+    ...getStringArray(primary.color_direction),
+    ...getStringArray(brief.design_directions?.[0]?.palette)
+  ], 6);
+  const moodDirection = joinClause([
+    ...getStringArray(positioning.reader_impression),
+    ...getStringArray(brief.design_directions?.[0]?.mood_keywords)
+  ], 8);
+  const topKeywords = joinClause(getStringArray(metadata.top_keywords), 8);
+  const negativePrompt = joinClause([
+    ...getStringArray(promptPackage.negative_prompt),
+    ...getStringArray(positioning.avoid),
+    "text",
+    "typography",
+    "letters",
+    "subtitle",
+    "author name",
+    "watermark",
+    "logo"
+  ], 16);
+
+  const clauses = [
+    "book cover base image for a serious nonfiction book, image-only background, no typography on the image",
+    title ? `inspired by the book title "${title}"` : "",
+    subtitle ? `subtitle context: ${subtitle}` : "",
+    author ? `author context: ${author}` : "",
+    getStringValue(metadata.book_type) ? `book type: ${getStringValue(metadata.book_type)}` : "",
+    getStringValue(metadata.audience) ? `target audience: ${getStringValue(metadata.audience)}` : "",
+    getStringValue(metadata.core_thesis) ? `core thesis: ${getStringValue(metadata.core_thesis)}` : "",
+    getStringValue(metadata.scope) ? `scope: ${getStringValue(metadata.scope)}` : "",
+    getStringValue(metadata.style) ? `style tone: ${getStringValue(metadata.style)}` : "",
+    visualDirection ? `visual direction: ${visualDirection}` : "",
+    getStringValue(primary.composition) ? `composition: ${getStringValue(primary.composition)}` : "",
+    colorDirection ? `color palette: ${colorDirection}` : "",
+    moodDirection ? `mood: ${moodDirection}` : "",
+    topKeywords ? `keywords: ${topKeywords}` : "",
+    getStringValue(primary.route_label) ? `route: ${getStringValue(primary.route_label)}` : "",
+    getStringValue(routePrompt?.prompt_draft) ? `draft prompt seed: ${getStringValue(routePrompt.prompt_draft)}` : "",
+    "premium publishing quality, clean focal hierarchy, clear subject silhouette, high detail, modern structured knowledge aesthetic, elegant lighting, high contrast, thumbnail-friendly",
+    negativePrompt ? `--no ${negativePrompt}` : "",
+    "--ar 2:3 --stylize 150 --v 7"
+  ];
+
+  return clauses.filter(Boolean).join(", ");
+}
+
 function getPublishLanguageRoot(bookRoot, languageCode) {
   return path.join(bookRoot, "09_publish", languageCode);
 }
@@ -464,6 +573,80 @@ function sanitizeList(input) {
   return [...new Set(items
     .map((item) => String(item || "").trim())
     .filter(Boolean))];
+}
+
+function splitPersonName(fullName) {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return { firstName: "", lastName: "" };
+  }
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: "" };
+  }
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts.slice(-1).join("")
+  };
+}
+
+function buildKoboAccountBasicInfoMarkdown({
+  bookName,
+  language,
+  metadata,
+  objectiveData
+}) {
+  const author = String(metadata?.author || objectiveData?.author || "").trim();
+  const publisher = String(metadata?.publisher || author || "").trim();
+  const title = String(metadata?.title || objectiveData?.title || "").trim();
+  const parsedName = splitPersonName(author);
+  const generatedAt = new Date().toISOString();
+
+  const lines = [
+    "# Kobo Account Basic Info",
+    "",
+    "这份文件用于辅助创建 Kobo Writing Life / Kobo Author 账号时，先整理需要人工填写的基本信息。",
+    "",
+    "## Source",
+    `- BookName: ${bookName || ""}`,
+    `- Language: ${language || ""}`,
+    `- Title: ${title || ""}`,
+    `- Author: ${author || ""}`,
+    `- Publisher: ${publisher || ""}`,
+    `- Generated At: ${generatedAt}`,
+    "",
+    "## Kobo Portal",
+    "- Entry: https://www.kobo.com/writinglife",
+    "",
+    "## Your Primary Contact",
+    `- First Name: ${parsedName.firstName || ""}`,
+    `- Last Name: ${parsedName.lastName || ""}`,
+    `- Publisher Name: ${publisher || ""}`,
+    "- Email Address: ",
+    "",
+    "## Your Location",
+    "- Country: ",
+    "- Street Address: ",
+    "- Street Address 2: ",
+    "- Province/State: ",
+    "- City: ",
+    "- Postal / Zip Code: ",
+    "",
+    "## Your Email Preferences",
+    "- Receive Kobo-related emails: [ ] Yes  [ ] No",
+    "",
+    "## Manual Check",
+    "- Confirm the contact name used for the Kobo account.",
+    "- Confirm the publisher name shown publicly on Kobo.",
+    "- Confirm the signup email address.",
+    "- Confirm the billing / tax / postal information before提交.",
+    "",
+    "## Notes",
+    "- 这份 MD 会先预填系统里已经有的作者 / 出版方信息。",
+    "- 邮箱、地址、国家、邮编等仍需要你人工确认与填写。",
+    ""
+  ];
+
+  return lines.join("\r\n");
 }
 
 function buildPublishMetadataMarkdown(metadata) {
@@ -1700,6 +1883,30 @@ async function handleRun(route, body, res) {
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
         ], { route, bookName });
         break;
+      case "refine-translation":
+        if (!body.language) {
+          throw new Error("Language is required.");
+        }
+        if (!body.model) {
+          throw new Error("Model is required.");
+        }
+        if (body.mode === "chapter" && !body.chapter) {
+          throw new Error("Chapter is required.");
+        }
+        if (body.mode === "range" && (!body.startChapter || !body.endChapter)) {
+          throw new Error("StartChapter and EndChapter are required.");
+        }
+        job = runScript("03r-refine.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language },
+          { flag: "-Model", value: body.model || "gpt-5.2" },
+          { flag: "-Chapter", value: body.mode === "chapter" ? body.chapter : undefined },
+          { flag: "-StartChapter", value: body.mode === "range" ? body.startChapter : undefined },
+          { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
+          { flag: "-All", type: "switch", enabled: body.mode === "all" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
       case "edit":
         job = runScript("04-edit.ps1", [
           { flag: "-BookName", value: bookName },
@@ -1738,6 +1945,43 @@ async function handleRun(route, body, res) {
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) },
           { flag: "-SkipLayout", type: "switch", enabled: Boolean(body.skipLayout) },
           { flag: "-SkipMockup", type: "switch", enabled: Boolean(body.skipMockup) }
+        ], { route, bookName });
+        break;
+      case "cover-drafts":
+        job = runScript("08-cover-drafts.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Variants", value: body.variants || 4 },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-layout":
+        job = runScript("08-cover-layout.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-mockup":
+        job = runScript("08-cover-mockup.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-assist":
+        job = runScript("07a-cover-assist.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Request", value: body.request || undefined },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined }
         ], { route, bookName });
         break;
       case "publish":
@@ -2224,6 +2468,50 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/generate-kobo-account-md") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const language = body.language || "zh";
+
+      validateBookName(bookName);
+      validateLanguageCode(language);
+
+      const paths = getWorkspacePaths(bookName);
+      const publishRoot = getPublishLanguageRoot(paths.bookRoot, language);
+      const koboRoot = path.join(publishRoot, "kobo");
+      const metadataPath = path.join(publishRoot, "publish_metadata.json");
+      const objectivePath = path.join(paths.bookRoot, "00_brief", "objective.md");
+      const outputPath = path.join(koboRoot, "kobo_account_basic_info.md");
+
+      ensureDir(publishRoot);
+      ensureDir(koboRoot);
+
+      const metadata = readJsonFileSafe(metadataPath) || {};
+      const objectiveData = parseFrontMatterMarkdown(objectivePath) || {};
+      const markdown = buildKoboAccountBasicInfoMarkdown({
+        bookName,
+        language,
+        metadata,
+        objectiveData
+      });
+
+      fs.writeFileSync(outputPath, markdown, "utf8");
+      openFileWithDefaultApp(outputPath);
+
+      sendJson(res, 200, {
+        generated: true,
+        bookName,
+        language,
+        fileName: "kobo_account_basic_info.md",
+        relativePath: path.relative(paths.bookRoot, outputPath)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname.startsWith("/api/jobs/")) {
     const jobId = url.pathname.split("/").pop();
     const job = jobs.get(jobId);
@@ -2523,6 +2811,59 @@ const server = http.createServer(async (req, res) => {
         bookName,
         copyJson,
         copyMarkdown
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/cover-midjourney-prompt") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      validateBookName(bookName);
+
+      const paths = getWorkspacePaths(bookName);
+      const prompt = buildCoverMidjourneyPrompt(paths, {
+        title: body.title,
+        subtitle: body.subtitle,
+        author: body.author
+      });
+
+      sendJson(res, 200, { bookName, prompt });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/cover-assistant-result") {
+    const bookName = url.searchParams.get("bookName");
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+
+      if (!fs.existsSync(paths.coverAssistantJsonPath)) {
+        sendJson(res, 404, { error: "cover_assistant_last.json not found." });
+        return;
+      }
+
+      const assistantResult = readJsonFile(paths.coverAssistantJsonPath);
+      const responseMarkdown = fs.existsSync(paths.coverAssistantMdPath)
+        ? fs.readFileSync(paths.coverAssistantMdPath, "utf8")
+        : getStringValue(assistantResult.response);
+
+      sendJson(res, 200, {
+        bookName,
+        assistantResult,
+        responseMarkdown
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
