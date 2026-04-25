@@ -147,6 +147,16 @@ function setDefaultModelName(value) {
   if (refineField) {
     refineField.value = normalized;
   }
+
+  const translateField = $('#translate-form [name="model"]');
+  if (translateField) {
+    translateField.value = normalized;
+  }
+
+  const writeField = $('#write-form [name="model"]');
+  if (writeField) {
+    writeField.value = normalized;
+  }
 }
 
 function setCoverPanelExpanded(expanded) {
@@ -478,6 +488,14 @@ function getPublishPlatformLabel(platformName) {
         : "Kobo";
 }
 
+function updateAmazonDescriptionStatus(text) {
+  const status = $("#amazon-description-status");
+  if (!status) {
+    return;
+  }
+  status.textContent = text || "尚未单独保存 Amazon Description";
+}
+
 function clearPublishAutoSaveTimer() {
   if (!state.publishAutoSaveTimer) {
     return;
@@ -764,6 +782,7 @@ function getIntakeFormSnapshot() {
   if (!form) {
     return {
       title: "",
+      subtitle: "",
       author: "",
       audience: "",
       type: "",
@@ -776,6 +795,7 @@ function getIntakeFormSnapshot() {
   const data = formToObject(form);
   return {
     title: (data.title || "").trim(),
+    subtitle: (data.subtitle || "").trim(),
     author: (data.author || "").trim(),
     audience: (data.audience || "").trim(),
     type: (data.type || "").trim(),
@@ -789,6 +809,7 @@ function getIntakeBaseline(item) {
   const objective = item?.objectiveData || {};
   return {
     title: (objective.title || "").trim(),
+    subtitle: (objective.subtitle || "").trim(),
     author: (objective.author || "").trim(),
     audience: (objective.audience || "").trim(),
     type: (objective.type || "").trim(),
@@ -834,6 +855,7 @@ function updateIntakeActionState(item = getSelectedWorkspaceItem()) {
 function renderIntakePreview(item) {
   const objective = item?.objectiveData || {};
   setFormValue('#intake-form [name="title"]', objective.title || "");
+  setFormValue('#intake-form [name="subtitle"]', objective.subtitle || "");
   setFormValue('#intake-form [name="author"]', objective.author || "");
   setFormValue('#intake-form [name="audience"]', objective.audience || "");
   setFormValue('#intake-form [name="type"]', objective.type || "");
@@ -1925,6 +1947,8 @@ function resolvePublishAssetTarget(platformName, action, item, publish) {
   const metadataName = findPublishPlatformFile(platformData, (fileName) => /metadata/i.test(fileName) && /\.(json|md)$/i.test(fileName));
   const epubName = findPublishPlatformFile(platformData, (fileName) => /\.epub$/i.test(fileName));
   const coverName = findPublishPlatformFile(platformData, (fileName) => /^cover\.(png|jpg|jpeg|webp|pdf)$/i.test(fileName) || /cover\.(png|jpg|jpeg|webp|pdf)$/i.test(fileName));
+  const descriptionTextName = findPublishPlatformFile(platformData, (fileName) => /amazon_description\.txt$/i.test(fileName));
+  const descriptionHtmlName = findPublishPlatformFile(platformData, (fileName) => /amazon_description\.html$/i.test(fileName));
 
   if (action === "epub") {
     if (!epubName) {
@@ -1948,6 +1972,20 @@ function resolvePublishAssetTarget(platformName, action, item, publish) {
       return { kind: "file", platform: platformName, fileName: metadataName, label: `${label} metadata` };
     }
     return { kind: "file", platform: "", fileName: "publish_metadata.md", label: "publish metadata" };
+  }
+
+  if (action === "descText") {
+    if (!descriptionTextName) {
+      throw new Error(`${label} 平台目录里还没有 amazon_description.txt。`);
+    }
+    return { kind: "file", platform: platformName, fileName: descriptionTextName, label: `${label} description txt` };
+  }
+
+  if (action === "descHtml") {
+    if (!descriptionHtmlName) {
+      throw new Error(`${label} 平台目录里还没有 amazon_description.html。`);
+    }
+    return { kind: "file", platform: platformName, fileName: descriptionHtmlName, label: `${label} description html` };
   }
 
   throw new Error("未知的平台文件操作。");
@@ -1974,6 +2012,39 @@ async function openPublishAsset(platformName, action) {
   });
   setStatusBadge("已打开", "success");
   setLog(`已打开 ${target.label}。`);
+}
+
+async function saveAmazonDescription() {
+  const item = getSelectedWorkspaceItem();
+  if (!item) {
+    throw new Error("请先选择一个 BookName。");
+  }
+
+  const editor = $("#amazon-description-editor");
+  if (!editor) {
+    throw new Error("Amazon Description 编辑器不存在。");
+  }
+
+  const descriptionText = String(editor.value || "").trim();
+  if (!descriptionText) {
+    throw new Error("请先粘贴 Amazon 介绍文案。");
+  }
+
+  updateAmazonDescriptionStatus("正在保存 Amazon Description...");
+  const result = await fetchJson("/api/amazon-description", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bookName: item.bookName,
+      language: getPublishLanguage(),
+      descriptionText
+    })
+  });
+
+  await loadPublishArtifacts(item, getPublishLanguage());
+  updateAmazonDescriptionStatus(`已保存 TXT + HTML（${getPublishLanguage()}）`);
+  setStatusBadge("成功", "success");
+  setLog(`Amazon Description 已保存。\nTXT: ${result.textPath}\nHTML: ${result.htmlPath}`);
 }
 
 function formatRecommendedCategoriesHtml(recommended) {
@@ -2498,6 +2569,17 @@ function renderPublishPanel(item) {
 
   renderPublishPlatformDetail(language, previewPlatform, platformData, rawPlatformText);
   renderPublishFiles(item.bookName, language, previewPlatform, platformData);
+
+  const amazonEditor = $("#amazon-description-editor");
+  if (amazonEditor) {
+    const amazonPlatformData = publish.platforms?.amazon || null;
+    amazonEditor.value = amazonPlatformData?.descriptionSourceText || amazonPlatformData?.descriptionText || "";
+    updateAmazonDescriptionStatus(
+      (amazonPlatformData?.descriptionSourceText || amazonPlatformData?.descriptionText)
+        ? "当前已加载 Amazon Description 源稿"
+        : "尚未单独保存 Amazon Description"
+    );
+  }
 }
 
 function renderWorkspaceSelection(item) {
@@ -2674,7 +2756,10 @@ async function cancelCurrentJob() {
 }
 
 function intOrEmpty(value) {
-  return value ? Number(value) : undefined;
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  return Number(value);
 }
 
 function buildCoverPayload(form) {
@@ -2859,6 +2944,7 @@ function setupForms() {
       const payload = formToObject(event.currentTarget);
       payload.bookName = requireBookName();
       payload.mode = getWriteMode();
+      payload.model = (payload.model || getDefaultModelName()).trim();
       payload.chapter = intOrEmpty(payload.chapter);
       payload.startChapter = intOrEmpty(payload.startChapter);
       payload.endChapter = intOrEmpty(payload.endChapter);
@@ -2892,6 +2978,7 @@ function setupForms() {
     try {
       const payload = formToObject(event.currentTarget);
       payload.bookName = requireBookName();
+      payload.model = (payload.model || getDefaultModelName()).trim();
       payload.chapter = intOrEmpty(payload.chapter);
       payload.startChapter = intOrEmpty(payload.startChapter);
       payload.endChapter = intOrEmpty(payload.endChapter);
@@ -2899,9 +2986,9 @@ function setupForms() {
       if (!payload.language) {
         throw new Error("请选择目标语言。");
       }
-      if (payload.mode === "chapter" && !payload.chapter) {
-        throw new Error("单章翻译需要填写章节编号。");
-      }
+        if (payload.mode === "chapter" && payload.chapter === undefined) {
+          throw new Error("单章翻译需要填写章节编号。");
+        }
       if (payload.mode === "range" && (!payload.startChapter || !payload.endChapter)) {
         throw new Error("区间翻译需要同时填写开始和结束章节。");
       }
@@ -2978,6 +3065,30 @@ function setupForms() {
     }
   });
 
+  $("#build-simple-button").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#build-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      await run("build-simple", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#build-simple-toc-button").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#build-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      await run("build-simple-toc", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
   $("#build-epub-button").addEventListener("click", async () => {
     try {
       const payload = formToObject($("#build-form"));
@@ -2996,6 +3107,18 @@ function setupForms() {
       payload.bookName = requireBookName();
       payload.language = payload.language || "zh";
       await run("build-pdf", payload);
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#build-print-pdf-button").addEventListener("click", async () => {
+    try {
+      const payload = formToObject($("#build-form"));
+      payload.bookName = requireBookName();
+      payload.language = payload.language || "zh";
+      await run("build-print-pdf", payload);
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -3104,6 +3227,16 @@ function setupForms() {
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
+    }
+  });
+
+  $("#save-amazon-description")?.addEventListener("click", async () => {
+    try {
+      await saveAmazonDescription();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+      updateAmazonDescriptionStatus(`保存失败：${error.message}`);
     }
   });
 

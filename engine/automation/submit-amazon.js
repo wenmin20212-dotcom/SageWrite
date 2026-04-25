@@ -89,6 +89,17 @@ function readJson(filePath) {
   return JSON.parse(raw);
 }
 
+function readTextIfExists(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return "";
+    }
+    return fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+  } catch {
+    return "";
+  }
+}
+
 function writeJson(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
 }
@@ -239,6 +250,23 @@ function resolveMainFiles(platformRoot) {
     epub,
     cover,
     metadata
+  };
+}
+
+function resolveAmazonDescriptionAssets(platformRoot, metadata) {
+  const htmlPath = path.join(platformRoot, "amazon_description.html");
+  const textPath = path.join(platformRoot, "amazon_description.txt");
+  const html = readTextIfExists(htmlPath).trim();
+  const text = readTextIfExists(textPath).trim() || String(metadata?.long_description || metadata?.description || "").trim();
+
+  return {
+    html,
+    text,
+    htmlPath: fs.existsSync(htmlPath) ? htmlPath : "",
+    textPath: fs.existsSync(textPath) ? textPath : "",
+    source: html
+      ? "amazon_description.html"
+      : (fs.existsSync(textPath) ? "amazon_description.txt" : "metadata.long_description")
   };
 }
 
@@ -797,9 +825,37 @@ async function fillFieldInSection(page, spec, value, logPath) {
 }
 
 async function fillDescriptionField(page, value, logPath) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) {
+  const textValue = typeof value === "object" && value !== null
+    ? String(value.text || "").trim()
+    : String(value || "").trim();
+  const htmlValue = typeof value === "object" && value !== null
+    ? String(value.html || "").trim()
+    : "";
+
+  if (!textValue && !htmlValue) {
     return "";
+  }
+
+  const sourceControls = [
+    page.getByRole("button", { name: /^source$/i }),
+    page.getByRole("link", { name: /^source$/i }),
+    page.locator('button, a').filter({ hasText: /^Source$/i }).first()
+  ];
+
+  if (htmlValue && await clickFirstVisibleLocator(sourceControls, logPath, "description-source-toggle")) {
+    await page.waitForTimeout(400);
+    const sourceFilled = await fillFieldInSection(page, {
+      label: "description-source",
+      sectionPatterns: ["description"],
+      fieldPatterns: [],
+      excludePatterns: ["short description"],
+      fieldSelector: 'textarea',
+      allowFirstFieldFallback: true
+    }, htmlValue, logPath);
+    if (sourceFilled) {
+      writeLog(logPath, "Filled Amazon description from amazon_description.html.");
+      return `html:${sourceFilled}`;
+    }
   }
 
   const sectionFilled = await fillFieldInSection(page, {
@@ -809,18 +865,13 @@ async function fillDescriptionField(page, value, logPath) {
     excludePatterns: ["short description"],
     fieldSelector: 'textarea, [contenteditable="true"]',
     allowFirstFieldFallback: true
-  }, trimmed, logPath);
+  }, textValue, logPath);
   if (sectionFilled) {
+    writeLog(logPath, "Filled Amazon description from plain text description content.");
     return sectionFilled;
   }
 
-  const sourceControls = [
-    page.getByRole("button", { name: /^source$/i }),
-    page.getByRole("link", { name: /^source$/i }),
-    page.locator('button, a').filter({ hasText: /^Source$/i }).first()
-  ];
-
-  if (await clickFirstVisibleLocator(sourceControls, logPath, "description-source-toggle")) {
+  if (textValue && await clickFirstVisibleLocator(sourceControls, logPath, "description-source-toggle")) {
     await page.waitForTimeout(400);
     const sourceFilled = await fillFieldInSection(page, {
       label: "description-source",
@@ -829,8 +880,9 @@ async function fillDescriptionField(page, value, logPath) {
       excludePatterns: ["short description"],
       fieldSelector: 'textarea',
       allowFirstFieldFallback: true
-    }, trimmed, logPath);
+    }, textValue, logPath);
     if (sourceFilled) {
+      writeLog(logPath, "Filled Amazon description in source mode from plain text.");
       return sourceFilled;
     }
   }
@@ -869,7 +921,7 @@ async function fillDescriptionField(page, value, logPath) {
             }
             target.dispatchEvent(new Event("input", { bubbles: true }));
             target.dispatchEvent(new Event("change", { bubbles: true }));
-          }, trimmed);
+          }, textValue);
           writeLog(logPath, "Filled field via iframe editor: description");
           return "iframe:description";
         } catch {}
@@ -2085,7 +2137,10 @@ async function fillKindleDetailsPage(page, metadata, logPath, screenshotPath) {
   const authorFields = await fillAuthorSection(page, metadata.author || "", logPath);
   filledFields.push(...authorFields);
 
-  const descriptionValue = metadata.long_description || metadata.description || "";
+  const descriptionValue = {
+    text: metadata.amazon_description_text || metadata.long_description || metadata.description || "",
+    html: metadata.amazon_description_html || ""
+  };
   const descriptionField = await fillDescriptionField(page, descriptionValue, logPath) || await fillFieldSmart(page, {
     candidates: buildDescriptionCandidates(),
     semantic: {
@@ -2094,7 +2149,7 @@ async function fillKindleDetailsPage(page, metadata, logPath, screenshotPath) {
       excludePatterns: ["short description"],
       selector: 'textarea, [contenteditable="true"], input'
     }
-  }, descriptionValue, logPath);
+  }, descriptionValue.text, logPath);
   if (descriptionField) {
     filledFields.push(descriptionField);
   }
@@ -2155,6 +2210,9 @@ async function run() {
   const fallbackSessionRoot = path.join(runRoot, "artifacts", "edge-profile-clone");
 
   const metadata = readJson(metadataPath);
+  const amazonDescription = resolveAmazonDescriptionAssets(platformRoot, metadata);
+  metadata.amazon_description_text = amazonDescription.text;
+  metadata.amazon_description_html = amazonDescription.html;
   const files = resolveMainFiles(platformRoot);
   const edgePath = detectEdgePath();
   const playwright = tryLoadPlaywright();
@@ -2182,9 +2240,15 @@ async function run() {
   result.package_ready = missingItems.length === 0;
   result.missing_items = missingItems;
   result.session_root_fallback = fallbackSessionRoot;
+  result.description_source = amazonDescription.source;
+  result.description_assets = {
+    text: amazonDescription.textPath ? path.basename(amazonDescription.textPath) : "",
+    html: amazonDescription.htmlPath ? path.basename(amazonDescription.htmlPath) : ""
+  };
 
   writeLog(logPath, `Amazon automation mode: ${mode}`);
   writeLog(logPath, `Platform root: ${platformRoot}`);
+  writeLog(logPath, `Amazon description source: ${amazonDescription.source}`);
 
   if (mode === "prepare") {
     result.state = result.package_ready ? "prepared" : "blocked";
@@ -2317,8 +2381,20 @@ async function run() {
             ? `Amazon content page is open, but some steps still need manual handling: ${missingContentSteps.join(", ")}. Finish them, wait for uploads to complete, then click Save manually.`
             : "Amazon content page has been prepared. Wait for uploads to finish, review the page, then click Save manually.";
         } else {
-          result.state = "content_page_not_found";
-          result.next_step = "The attached browser is not currently on the Kindle eBook Content page. Switch that window to the second page and rerun the Amazon second-page button.";
+          const detailsResult = await waitForDetailsPage(page, logPath, screenshotPath, 3000);
+          result.details_page_detected = detailsResult.detected;
+          result.details_page_reason = detailsResult.reason;
+          result.details_page_url = detailsResult.currentUrl || page.url();
+
+          if (detailsResult.detected) {
+            const filledFields = await fillKindleDetailsPage(page, metadata, logPath, screenshotPath);
+            result.filled_fields = filledFields;
+            result.state = "details_prefilled_manual_save";
+            result.next_step = "The attached browser is currently on Kindle details. The details page has been prefilled, including the Amazon description. Review it, click Save manually, then open the content page.";
+          } else {
+            result.state = "content_page_not_found";
+            result.next_step = "The attached browser is not currently on the Kindle eBook Content page. Switch that window to the second page and rerun the Amazon second-page button.";
+          }
         }
 
         writeJson(resultPath, result);
@@ -2419,10 +2495,16 @@ async function run() {
             result.details_page_detected = detailsResult.detected;
             result.details_page_reason = detailsResult.reason;
             result.details_page_url = detailsResult.currentUrl || page.url();
-            result.state = detailsResult.detected ? "details_page_opened" : "content_page_not_found";
-            result.next_step = detailsResult.detected
-              ? "The draft opened on Kindle details instead of Kindle content. Move to the content page manually, then run the Amazon second-page button again."
-              : "Kindle content page was not confirmed automatically. Open the content page manually, then run the Amazon second-page button again.";
+
+            if (detailsResult.detected) {
+              const filledFields = await fillKindleDetailsPage(page, metadata, logPath, screenshotPath);
+              result.filled_fields = filledFields;
+              result.state = "details_prefilled_manual_save";
+              result.next_step = "The draft opened on Kindle details instead of Kindle content. The details page has been prefilled, including the Amazon description. Review it, click Save manually, then move to the content page.";
+            } else {
+              result.state = "content_page_not_found";
+              result.next_step = "Kindle content page was not confirmed automatically. Open the content page manually, then run the Amazon second-page button again.";
+            }
           }
         } else {
           const detailsResult = await waitForDetailsPage(page, logPath, screenshotPath);

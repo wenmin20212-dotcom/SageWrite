@@ -237,32 +237,86 @@ function Get-CoverRoot {
 function Get-PrimaryCoverFile {
     param(
         [Parameter(Mandatory = $true)]
+        [string]$BookRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode,
+
+        [Parameter(Mandatory = $true)]
         [string]$CoverFinalRoot
     )
 
-    $PreferredNames = @(
+    $PrimaryNames = @(
+        "cover.png",
+        "cover.jpg",
+        "cover.jpeg",
+        "cover.webp"
+    )
+    $FinalNames = @(
         "cover_final_front.png",
         "cover_final_front.jpg",
         "cover_final_front.jpeg",
         "cover_final_front.webp"
     )
 
-    foreach ($name in $PreferredNames) {
-        $Path = Join-Path $CoverFinalRoot $name
-        if (Test-Path -LiteralPath $Path) {
-            return $Path
+    $PrimaryRoots = New-Object System.Collections.Generic.List[string]
+    $LocalizedRoot = Get-LanguageSourceRoot -BookRoot $BookRoot -LanguageCode $LanguageCode
+    if ($null -ne $LocalizedRoot -and (Test-Path -LiteralPath $LocalizedRoot)) {
+        $PrimaryRoots.Add($LocalizedRoot)
+        $LocalizedChapterRoot = Join-Path $LocalizedRoot "02_chapters"
+        if (Test-Path -LiteralPath $LocalizedChapterRoot) {
+            $PrimaryRoots.Add($LocalizedChapterRoot)
+        }
+    }
+    else {
+        $PrimaryRoots.Add($BookRoot)
+        $BookChapterRoot = Join-Path $BookRoot "02_chapters"
+        if (Test-Path -LiteralPath $BookChapterRoot) {
+            $PrimaryRoots.Add($BookChapterRoot)
         }
     }
 
-    if (-not (Test-Path -LiteralPath $CoverFinalRoot)) {
-        return $null
+    foreach ($Root in ($PrimaryRoots | Select-Object -Unique)) {
+        foreach ($name in $PrimaryNames) {
+            $Path = Join-Path $Root $name
+            if (Test-Path -LiteralPath $Path) {
+                return $Path
+            }
+        }
     }
 
-    $Fallback = Get-ChildItem -LiteralPath $CoverFinalRoot -File -ErrorAction SilentlyContinue | Where-Object {
-        @(".png", ".jpg", ".jpeg", ".webp") -contains $_.Extension.ToLowerInvariant()
-    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (Test-Path -LiteralPath $CoverFinalRoot) {
+        foreach ($name in $FinalNames) {
+            $Path = Join-Path $CoverFinalRoot $name
+            if (Test-Path -LiteralPath $Path) {
+                return $Path
+            }
+        }
+    }
 
-    return $Fallback.FullName
+    foreach ($Root in ($PrimaryRoots | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $Root)) {
+            continue
+        }
+        $Fallback = Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue | Where-Object {
+            @(".png", ".jpg", ".jpeg", ".webp") -contains $_.Extension.ToLowerInvariant()
+        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+        if ($Fallback) {
+            return $Fallback.FullName
+        }
+    }
+
+    if (Test-Path -LiteralPath $CoverFinalRoot) {
+        $Fallback = Get-ChildItem -LiteralPath $CoverFinalRoot -File -ErrorAction SilentlyContinue | Where-Object {
+            @(".png", ".jpg", ".jpeg", ".webp") -contains $_.Extension.ToLowerInvariant()
+        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($Fallback) {
+            return $Fallback.FullName
+        }
+    }
+
+    return $null
 }
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
@@ -312,6 +366,12 @@ Ensure-Directory -Path $PublishRoot
 
 $ObjectiveRaw = Get-Content -LiteralPath $ObjectivePath -Raw -Encoding UTF8
 $Title = Get-FrontMatterValue -Content $ObjectiveRaw -Key "title"
+$SubtitleMatch = [regex]::Match(($ObjectiveRaw -replace "`r", ""), '(?m)^subtitle:\s*(.+?)\s*$')
+$Subtitle = if ($SubtitleMatch.Success) {
+    $SubtitleMatch.Groups[1].Value.Trim().Trim('"').Trim("'")
+} else {
+    ""
+}
 $Author = Get-FrontMatterValue -Content $ObjectiveRaw -Key "author"
 $Audience = Get-FrontMatterValue -Content $ObjectiveRaw -Key "audience"
 $BookType = Get-FrontMatterValue -Content $ObjectiveRaw -Key "type"
@@ -321,7 +381,7 @@ $Scope = Get-FrontMatterValue -Content $ObjectiveRaw -Key "scope"
 $EpubPath = Get-PrimaryOutputFile -Root $OutputRoot -Extensions @(".epub")
 $PdfPath = Get-PrimaryOutputFile -Root $OutputRoot -Extensions @(".pdf")
 $DocxPath = Get-PrimaryOutputFile -Root $OutputRoot -Extensions @(".docx")
-$CoverPath = Get-PrimaryCoverFile -CoverFinalRoot $CoverFinalRoot
+$CoverPath = Get-PrimaryCoverFile -BookRoot $BookRoot -LanguageCode $LanguageCode -CoverFinalRoot $CoverFinalRoot
 
 $CoverCopy = $null
 $CoverBrief = $null
@@ -386,6 +446,7 @@ $Assets = [ordered]@{
     }
     book = [ordered]@{
         title = if ($Title) { $Title } else { $BookName }
+        subtitle = if ($Subtitle) { $Subtitle } else { "" }
         author = if ($Author) { $Author } else { "" }
         audience = if ($Audience) { $Audience } else { "" }
         type = if ($BookType) { $BookType } else { "" }
@@ -400,7 +461,7 @@ $Assets = [ordered]@{
         cover = Get-RelativePathOrNull -BasePath $BookRoot -TargetPath $CoverPath
     }
     marketing = [ordered]@{
-        subtitle = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.subtitle)" } else { "" }
+        subtitle = if ($SelectedCopy -and -not [string]::IsNullOrWhiteSpace("$($SelectedCopy.subtitle)")) { "$($SelectedCopy.subtitle)" } elseif ($Subtitle) { $Subtitle } else { "" }
         tagline = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.marketing_tagline)" } else { "" }
         hook = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.back_cover_hook)" } else { $FallbackHook }
         blurb = if (($LanguageCode -eq "zh") -and $SelectedCopy) { "$($SelectedCopy.back_cover_blurb)" } else { $FallbackBlurb }

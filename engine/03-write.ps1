@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
+    [string]$Model = "gpt-5.2",
+
     [int]$Chapter,
 
     [int]$StartChapter,
@@ -81,6 +83,7 @@ function Normalize-MarkdownOutput {
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
 Set-SageCurrentStep -Context $Context -Step "write" -Data @{
+    model = $Model
     chapter = $Chapter
     start_chapter = $StartChapter
     end_chapter = $EndChapter
@@ -290,7 +293,7 @@ Write the complete chapter now.
 "@
 
     $BodyObject = @{
-        model = "gpt-5.2"
+        model = $Model
         input = $Prompt
         max_output_tokens = $MaxTokens
     }
@@ -364,7 +367,7 @@ file_role: chapter
 chapter_index: $i
 title: "$ChapterTitle"
 generated_at: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-model: gpt-5.2
+model: $Model
 max_tokens: $MaxTokens
 input_tokens: $ChapterInputTokens
 output_tokens: $ChapterOutputTokens
@@ -388,10 +391,11 @@ Complete-SageStep -Context $Context -Step "write" -State "success" -Message "Cha
     duration_seconds = [math]::Round($Duration, 2)
     input_tokens_total = $TotalInputTokens
     output_tokens_total = $TotalOutputTokens
-        total_tokens_total = $TotalTokens
-        model = "gpt-5.2"
-        has_objective_style_guidance = $HasObjectiveStyleGuidance
-        has_additional_instructions = $HasAdditionalInstructions
+    total_tokens_total = $TotalTokens
+    model = $Model
+    has_objective_style_guidance = $HasObjectiveStyleGuidance
+    has_additional_instructions = $HasAdditionalInstructions
 }
 
 Write-Output "SUCCESS: $GeneratedCount chapter(s) generated."
+Write-Output "Model: $Model"

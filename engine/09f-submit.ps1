@@ -109,6 +109,36 @@ function Invoke-SubmitModule {
     return Read-JsonUtf8 -Path $platformResultPath
 }
 
+function Invoke-PublishPrepare {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPlatform
+    )
+
+    if (-not (Test-Path -LiteralPath $ScriptPath)) {
+        throw "Publish prepare script not found: $ScriptPath"
+    }
+
+    $invokeSplat = @{
+        BookName = $BookName
+        Language = $LanguageCode
+        Platform = $TargetPlatform
+    }
+    if ($Force) {
+        $invokeSplat.Force = $true
+    }
+
+    Write-RunLog "Preparing publish package for $TargetPlatform before submit."
+    & $ScriptPath @invokeSplat | ForEach-Object { Write-Host $_ }
+
+    if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
+        throw "Publish prepare failed for $TargetPlatform with exit code $LASTEXITCODE"
+    }
+}
+
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
 
@@ -143,6 +173,7 @@ $ResultPath = Join-Path $RunRoot "submit_result.json"
 $AmazonScriptPath = Join-Path $Context.EnginePath "09g-amazon-bot.ps1"
 $GoogleScriptPath = Join-Path $Context.EnginePath "09h-google-bot.ps1"
 $AppleScriptPath = Join-Path $Context.EnginePath "09i-apple-delivery.ps1"
+$PublishPrepareScriptPath = Join-Path $Context.EnginePath "09-publish.ps1"
 
 $ScriptMap = @{
     amazon = $AmazonScriptPath
@@ -188,13 +219,13 @@ try {
     Write-RunLog "Run root: $RunRoot"
 
     if (-not (Test-Path -LiteralPath $PublishRoot)) {
-        throw "09_publish language root not found: $PublishRoot"
+        Invoke-PublishPrepare -ScriptPath $PublishPrepareScriptPath -TargetPlatform $Platform
     }
     if (-not (Test-Path -LiteralPath $PublishMetadataPath)) {
-        throw "publish_metadata.json not found. Run 09-publish.ps1 first."
+        Invoke-PublishPrepare -ScriptPath $PublishPrepareScriptPath -TargetPlatform $Platform
     }
     if (-not (Test-Path -LiteralPath $PublishManifestPath)) {
-        throw "publish_manifest.json not found. Run 09-publish.ps1 first."
+        Invoke-PublishPrepare -ScriptPath $PublishPrepareScriptPath -TargetPlatform $Platform
     }
 
     $publishMetadata = Read-JsonUtf8 -Path $PublishMetadataPath
@@ -228,11 +259,15 @@ try {
         $platformRoot = Join-Path $PublishRoot $platformName
         $platformMetadataPath = Join-Path $platformRoot "metadata.json"
 
+        if ((-not (Test-Path -LiteralPath $platformRoot)) -or (-not (Test-Path -LiteralPath $platformMetadataPath))) {
+            Invoke-PublishPrepare -ScriptPath $PublishPrepareScriptPath -TargetPlatform $platformName
+        }
+
         if (-not (Test-Path -LiteralPath $platformRoot)) {
-            throw "Platform package root not found: $platformRoot"
+            throw "Platform package root not found after auto-prepare: $platformRoot"
         }
         if (-not (Test-Path -LiteralPath $platformMetadataPath)) {
-            throw "Platform metadata not found: $platformMetadataPath"
+            throw "Platform metadata not found after auto-prepare: $platformMetadataPath"
         }
 
         $moduleResult = Invoke-SubmitModule -ScriptPath $ScriptMap[$platformName] -TargetPlatform $platformName

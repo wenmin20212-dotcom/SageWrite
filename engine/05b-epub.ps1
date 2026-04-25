@@ -11,6 +11,8 @@ param(
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
@@ -45,6 +47,11 @@ function Get-CoverImagePath {
         [string]$RootPath
     )
 
+    $SearchRoots = @(
+        $RootPath,
+        (Join-Path $RootPath "02_chapters")
+    ) | Select-Object -Unique
+
     $CandidateNames = @(
         "cover.png",
         "cover.jpg",
@@ -52,28 +59,16 @@ function Get-CoverImagePath {
         "cover.webp"
     )
 
-    foreach ($Name in $CandidateNames) {
-        $CandidatePath = Join-Path $RootPath $Name
-        if (Test-Path $CandidatePath) {
-            return $CandidatePath
+    foreach ($SearchRoot in $SearchRoots) {
+        foreach ($Name in $CandidateNames) {
+            $CandidatePath = Join-Path $SearchRoot $Name
+            if (Test-Path $CandidatePath) {
+                return $CandidatePath
+            }
         }
     }
 
     return $null
-}
-
-function New-CoverMarkdownContent {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ImageFileName
-    )
-
-    return @(
-        "![]($ImageFileName){ width=100% }",
-        "",
-        "\newpage",
-        ""
-    ) -join "`r`n"
 }
 
 function Get-FrontMatterValue {
@@ -119,6 +114,66 @@ function Get-MarkdownBodyText {
     }
 
     return $Normalized.Trim()
+}
+
+function Remove-UnsupportedEpubCssRules {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EpubPath
+    )
+
+    if (!(Test-Path $EpubPath)) {
+        return $false
+    }
+
+    $Zip = $null
+    $Updated = $false
+
+    try {
+        $Zip = [System.IO.Compression.ZipFile]::Open($EpubPath, [System.IO.Compression.ZipArchiveMode]::Update)
+        $CssEntries = @($Zip.Entries | Where-Object { $_.FullName -like "EPUB/styles/*.css" })
+        if ($CssEntries.Count -eq 0) {
+            return $false
+        }
+
+        $RulePattern = '(?s)\s*ul\.task-list\s*\{.*?\}\s*ul\.task-list\s+li\s+input\[type="checkbox"\]\s*\{.*?\}\s*'
+
+        foreach ($CssEntry in $CssEntries) {
+            $Reader = New-Object System.IO.StreamReader($CssEntry.Open())
+            try {
+                $CssContent = $Reader.ReadToEnd()
+            }
+            finally {
+                $Reader.Dispose()
+            }
+
+            $SanitizedCss = [regex]::Replace($CssContent, $RulePattern, "`r`n")
+            if ($SanitizedCss -eq $CssContent) {
+                continue
+            }
+
+            $EntryName = $CssEntry.FullName
+            $CssEntry.Delete()
+
+            $NewEntry = $Zip.CreateEntry($EntryName)
+            $Writer = New-Object System.IO.StreamWriter($NewEntry.Open(), [System.Text.UTF8Encoding]::new($false))
+            try {
+                $Writer.Write($SanitizedCss)
+            }
+            finally {
+                $Writer.Dispose()
+            }
+
+            $Updated = $true
+        }
+    }
+    finally {
+        if ($null -ne $Zip) {
+            $Zip.Dispose()
+        }
+    }
+
+    return $Updated
 }
 
 if (!(Test-Path $WorkspaceRoot)) {
@@ -211,11 +266,6 @@ if ($CoverImagePath) {
     $CoverTempPath = Join-Path $BuildTempRoot $CoverFileName
     Copy-Item -LiteralPath $CoverImagePath -Destination $CoverTempPath -Force
 
-    $CoverMarkdownPath = Join-Path $BuildTempRoot "_cover.md"
-    $CoverMarkdown = New-CoverMarkdownContent -ImageFileName $CoverFileName
-    Set-Content -LiteralPath $CoverMarkdownPath -Encoding utf8 -Value $CoverMarkdown
-    $BuildFiles += $CoverMarkdownPath
-
     Write-Host ""
     Write-Host "Including cover image:"
     Write-Host $CoverImagePath
@@ -292,6 +342,12 @@ try {
 
     if (!(Test-Path $OutputFile)) {
         throw "Pandoc EPUB build failed."
+    }
+
+    $CssSanitized = Remove-UnsupportedEpubCssRules -EpubPath $OutputFile
+    if ($CssSanitized) {
+        Write-Host ""
+        Write-Host "Removed unsupported EPUB CSS rules."
     }
 
     Write-Host ""

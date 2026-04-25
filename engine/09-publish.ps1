@@ -260,6 +260,7 @@ function Process-PublishLanguage {
             language_name = "$($PublishMetadata.language_name)"
             title = "$($PublishMetadata.title)"
             subtitle = "$($PublishMetadata.subtitle)"
+            marketing_subtitle = "$($PublishMetadata.marketing_subtitle)"
             author = "$($PublishMetadata.author)"
             audience = "$($PublishMetadata.audience)"
             type = "$($PublishMetadata.book_type)"

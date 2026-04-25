@@ -464,6 +464,23 @@ function getPublishLanguageRoot(bookRoot, languageCode) {
   return path.join(bookRoot, "09_publish", languageCode);
 }
 
+function getLocalizedAmazonDescriptionSourcePath(bookRoot, languageCode = "zh") {
+  const normalized = String(languageCode || "zh").trim().toLowerCase();
+  if (normalized === "zh") {
+    return path.join(bookRoot, "00_brief", "amazon_description.md");
+  }
+  return path.join(bookRoot, "03_translation", normalized, "00_brief", "amazon_description.md");
+}
+
+function extractMarkdownBody(content) {
+  const raw = String(content || "").replace(/^\uFEFF/, "").replace(/\r/g, "");
+  const match = raw.match(/^---\n[\s\S]*?\n---\n?/);
+  if (match) {
+    return raw.slice(match[0].length).trim();
+  }
+  return raw.trim();
+}
+
 function getOutputLanguages(bookRoot) {
   const outputRoot = path.join(bookRoot, "04_output");
   if (!fs.existsSync(outputRoot)) {
@@ -504,6 +521,9 @@ function getPublishArtifacts(bookRoot, languageCode = "zh") {
   const metadataJsonPath = path.join(publishRoot, "publish_metadata.json");
   const metadataMdPath = path.join(publishRoot, "publish_metadata.md");
   const reportPath = path.join(publishRoot, "publish_report.md");
+  const amazonDescriptionSourcePath = getLocalizedAmazonDescriptionSourcePath(bookRoot, languageCode);
+  const amazonDescriptionSourceMarkdown = readTextIfExists(amazonDescriptionSourcePath);
+  const amazonDescriptionSourceText = extractMarkdownBody(amazonDescriptionSourceMarkdown);
 
   const platformConfig = {
     amazon: {
@@ -536,6 +556,14 @@ function getPublishArtifacts(bookRoot, languageCode = "zh") {
         packageJson: readJsonFileSafe(path.join(platformRoot, config.packageFile)),
         checklistText: readTextIfExists(path.join(platformRoot, config.checklistFile)),
         descriptionText: readTextIfExists(path.join(platformRoot, config.descriptionFile)),
+        descriptionHtml: platformName === "amazon"
+          ? readTextIfExists(path.join(platformRoot, "amazon_description.html"))
+          : "",
+        descriptionSourceMarkdown: platformName === "amazon" ? amazonDescriptionSourceMarkdown : "",
+        descriptionSourceText: platformName === "amazon" ? amazonDescriptionSourceText : "",
+        descriptionSourcePath: platformName === "amazon" && fs.existsSync(amazonDescriptionSourcePath)
+          ? path.relative(bookRoot, amazonDescriptionSourcePath)
+          : "",
         keywordsText: readTextIfExists(path.join(platformRoot, config.keywordsFile))
       }];
     })
@@ -563,6 +591,41 @@ function writeJsonFile(filePath, payload) {
 
 function sanitizeText(value) {
   return String(value || "").trim();
+}
+
+function escapeHtmlText(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function convertPlainTextToAmazonHtml(text) {
+  const normalized = String(text || "").replace(/\r/g, "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const paragraphs = normalized
+    .split(/\n{2,}/)
+    .map((part) => part.split(/\n+/).map((line) => line.trim()).filter(Boolean))
+    .filter((lines) => lines.length);
+
+  return paragraphs.map((lines) => {
+    const isBulletBlock = lines.every((line) => /^[-*•]\s+/.test(line));
+    if (isBulletBlock) {
+      const items = lines
+        .map((line) => line.replace(/^[-*•]\s+/, "").trim())
+        .filter(Boolean)
+        .map((line) => `  <li>${escapeHtmlText(line)}</li>`)
+        .join("\n");
+      return `<ul>\n${items}\n</ul>`;
+    }
+
+    return `<p>${escapeHtmlText(lines.join(" "))}</p>`;
+  }).join("\n\n");
 }
 
 function sanitizeList(input) {
@@ -647,6 +710,23 @@ function buildKoboAccountBasicInfoMarkdown({
   ];
 
   return lines.join("\r\n");
+}
+
+function buildAmazonDescriptionSourceMarkdown({ metadata = {}, language = "zh", descriptionText = "" }) {
+  const lines = [
+    "---",
+    "file_role: amazon_description",
+    "layer: marketing",
+    `title: ${getStringValue(metadata.title)}`,
+    `subtitle: ${getStringValue(metadata.subtitle)}`,
+    `author: ${getStringValue(metadata.author)}`,
+    `language: ${String(language || "zh").trim() || "zh"}`,
+    `updated_at: ${formatLocalTimestamp()}`,
+    "---",
+    "",
+    String(descriptionText || "").trim()
+  ];
+  return `${lines.join("\r\n").trim()}\r\n`;
 }
 
 function buildPublishMetadataMarkdown(metadata) {
@@ -1878,6 +1958,7 @@ async function handleRun(route, body, res) {
         job = runScript("01-intake.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Title", value: body.title },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
           { flag: "-Author", value: body.author || undefined },
           { flag: "-Audience", value: body.audience },
           { flag: "-Type", value: body.type },
@@ -1914,6 +1995,9 @@ async function handleRun(route, body, res) {
         ], { route, bookName });
         break;
       case "write":
+        if (!body.model) {
+          throw new Error("Model is required.");
+        }
         if (body.mode === "chapter" && !body.chapter) {
           throw new Error("Chapter is required.");
         }
@@ -1925,6 +2009,7 @@ async function handleRun(route, body, res) {
         }
         job = runScript("03-write.ps1", [
           { flag: "-BookName", value: bookName },
+          { flag: "-Model", value: body.model || "gpt-5.2" },
           { flag: "-Chapter", value: body.mode === "chapter" ? body.chapter : undefined },
           { flag: "-StartChapter", value: body.mode === "range" ? body.startChapter : undefined },
           { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
@@ -1937,7 +2022,8 @@ async function handleRun(route, body, res) {
         if (!body.language) {
           throw new Error("Language is required.");
         }
-        if (body.mode === "chapter" && !body.chapter) {
+        body.model = String(body.model || "").trim() || "gpt-5.2";
+        if (body.mode === "chapter" && (body.chapter === undefined || body.chapter === null || body.chapter === "")) {
           throw new Error("Chapter is required.");
         }
         if (body.mode === "range" && (!body.startChapter || !body.endChapter)) {
@@ -1946,6 +2032,7 @@ async function handleRun(route, body, res) {
         job = runScript("03t-translate.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language },
+          { flag: "-Model", value: body.model || "gpt-5.2" },
           { flag: "-Chapter", value: body.mode === "chapter" ? body.chapter : undefined },
           { flag: "-StartChapter", value: body.mode === "range" ? body.startChapter : undefined },
           { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
@@ -1990,6 +2077,20 @@ async function handleRun(route, body, res) {
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
         ], { route, bookName });
         break;
+      case "build-simple":
+        job = runScript("05a-simple-docx.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
+        ], { route, bookName });
+        break;
+      case "build-simple-toc":
+        job = runScript("05aa-simple-docx-toc.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
+        ], { route, bookName });
+        break;
       case "build-epub":
         job = runScript("05b-epub.ps1", [
           { flag: "-BookName", value: bookName },
@@ -1999,6 +2100,13 @@ async function handleRun(route, body, res) {
         break;
       case "build-pdf":
         job = runScript("05c-pdf.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Language", value: body.language || "zh" },
+          { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
+        ], { route, bookName });
+        break;
+      case "build-print-pdf":
+        job = runScript("05cc-print-pdf.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
@@ -2393,6 +2501,58 @@ const server = http.createServer(async (req, res) => {
         saved: true,
         bookName,
         language,
+        publish: getPublishArtifacts(paths.bookRoot, language)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/amazon-description") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const language = body.language || "zh";
+      const descriptionText = sanitizeText(body.descriptionText);
+
+      validateBookName(bookName);
+      validateLanguageCode(language);
+
+      if (!descriptionText) {
+        sendJson(res, 400, { error: "Description text is required." });
+        return;
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const publishRoot = getPublishLanguageRoot(paths.bookRoot, language);
+      const amazonRoot = path.join(publishRoot, "amazon");
+      const textPath = path.join(amazonRoot, "amazon_description.txt");
+      const htmlPath = path.join(amazonRoot, "amazon_description.html");
+      const sourceMarkdownPath = getLocalizedAmazonDescriptionSourcePath(paths.bookRoot, language);
+      const metadata = readJsonFileSafe(path.join(publishRoot, "publish_metadata.json")) || {};
+
+      ensureDir(amazonRoot);
+      ensureDir(path.dirname(sourceMarkdownPath));
+      fs.writeFileSync(textPath, `${descriptionText}\n`, "utf8");
+      fs.writeFileSync(htmlPath, `${convertPlainTextToAmazonHtml(descriptionText)}\n`, "utf8");
+      fs.writeFileSync(
+        sourceMarkdownPath,
+        buildAmazonDescriptionSourceMarkdown({
+          metadata,
+          language,
+          descriptionText
+        }),
+        "utf8"
+      );
+
+      sendJson(res, 200, {
+        saved: true,
+        bookName,
+        language,
+        textPath: path.relative(paths.bookRoot, textPath),
+        htmlPath: path.relative(paths.bookRoot, htmlPath),
+        sourceMarkdownPath: path.relative(paths.bookRoot, sourceMarkdownPath),
         publish: getPublishArtifacts(paths.bookRoot, language)
       });
     } catch (error) {

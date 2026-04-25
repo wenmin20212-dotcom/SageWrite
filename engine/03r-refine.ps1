@@ -561,7 +561,19 @@ if ($All) {
             source = Join-Path $TargetBriefRoot "objective.md"
             role = "objective"
             relative = "00_brief/objective.md"
-        },
+        }
+    )
+
+    $AmazonDescriptionTarget = Join-Path $TargetBriefRoot "amazon_description.md"
+    if (Test-Path -LiteralPath $AmazonDescriptionTarget) {
+        $CommonFiles += @{
+            source = $AmazonDescriptionTarget
+            role = "amazon_description"
+            relative = "00_brief/amazon_description.md"
+        }
+    }
+
+    $CommonFiles += @(
         @{
             source = Join-Path $TargetOutlineRoot "toc.md"
             role = "toc"

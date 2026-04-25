@@ -104,6 +104,10 @@
                   <input name="title" required>
                 </label>
                 <label class="field">
+                  <span>副标题</span>
+                  <input name="subtitle" placeholder="例如：技术原理与文明视野下的智能写作方法">
+                </label>
+                <label class="field">
                   <span>作者</span>
                   <input name="author" placeholder="例如 文军">
                 </label>
@@ -189,10 +193,10 @@
                     <option value="range">区间</option>
                   </select>
                 </label>
-                <label class="field">
-                  <span>单章编号</span>
-                  <input name="chapter" type="number" min="1">
-                </label>
+                  <label class="field">
+                    <span>单章编号</span>
+                    <input name="chapter" type="number" min="0" placeholder="0 表示只翻译公共文件">
+                  </label>
                 <label class="field split">
                   <span>章节区间</span>
                   <div class="split-row">
@@ -209,7 +213,11 @@
                 </label>
                 <label class="field">
                   <span>模型</span>
-                  <input name="model" value="gpt-4o-mini">
+                  <input name="model" list="write-model-options" value="gpt-5.2" placeholder="例如 gpt-5.2 或 gpt-5.4">
+                  <datalist id="write-model-options">
+                    <option value="gpt-5.2"></option>
+                    <option value="gpt-5.4"></option>
+                  </datalist>
                 </label>
                 <button class="primary-button" type="submit">运行 02b-expand.ps1</button>
               </form>
@@ -316,6 +324,14 @@
                   </select>
                 </label>
                 <label class="field">
+                  <span>模型名称</span>
+                  <input name="model" list="translate-model-options" value="gpt-5.2" placeholder="例如 gpt-5.2 或 gpt-5.4">
+                  <datalist id="translate-model-options">
+                    <option value="gpt-5.2"></option>
+                    <option value="gpt-5.4"></option>
+                  </datalist>
+                </label>
+                <label class="field">
                   <span>模式</span>
                   <select name="mode">
                     <option value="all">全部翻译</option>
@@ -325,7 +341,7 @@
                 </label>
                 <label class="field">
                   <span>单章编号</span>
-                  <input name="chapter" type="number" min="1">
+                  <input name="chapter" type="number" min="0" placeholder="0 表示只翻译公共文件">
                 </label>
                 <label class="field split">
                   <span>章节区间</span>
@@ -497,14 +513,17 @@
                 </label>
                 <div class="build-submit-actions">
                   <button class="primary-button" type="submit">运行 05-build.ps1</button>
+                  <button id="build-simple-button" class="ghost-button" type="button">运行 05a-simple-docx.ps1</button>
+                  <button id="build-simple-toc-button" class="ghost-button" type="button">运行 05aa-simple-docx-toc.ps1</button>
                   <button id="build-epub-button" class="ghost-button" type="button">运行 05b-epub.ps1</button>
                   <button id="build-pdf-button" class="ghost-button" type="button">运行 05c-pdf.ps1</button>
+                  <button id="build-print-pdf-button" class="ghost-button" type="button">运行 05cc-print-pdf.ps1（6x9）</button>
                 </div>
               </form>
               <div class="build-output-wrap">
                 <div class="build-output-title">生成文件（DOCX / EPUB / PDF）</div>
                 <div id="build-output-list" class="build-output-list">
-                  <div class="build-output-empty">运行 05-build.ps1、05b-epub.ps1 或 05c-pdf.ps1 后，这里会显示生成的文档文件。</div>
+                  <div class="build-output-empty">运行 05-build.ps1、05a-simple-docx.ps1、05aa-simple-docx-toc.ps1、05b-epub.ps1、05c-pdf.ps1 或 05cc-print-pdf.ps1 后，这里会显示生成的文档文件。</div>
                 </div>
               </div>
             </div>
@@ -862,6 +881,19 @@
                       <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="epub">打开 epub</button>
                       <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="cover">打开 cover</button>
                       <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="meta">打开 metadata/checklist</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="descText">打开 Description TXT</button>
+                      <button class="ghost-button" type="button" data-publish-asset-platform="amazon" data-publish-asset-action="descHtml">打开 Description HTML</button>
+                    </div>
+                    <div class="publish-metadata-editor-wrap">
+                      <div class="cover-report-title">Amazon 手工介绍文案</div>
+                      <form id="amazon-description-form" class="publish-editor-form-single">
+                        <textarea id="amazon-description-editor" class="cover-report publish-markdown-editor" spellcheck="false">把你准备好的 Amazon 长介绍贴到这里。保存后会同时生成 amazon_description.txt 和 amazon_description.html。</textarea>
+                      </form>
+                      <div class="publish-editor-actions">
+                        <div class="publish-editor-action-copy">这里适合粘贴你人工撰写的完整介绍文章。系统会保留纯文本版，并自动转换成适合 Amazon Description 框粘贴的简洁 HTML 版。</div>
+                        <button id="save-amazon-description" class="ghost-button" type="button">保存 Amazon Description</button>
+                        <span id="amazon-description-status" class="write-notes-status">尚未单独保存 Amazon Description</span>
+                      </div>
                     </div>
                     <div class="publish-metadata-editor-wrap">
                       <div class="cover-report-title">统一出版元数据主稿（publish_metadata.md）</div>

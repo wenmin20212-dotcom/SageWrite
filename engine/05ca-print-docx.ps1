@@ -22,7 +22,7 @@ $LanguageCode = $Language.Trim().ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($LanguageCode)) {
     $LanguageCode = "zh"
 }
-Set-SageCurrentStep -Context $Context -Step "build" -Data @{
+Set-SageCurrentStep -Context $Context -Step "build_print_docx" -Data @{
     language = $LanguageCode
     auto_number = [bool]$AutoNumber
 }
@@ -444,6 +444,32 @@ function Set-SectionBreakType {
     [void]$TypeNode.SetAttribute("val", $DocNs.LookupNamespace("w"), $TypeValue)
 }
 
+function Set-SectionPageSize {
+    param(
+        [Parameter(Mandatory=$true)]
+        [xml]$DocumentDoc,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$SectPrNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs,
+
+        [int]$WidthTwips = 8640,
+
+        [int]$HeightTwips = 12960
+    )
+
+    $PageSizeNode = $SectPrNode.SelectSingleNode("w:pgSz", $DocNs)
+    if ($null -eq $PageSizeNode) {
+        $PageSizeNode = $DocumentDoc.CreateElement("w", "pgSz", $DocNs.LookupNamespace("w"))
+        [void]$SectPrNode.AppendChild($PageSizeNode)
+    }
+
+    [void]$PageSizeNode.SetAttribute("w", $DocNs.LookupNamespace("w"), [string]$WidthTwips)
+    [void]$PageSizeNode.SetAttribute("h", $DocNs.LookupNamespace("w"), [string]$HeightTwips)
+}
+
 function Update-DocxFormatting {
     param(
         [Parameter(Mandatory=$true)]
@@ -728,6 +754,7 @@ function Update-DocxFormatting {
     $ParagraphNodes = @($BodyNode.SelectNodes("w:p", $DocNs))
 
     Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -FooterRelId $FooterRelId
+    Set-SectionPageSize -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs
     if ($HeadingParagraphs.Count -le 1) {
         Set-SectionPageNumberStart -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -StartAt 1
     }
@@ -756,6 +783,7 @@ function Update-DocxFormatting {
 
         $SectionBreakSectPr = $DocumentDoc.ImportNode($SectPrNode.CloneNode($true), $true)
         Set-SectionBreakType -DocumentDoc $DocumentDoc -SectPrNode $SectionBreakSectPr -DocNs $DocNs -TypeValue "nextPage"
+        Set-SectionPageSize -DocumentDoc $DocumentDoc -SectPrNode $SectionBreakSectPr -DocNs $DocNs
 
         if ($HeadingNumber -eq 0) {
             Clear-SectionHeaderFooter -SectPrNode $SectionBreakSectPr -DocNs $DocNs
@@ -778,19 +806,19 @@ function Update-DocxFormatting {
 }
 
 if (!(Test-Path $WorkspaceRoot)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Workspace not found." -Data @{ workspace = $WorkspaceRoot; language = $LanguageCode }
+    Fail-SageStep -Context $Context -Step "build_print_docx" -Message "Workspace not found." -Data @{ workspace = $WorkspaceRoot; language = $LanguageCode }
     Write-Error "Workspace not found: $WorkspaceRoot"
     exit 1
 }
 
 if (!(Test-Path $SourceRoot)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Language source root not found." -Data @{ source_root = $SourceRoot; language = $LanguageCode }
+    Fail-SageStep -Context $Context -Step "build_print_docx" -Message "Language source root not found." -Data @{ source_root = $SourceRoot; language = $LanguageCode }
     Write-Error "Language source root not found: $SourceRoot"
     exit 1
 }
 
 if (!(Test-Path $ChapterRoot)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Chapter folder not found." -Data @{ chapter_root = $ChapterRoot; language = $LanguageCode }
+    Fail-SageStep -Context $Context -Step "build_print_docx" -Message "Chapter folder not found." -Data @{ chapter_root = $ChapterRoot; language = $LanguageCode }
     Write-Error "Chapter folder not found: $ChapterRoot"
     exit 1
 }
@@ -804,7 +832,7 @@ if (!(Test-Path $LogRoot)) {
 }
 
 if (!(Get-Command pandoc -ErrorAction SilentlyContinue)) {
-    Fail-SageStep -Context $Context -Step "build" -Message "Pandoc not found." -Data @{ language = $LanguageCode }
+    Fail-SageStep -Context $Context -Step "build_print_docx" -Message "Pandoc not found." -Data @{ language = $LanguageCode }
     Write-Error "Pandoc not found."
     exit 1
 }
@@ -821,7 +849,7 @@ $mdFiles = Get-ChildItem $ChapterRoot -Filter *.md |
     }
 
 if ($mdFiles.Count -eq 0) {
-    Fail-SageStep -Context $Context -Step "build" -Message "No markdown files found." -Data @{ chapter_root = $ChapterRoot; language = $LanguageCode }
+    Fail-SageStep -Context $Context -Step "build_print_docx" -Message "No markdown files found." -Data @{ chapter_root = $ChapterRoot; language = $LanguageCode }
     Write-Error "No markdown files found."
     exit 1
 }
@@ -862,21 +890,6 @@ if (Test-Path $BuildTempRoot) {
 New-Item -ItemType Directory -Path $BuildTempRoot -Force | Out-Null
 
 $BuildFiles = @()
-$CoverImagePath = Get-CoverImagePath -RootPath $SourceRoot
-if ($CoverImagePath) {
-    $CoverFileName = [System.IO.Path]::GetFileName($CoverImagePath)
-    $CoverTempPath = Join-Path $BuildTempRoot $CoverFileName
-    Copy-Item -LiteralPath $CoverImagePath -Destination $CoverTempPath -Force
-
-    $CoverMarkdownPath = Join-Path $BuildTempRoot "_cover.md"
-    $CoverMarkdown = New-CoverMarkdownContent -ImageFileName $CoverFileName
-    Set-Content -LiteralPath $CoverMarkdownPath -Encoding utf8 -Value $CoverMarkdown
-    $BuildFiles += $CoverMarkdownPath
-
-    Write-Host ""
-    Write-Host "Including cover image:"
-    Write-Host $CoverImagePath
-}
 
 foreach ($file in $mdFiles) {
     $Raw = Get-Content -LiteralPath $file.FullName -Raw
@@ -890,24 +903,24 @@ $MetaFile = Join-Path $BuildTempRoot "_metadata.yaml"
 
 $MetaContent | Set-Content $MetaFile -Encoding utf8
 
-$OutputFile = Join-Path $OutputRoot "$BookName`_full.docx"
+$OutputFile = Join-Path $OutputRoot "$BookName`_print.docx"
 $BackupRoot = Join-Path $OutputRoot "back"
 $BackupFile = $null
 
 if (Test-Path $OutputFile) {
     New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
     $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $BackupFile = Join-Path $BackupRoot ("{0}_{1}{2}" -f $BookName, $Stamp, [System.IO.Path]::GetExtension($OutputFile))
+    $BackupFile = Join-Path $BackupRoot ("{0}_{1}{2}" -f ($BookName + "_print"), $Stamp, [System.IO.Path]::GetExtension($OutputFile))
     Copy-Item -LiteralPath $OutputFile -Destination $BackupFile -Force
     Write-Host ""
-    Write-Host "Backed up existing output to:"
+    Write-Host "Backed up existing print DOCX to:"
     Write-Host $BackupFile
 
     try {
         Remove-Item -LiteralPath $OutputFile -Force -ErrorAction Stop
     }
     catch {
-        Fail-SageStep -Context $Context -Step "build" -Message "Existing output file is locked." -Data @{
+        Fail-SageStep -Context $Context -Step "build_print_docx" -Message "Existing output file is locked." -Data @{
             output = $OutputFile
             backup_output = $BackupFile
             error = $_.Exception.Message
@@ -956,7 +969,7 @@ try {
     Write-Host $OutputFile
 }
 catch {
-    Fail-SageStep -Context $Context -Step "build" -Message "Build failed." -Data @{
+    Fail-SageStep -Context $Context -Step "build_print_docx" -Message "Build failed." -Data @{
         output = $OutputFile
         error = $_.Exception.Message
         language = $LanguageCode
@@ -969,14 +982,14 @@ finally {
     Remove-Item $BuildTempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-SageStep -Context $Context -Step "build" -State "success" -Message "Document build completed." -Data @{
+Complete-SageStep -Context $Context -Step "build_print_docx" -State "success" -Message "Print DOCX build completed." -Data @{
     language = $LanguageCode
     source_root = $SourceRoot
     output = $OutputFile
     backup_output = $BackupFile
     chapter_count = $mdFiles.Count
-    cover_included = [bool]$CoverImagePath
-    cover_source = $CoverImagePath
+    cover_included = $false
+    cover_source = ""
     document_title = $DocumentTitle
     document_author = $DocumentAuthor
     auto_number = [bool]$AutoNumber

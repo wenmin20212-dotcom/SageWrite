@@ -38,6 +38,89 @@ function Write-TextUtf8 {
     Set-Content -LiteralPath $Path -Value $Content -Encoding UTF8
 }
 
+function ConvertTo-HtmlEscapedText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    return [System.Net.WebUtility]::HtmlEncode($Text)
+}
+
+function Convert-PlainTextToAmazonHtml {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $Normalized = ($Text -replace "`r", "").Trim()
+    if ([string]::IsNullOrWhiteSpace($Normalized)) {
+        return ""
+    }
+
+    $Paragraphs = [regex]::Split($Normalized, "\n{2,}") | ForEach-Object { "$_".Trim() } | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_)
+    }
+
+    $Lines = New-Object System.Collections.Generic.List[string]
+    foreach ($Paragraph in $Paragraphs) {
+        $ParagraphLines = @($Paragraph -split "\n" | ForEach-Object { "$_".Trim() } | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_)
+        })
+
+        $IsBulletBlock = ($ParagraphLines.Count -gt 0) -and (@($ParagraphLines | Where-Object { $_ -notmatch '^(?:[-*•]\s+)' }).Count -eq 0)
+        if ($IsBulletBlock) {
+            $Lines.Add("<ul>")
+            foreach ($BulletLine in $ParagraphLines) {
+                $ItemText = ($BulletLine -replace '^(?:[-*•]\s+)', '').Trim()
+                if (-not [string]::IsNullOrWhiteSpace($ItemText)) {
+                    $Lines.Add("  <li>$(ConvertTo-HtmlEscapedText -Text $ItemText)</li>")
+                }
+            }
+            $Lines.Add("</ul>")
+            continue
+        }
+
+        $JoinedParagraph = ($ParagraphLines -join " ").Trim()
+        if (-not [string]::IsNullOrWhiteSpace($JoinedParagraph)) {
+            $Lines.Add("<p>$(ConvertTo-HtmlEscapedText -Text $JoinedParagraph)</p>")
+        }
+    }
+
+    return ($Lines -join "`r`n")
+}
+
+function Get-MarkdownBody {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $Normalized = $Content -replace "`r", ""
+    $Match = [regex]::Match($Normalized, "(?s)^---\n.*?\n---\n?")
+    if ($Match.Success) {
+        return $Normalized.Substring($Match.Length).Trim()
+    }
+
+    return $Normalized.Trim()
+}
+
+function Get-LocalizedDescriptionSourcePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BookRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LanguageCode
+    )
+
+    if ($LanguageCode -eq "zh") {
+        return Join-Path $BookRoot "00_brief\amazon_description.md"
+    }
+
+    return Join-Path $BookRoot ("03_translation\" + $LanguageCode + "\00_brief\amazon_description.md")
+}
+
 function Get-RelativePathSafe {
     param(
         [Parameter(Mandatory = $true)]
@@ -178,7 +261,8 @@ $MetadataPath = Join-Path $PublishRoot "publish_metadata.json"
 $ManifestPath = Join-Path $PublishRoot "publish_manifest.json"
 $AmazonMetadataPath = Join-Path $AmazonRoot "metadata.json"
 $AmazonPackagePath = Join-Path $AmazonRoot "amazon_kdp_package.json"
-$AmazonDescriptionPath = Join-Path $AmazonRoot "amazon_description.txt"
+$AmazonDescriptionTextPath = Join-Path $AmazonRoot "amazon_description.txt"
+$AmazonDescriptionHtmlPath = Join-Path $AmazonRoot "amazon_description.html"
 $AmazonKeywordsPath = Join-Path $AmazonRoot "amazon_keywords.txt"
 $AmazonChecklistPath = Join-Path $AmazonRoot "amazon_submission_checklist.md"
 
@@ -205,6 +289,7 @@ $Manifest = if (Test-Path -LiteralPath $ManifestPath) {
 } else {
     $null
 }
+$AmazonDescriptionSourcePath = Get-LocalizedDescriptionSourcePath -BookRoot $BookRoot -LanguageCode $LanguageCode
 
 $AmazonMetadata = if (Test-Path -LiteralPath $AmazonMetadataPath) {
     Get-Content -LiteralPath $AmazonMetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -247,7 +332,7 @@ $AmazonPackage = [ordered]@{
         title = "$($PublishMetadata.title)"
         subtitle = "$($PublishMetadata.subtitle)"
         author = "$($PublishMetadata.author)"
-        description = "$($PublishMetadata.long_description)"
+        description = ""
         short_description = "$($PublishMetadata.short_description)"
         keywords = @($KeywordBoxes)
         categories = @($AmazonCategories)
@@ -264,10 +349,15 @@ $AmazonPackage = [ordered]@{
         cover = if (Test-Path -LiteralPath $CoverPath) { Get-RelativePathSafe -BasePath $BookRoot -TargetPath $CoverPath } else { $null }
         metadata = if (Test-Path -LiteralPath $AmazonMetadataPath) { Get-RelativePathSafe -BasePath $BookRoot -TargetPath $AmazonMetadataPath } else { $null }
     }
+    description_assets = [ordered]@{
+        source_markdown = if (Test-Path -LiteralPath $AmazonDescriptionSourcePath) { Get-RelativePathSafe -BasePath $BookRoot -TargetPath $AmazonDescriptionSourcePath } else { $null }
+        text = "09_publish\$LanguageCode\amazon\amazon_description.txt"
+        html = "09_publish\$LanguageCode\amazon\amazon_description.html"
+    }
     quality_checks = [ordered]@{
         has_title = (-not [string]::IsNullOrWhiteSpace("$($PublishMetadata.title)"))
         has_author = (-not [string]::IsNullOrWhiteSpace("$($PublishMetadata.author)"))
-        has_description = (-not [string]::IsNullOrWhiteSpace("$($PublishMetadata.long_description)"))
+        has_description = $false
         has_cover = (Test-Path -LiteralPath $CoverPath)
         has_manuscript = ($null -ne $ManuscriptPath)
         keyword_box_count = $KeywordBoxes.Count
@@ -287,14 +377,20 @@ if (-not $AmazonPackage.quality_checks.has_cover -or -not $AmazonPackage.quality
     $AmazonPackage.package_ready = $false
 }
 
+$DescriptionText = if (Test-Path -LiteralPath $AmazonDescriptionSourcePath) {
+    $SourceRaw = Get-Content -LiteralPath $AmazonDescriptionSourcePath -Raw -Encoding UTF8
+    Get-MarkdownBody -Content $SourceRaw
+} else {
+    "$($PublishMetadata.long_description)".Trim()
+}
+$DescriptionHtml = Convert-PlainTextToAmazonHtml -Text $DescriptionText
+$AmazonPackage.book_details.description = $DescriptionText
+$AmazonPackage.quality_checks.has_description = (-not [string]::IsNullOrWhiteSpace($DescriptionText))
+
 $AmazonPackage | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $AmazonPackagePath -Encoding UTF8
 
-$DescriptionText = @(
-    "$($PublishMetadata.title)",
-    "",
-    "$($PublishMetadata.long_description)"
-) -join "`r`n"
-Write-TextUtf8 -Path $AmazonDescriptionPath -Content $DescriptionText
+Write-TextUtf8 -Path $AmazonDescriptionTextPath -Content $DescriptionText
+Write-TextUtf8 -Path $AmazonDescriptionHtmlPath -Content $DescriptionHtml
 
 $KeywordLines = @()
 for ($i = 0; $i -lt $KeywordBoxes.Count; $i++) {
@@ -316,6 +412,9 @@ $ChecklistLines += ""
 $ChecklistLines += "- Manuscript: $($AmazonPackage.upload_assets.manuscript)"
 $ChecklistLines += "- Cover: $($AmazonPackage.upload_assets.cover)"
 $ChecklistLines += "- Metadata: $($AmazonPackage.upload_assets.metadata)"
+$ChecklistLines += "- Description Source MD: $($AmazonPackage.description_assets.source_markdown)"
+$ChecklistLines += "- Description TXT: $($AmazonPackage.description_assets.text)"
+$ChecklistLines += "- Description HTML: $($AmazonPackage.description_assets.html)"
 $ChecklistLines += ""
 $ChecklistLines += "## Description"
 $ChecklistLines += ""

@@ -5,9 +5,11 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$Language,
 
-    [int]$Chapter,
-    [int]$StartChapter,
-    [int]$EndChapter,
+    [string]$Model = "gpt-5.2",
+
+    [Nullable[int]]$Chapter,
+    [Nullable[int]]$StartChapter,
+    [Nullable[int]]$EndChapter,
 
     [switch]$All,
     [switch]$Force
@@ -105,7 +107,10 @@ function Invoke-TranslatedMarkdown {
         [string]$FileRole,
 
         [Parameter(Mandatory=$true)]
-        [string]$RelativePath
+        [string]$RelativePath,
+
+        [Parameter(Mandatory=$true)]
+        [string]$ModelName
     )
 
     $Prompt = @"
@@ -124,12 +129,12 @@ Rules:
 7. Do not add commentary, explanations, or surrounding code fences.
 8. Return only the translated markdown file content.
 
-Source markdown:
+    Source markdown:
 $SourceText
 "@
 
     $BodyObject = @{
-        model = "gpt-5.2"
+        model = $ModelName
         input = $Prompt
         max_output_tokens = 8000
     }
@@ -206,6 +211,7 @@ $TargetLanguageName = $LanguageProfile.name
 
 Set-SageCurrentStep -Context $Context -Step "translate" -Data @{
     language = $TargetCode
+    model = $Model
     chapter = $Chapter
     start_chapter = $StartChapter
     end_chapter = $EndChapter
@@ -215,6 +221,7 @@ Set-SageCurrentStep -Context $Context -Step "translate" -Data @{
 
 $BookRoot = $Context.BookRoot
 $ObjectivePath = Join-Path $BookRoot "00_brief\objective.md"
+$AmazonDescriptionPath = Join-Path $BookRoot "00_brief\amazon_description.md"
 $TocPath = Join-Path $BookRoot "01_outline\toc.md"
 $ChapterRoot = Join-Path $BookRoot "02_chapters"
 $TranslationRoot = Join-Path $BookRoot ("03_translation\" + $TargetCode)
@@ -252,13 +259,18 @@ $ChapterFiles = Get-ChildItem -LiteralPath $ChapterRoot -Filter *.md -File |
     Sort-Object Name
 
 $TotalChapters = $ChapterFiles.Count
-if ($TotalChapters -eq 0) {
+$HasChapterSelection = $null -ne $Chapter
+$HasStartChapter = $null -ne $StartChapter
+$HasEndChapter = $null -ne $EndChapter
+$CommonOnly = $false
+
+if (-not $HasChapterSelection -and -not $HasStartChapter -and -not $HasEndChapter -and $TotalChapters -eq 0) {
     Fail-SageStep -Context $Context -Step "translate" -Message "No chapter files found." -Data @{ chapter_root = $ChapterRoot; language = $TargetCode }
     Write-Output "ERROR: No chapter files found."
     exit 1
 }
 
-if ($All -and ($Chapter -or $StartChapter -or $EndChapter)) {
+if ($All -and ($HasChapterSelection -or $HasStartChapter -or $HasEndChapter)) {
     Fail-SageStep -Context $Context -Step "translate" -Message "Conflicting translation scope arguments." -Data @{
         language = $TargetCode
         chapter = $Chapter
@@ -270,7 +282,7 @@ if ($All -and ($Chapter -or $StartChapter -or $EndChapter)) {
     exit 1
 }
 
-if ($Chapter -and ($StartChapter -or $EndChapter)) {
+if ($HasChapterSelection -and ($HasStartChapter -or $HasEndChapter)) {
     Fail-SageStep -Context $Context -Step "translate" -Message "Conflicting chapter arguments." -Data @{
         language = $TargetCode
         chapter = $Chapter
@@ -281,12 +293,25 @@ if ($Chapter -and ($StartChapter -or $EndChapter)) {
     exit 1
 }
 
-if ($All -or (-not $Chapter -and -not $StartChapter -and -not $EndChapter)) {
+if ($All -or (-not $HasChapterSelection -and -not $HasStartChapter -and -not $HasEndChapter)) {
     $StartIndex = 1
     $EndIndex = $TotalChapters
 }
-elseif ($Chapter) {
-    if ($Chapter -lt 1 -or $Chapter -gt $TotalChapters) {
+elseif ($HasChapterSelection) {
+    if ($Chapter -eq 0) {
+        $CommonOnly = $true
+        $StartIndex = 0
+        $EndIndex = 0
+    }
+    elseif ($TotalChapters -eq 0) {
+        Fail-SageStep -Context $Context -Step "translate" -Message "No chapter files found." -Data @{
+            chapter_root = $ChapterRoot
+            language = $TargetCode
+        }
+        Write-Output "ERROR: No chapter files found."
+        exit 1
+    }
+    elseif ($Chapter -lt 1 -or $Chapter -gt $TotalChapters) {
         Fail-SageStep -Context $Context -Step "translate" -Message "Chapter out of range." -Data @{
             language = $TargetCode
             chapter = $Chapter
@@ -295,18 +320,28 @@ elseif ($Chapter) {
         Write-Output "ERROR: Chapter out of range."
         exit 1
     }
-
-    $StartIndex = $Chapter
-    $EndIndex = $Chapter
+    else {
+        $StartIndex = $Chapter
+        $EndIndex = $Chapter
+    }
 }
 else {
-    if (-not $StartChapter -or -not $EndChapter) {
+    if (-not $HasStartChapter -or -not $HasEndChapter) {
         Fail-SageStep -Context $Context -Step "translate" -Message "Chapter range missing boundary." -Data @{
             language = $TargetCode
             start_chapter = $StartChapter
             end_chapter = $EndChapter
         }
         Write-Output "ERROR: Both -StartChapter and -EndChapter must be specified."
+        exit 1
+    }
+
+    if ($TotalChapters -eq 0) {
+        Fail-SageStep -Context $Context -Step "translate" -Message "No chapter files found." -Data @{
+            chapter_root = $ChapterRoot
+            language = $TargetCode
+        }
+        Write-Output "ERROR: No chapter files found."
         exit 1
     }
 
@@ -343,7 +378,19 @@ $CommonSourceFiles = @(
         target = Join-Path $TargetBriefRoot "objective.md"
         role = "objective"
         relative = "00_brief/objective.md"
-    },
+    }
+)
+
+if (Test-Path -LiteralPath $AmazonDescriptionPath) {
+    $CommonSourceFiles += @{
+        source = $AmazonDescriptionPath
+        target = Join-Path $TargetBriefRoot "amazon_description.md"
+        role = "amazon_description"
+        relative = "00_brief/amazon_description.md"
+    }
+}
+
+$CommonSourceFiles += @(
     @{
         source = $TocPath
         target = Join-Path $TargetOutlineRoot "toc.md"
@@ -361,7 +408,7 @@ foreach ($item in $CommonSourceFiles) {
     Write-Output "Translating $($item.relative) -> $TargetCode"
     try {
         $SourceText = Get-Content -LiteralPath $item.source -Raw -Encoding UTF8
-        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole $item.role -RelativePath $item.relative
+        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole $item.role -RelativePath $item.relative -ModelName $Model
         Save-Utf8File -Path $item.target -Content $Result.content
 
         $TranslatedFiles += $item.relative
@@ -380,38 +427,43 @@ foreach ($item in $CommonSourceFiles) {
     }
 }
 
-for ($i = $StartIndex; $i -le $EndIndex; $i++) {
-    $ChapterFile = $ChapterFiles[$i - 1]
-    $TargetChapterPath = Join-Path $TargetChapterRoot $ChapterFile.Name
-    $RelativePath = "02_chapters/$($ChapterFile.Name)"
+if ($CommonOnly) {
+    Write-Output "Chapter 0 selected. Translating shared files only."
+}
+else {
+    for ($i = $StartIndex; $i -le $EndIndex; $i++) {
+        $ChapterFile = $ChapterFiles[$i - 1]
+        $TargetChapterPath = Join-Path $TargetChapterRoot $ChapterFile.Name
+        $RelativePath = "02_chapters/$($ChapterFile.Name)"
 
-    if ((Test-Path $TargetChapterPath) -and (-not $Force)) {
-        $SkippedFiles += $RelativePath
-        Write-Output "$RelativePath exists. Skipping."
-        continue
-    }
-
-    Write-Output "[translate] Chapter $i / $EndIndex -> $TargetCode"
-
-    try {
-        $SourceText = Get-Content -LiteralPath $ChapterFile.FullName -Raw -Encoding UTF8
-        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole "chapter" -RelativePath $RelativePath
-        Save-Utf8File -Path $TargetChapterPath -Content $Result.content
-
-        $TranslatedFiles += $RelativePath
-        $TotalInputTokens += $Result.usage.input_tokens
-        $TotalOutputTokens += $Result.usage.output_tokens
-        $TotalTokens += $Result.usage.total_tokens
-    }
-    catch {
-        Fail-SageStep -Context $Context -Step "translate" -Message "Failed to translate chapter." -Data @{
-            language = $TargetCode
-            chapter = $i
-            file = $ChapterFile.Name
-            error = $_.Exception.Message
+        if ((Test-Path $TargetChapterPath) -and (-not $Force)) {
+            $SkippedFiles += $RelativePath
+            Write-Output "$RelativePath exists. Skipping."
+            continue
         }
-        Write-Output "ERROR: Failed translating $($ChapterFile.Name)"
-        exit 1
+
+        Write-Output "[translate] Chapter $i / $EndIndex -> $TargetCode"
+
+        try {
+            $SourceText = Get-Content -LiteralPath $ChapterFile.FullName -Raw -Encoding UTF8
+            $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole "chapter" -RelativePath $RelativePath -ModelName $Model
+            Save-Utf8File -Path $TargetChapterPath -Content $Result.content
+
+            $TranslatedFiles += $RelativePath
+            $TotalInputTokens += $Result.usage.input_tokens
+            $TotalOutputTokens += $Result.usage.output_tokens
+            $TotalTokens += $Result.usage.total_tokens
+        }
+        catch {
+            Fail-SageStep -Context $Context -Step "translate" -Message "Failed to translate chapter." -Data @{
+                language = $TargetCode
+                chapter = $i
+                file = $ChapterFile.Name
+                error = $_.Exception.Message
+            }
+            Write-Output "ERROR: Failed translating $($ChapterFile.Name)"
+            exit 1
+        }
     }
 }
 
@@ -421,7 +473,7 @@ $Manifest = [ordered]@{
     source_language = "zh"
     target_language = $TargetCode
     target_language_name = $TargetLanguageName
-    scope = if ($All) { "all" } elseif ($Chapter) { "single" } elseif ($StartChapter -or $EndChapter) { "range" } else { "all" }
+    scope = if ($All) { "all" } elseif ($CommonOnly) { "shared" } elseif ($HasChapterSelection) { "single" } elseif ($HasStartChapter -or $HasEndChapter) { "range" } else { "all" }
     chapter_range = @{
         start = $StartIndex
         end = $EndIndex
@@ -433,7 +485,7 @@ $Manifest = [ordered]@{
         input_tokens = $TotalInputTokens
         output_tokens = $TotalOutputTokens
         total_tokens = $TotalTokens
-        model = "gpt-5.2"
+        model = $Model
     }
 }
 
@@ -442,6 +494,7 @@ $Manifest | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $ManifestPath -Enco
 $Duration = [math]::Round(((Get-Date) - $StartTime).TotalSeconds, 2)
 Complete-SageStep -Context $Context -Step "translate" -State "success" -Message "Translation completed." -Data @{
     language = $TargetCode
+    model = $Model
     translated_file_count = $TranslatedFiles.Count
     skipped_file_count = $SkippedFiles.Count
     processed_range = "$StartIndex-$EndIndex"
@@ -453,4 +506,6 @@ Complete-SageStep -Context $Context -Step "translate" -State "success" -Message 
 }
 
 Write-Output "SUCCESS: Translation completed for $TargetCode."
+Write-Output "Model: $Model"
+Write-Output "Token usage total: input=$TotalInputTokens, output=$TotalOutputTokens, total=$TotalTokens"
 Write-Output "Output root: $TranslationRoot"

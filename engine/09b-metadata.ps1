@@ -27,6 +27,34 @@ function Ensure-Directory {
     }
 }
 
+function Get-FrontMatterValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    $Normalized = $Content -replace "`r", ""
+    if (-not $Normalized.StartsWith("---`n")) {
+        return $null
+    }
+
+    $Match = [regex]::Match($Normalized, "(?s)^---\n(.*?)\n---\n?")
+    if (-not $Match.Success) {
+        return $null
+    }
+
+    $Pattern = "(?m)^" + [regex]::Escape($Key) + ":\s*(.+?)\s*$"
+    $ValueMatch = [regex]::Match($Match.Groups[1].Value, $Pattern)
+    if (-not $ValueMatch.Success) {
+        return $null
+    }
+
+    return $ValueMatch.Groups[1].Value.Trim().Trim('"').Trim("'")
+}
+
 function New-TextFromCodePoints {
     param(
         [Parameter(Mandatory = $true)]
@@ -604,6 +632,7 @@ function Build-PublishMetadataMarkdown {
     $Lines += ""
     $Lines += "- Title: $($Metadata.title)"
     $Lines += "- Subtitle: $($Metadata.subtitle)"
+    $Lines += "- Marketing Subtitle: $($Metadata.marketing_subtitle)"
     $Lines += "- Author: $($Metadata.author)"
     $Lines += "- Language: $($Metadata.language)"
     $Lines += "- Publication Date: $($Metadata.publication_date)"
@@ -692,8 +721,14 @@ if (-not (Test-Path -LiteralPath $AssetsPath)) {
 }
 
 if ((Test-Path -LiteralPath $MetadataJsonPath) -and (-not $Force)) {
-    Write-Host "publish_metadata.json already exists. Use -Force to regenerate."
-    exit 0
+    $AssetsWriteTime = (Get-Item -LiteralPath $AssetsPath).LastWriteTimeUtc
+    $MetadataWriteTime = (Get-Item -LiteralPath $MetadataJsonPath).LastWriteTimeUtc
+    if ($MetadataWriteTime -ge $AssetsWriteTime) {
+        Write-Host "publish_metadata.json already exists and is up to date."
+        exit 0
+    }
+
+    Write-Host "publish_assets.json is newer than publish_metadata.json. Regenerating metadata."
 }
 
 Ensure-Directory -Path $PublishRoot
@@ -702,9 +737,42 @@ $Assets = Get-Content -LiteralPath $AssetsPath -Raw -Encoding UTF8 | ConvertFrom
 $Book = $Assets.book
 $Marketing = $Assets.marketing
 $Discovery = $Assets.discovery
+$ObjectiveRelativePath = "$($Assets.source.objective)"
+$ObjectivePath = if (-not [string]::IsNullOrWhiteSpace($ObjectiveRelativePath)) {
+    Join-Path $BookRoot $ObjectiveRelativePath
+} else {
+    Join-Path $BookRoot "00_brief\objective.md"
+}
+$ObjectiveRaw = if (Test-Path -LiteralPath $ObjectivePath) {
+    Get-Content -LiteralPath $ObjectivePath -Raw -Encoding UTF8
+} else {
+    ""
+}
+$ObjectiveSubtitleMatch = [regex]::Match(($ObjectiveRaw -replace "`r", ""), '(?m)^subtitle:\s*(.+?)\s*$')
+$ObjectiveSubtitle = if ($ObjectiveSubtitleMatch.Success) {
+    $ObjectiveSubtitleMatch.Groups[1].Value.Trim().Trim('"').Trim("'")
+} else {
+    ""
+}
 
 $Title = "$($Book.title)"
-$Subtitle = "$($Marketing.subtitle)"
+$FormalSubtitle = if (-not [string]::IsNullOrWhiteSpace($ObjectiveSubtitle)) {
+    $ObjectiveSubtitle
+} elseif (-not [string]::IsNullOrWhiteSpace("$($Book.subtitle)")) {
+    "$($Book.subtitle)"
+} else {
+    ""
+}
+$MarketingSubtitle = if (-not [string]::IsNullOrWhiteSpace("$($Marketing.subtitle)")) {
+    "$($Marketing.subtitle)"
+} else {
+    ""
+}
+$Subtitle = if (-not [string]::IsNullOrWhiteSpace($FormalSubtitle)) {
+    $FormalSubtitle
+} else {
+    $MarketingSubtitle
+}
 $Author = "$($Book.author)"
 $Audience = "$($Book.audience)"
 $BookType = "$($Book.type)"
@@ -745,6 +813,7 @@ $Metadata = [ordered]@{
     language_name = $LanguageLabel
     title = $Title
     subtitle = $Subtitle
+    marketing_subtitle = $MarketingSubtitle
     author = $Author
     publisher = $Publisher
     imprint = $Imprint
@@ -786,7 +855,7 @@ $Metadata = [ordered]@{
     }
     marketing = [ordered]@{
         tagline = "$($Marketing.tagline)"
-        subtitle = $Subtitle
+        subtitle = $MarketingSubtitle
         short_description = $Hook
         long_description = $LongDescription
         cover_hook = $Hook
