@@ -289,9 +289,709 @@ function getCoverArtifacts(bookRoot) {
     layoutFiles: listFilesByExtensions(layoutRoot, [".png", ".jpg", ".jpeg", ".webp"]),
     mockupFiles: listFilesByExtensions(mockupRoot, [".png", ".jpg", ".jpeg", ".webp"]),
     finalFiles: listFilesByExtensions(finalRoot, [".png", ".jpg", ".jpeg", ".webp", ".pdf"]),
+    kdpAcceptance: getKdpAcceptanceState(bookRoot),
+    next: getNextCoverArtifacts(bookRoot),
     selectedReviewFiles: Array.isArray(review?.selected_files) ? review.selected_files : [],
     topCandidate: review?.summary?.top_candidate || "",
     reportText: fs.existsSync(reportPath) ? fs.readFileSync(reportPath, "utf8") : ""
+  };
+}
+
+function getKdpAcceptanceRoot(bookRoot) {
+  return path.join(bookRoot, "07_cover", "kdp_acceptance");
+}
+
+function getKdpLatestLlmTextRegionsState(root) {
+  const visionRoot = path.join(root, "llm_text_regions");
+  const latestPath = path.join(visionRoot, "latest_llm_text_regions.json");
+  const latest = readJsonFileSafe(latestPath);
+  if (!latest) {
+    return {
+      hasLatest: false,
+      latest: null
+    };
+  }
+  const latestSlim = {
+    bookName: latest.bookName || "",
+    createdAt: latest.createdAt || "",
+    model: latest.model || "",
+    image: latest.image || null,
+    modelImage: latest.modelImage || null,
+    coordinateScale: latest.coordinateScale || { x: 1, y: 1 },
+    regions: Array.isArray(latest.regions) ? latest.regions : [],
+    usage: latest.usage || null,
+    responseId: latest.responseId || "",
+    responseStatus: latest.responseStatus || "",
+    saved: {
+      resultFileName: path.basename(latestPath),
+      imageFileName: latest.image?.fileName || "",
+      latestFileName: "latest_llm_text_regions.json",
+      resultPath: latestPath,
+      imagePath: latest.image?.path || "",
+      latestPath
+    }
+  };
+  return {
+    hasLatest: true,
+    latest: latestSlim
+  };
+}
+
+function getKdpAcceptanceState(bookRoot) {
+  const root = getKdpAcceptanceRoot(bookRoot);
+  const reportPath = path.join(root, "kdp_acceptance_report.json");
+  const reportTextPath = path.join(root, "kdp_acceptance_report.md");
+  const report = readJsonFileSafe(reportPath);
+
+  return {
+    hasReport: Boolean(report),
+    report,
+    reportText: readTextIfExists(reportTextPath),
+    pdfFiles: listFilesByExtensions(root, [".pdf"]),
+    llmTextRegions: getKdpLatestLlmTextRegionsState(root)
+  };
+}
+
+function inchesToMm(value) {
+  return Number((value * 25.4).toFixed(2));
+}
+
+function inchesToPoints(value) {
+  return value * 72;
+}
+
+function normalizeNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function getPaperbackSpineMultiplier(paperType) {
+  switch (paperType) {
+    case "bw-cream":
+      return 0.0025;
+    case "premium-color":
+      return 0.002347;
+    case "standard-color":
+    case "bw-white":
+    default:
+      return 0.002252;
+  }
+}
+
+function getPaperTypeLabel(paperType) {
+  switch (paperType) {
+    case "bw-cream":
+      return "Black & white, cream paper";
+    case "premium-color":
+      return "Premium color paper";
+    case "standard-color":
+      return "Standard color paper";
+    case "bw-white":
+    default:
+      return "Black & white, white paper";
+  }
+}
+
+function buildKdpPaperbackCoverSpec(options = {}) {
+  const trimWidthIn = normalizeNumber(options.trimWidthIn, 6);
+  const trimHeightIn = normalizeNumber(options.trimHeightIn, 9);
+  const bleedIn = normalizeNumber(options.bleedIn, 0.125);
+  const pageCount = Math.max(1, Math.round(normalizeNumber(options.pageCount, 120)));
+  const paperType = String(options.paperType || "bw-white");
+  const multiplier = getPaperbackSpineMultiplier(paperType);
+  const spineWidthIn = normalizeNumber(options.spineWidthIn, pageCount * multiplier);
+  const coverWidthIn = bleedIn + trimWidthIn + spineWidthIn + trimWidthIn + bleedIn;
+  const coverHeightIn = bleedIn + trimHeightIn + bleedIn;
+
+  return {
+    format: "paperback",
+    trimWidthIn: Number(trimWidthIn.toFixed(3)),
+    trimHeightIn: Number(trimHeightIn.toFixed(3)),
+    bleedIn: Number(bleedIn.toFixed(3)),
+    bleedMm: inchesToMm(bleedIn),
+    pageCount,
+    paperType,
+    paperTypeLabel: getPaperTypeLabel(paperType),
+    spineMultiplierIn: multiplier,
+    spineWidthIn: Number(spineWidthIn.toFixed(3)),
+    spineWidthMm: inchesToMm(spineWidthIn),
+    expectedWidthIn: Number(coverWidthIn.toFixed(3)),
+    expectedHeightIn: Number(coverHeightIn.toFixed(3)),
+    expectedWidthPt: Number(inchesToPoints(coverWidthIn).toFixed(3)),
+    expectedHeightPt: Number(inchesToPoints(coverHeightIn).toFixed(3)),
+    expectedWidthMm: inchesToMm(coverWidthIn),
+    expectedHeightMm: inchesToMm(coverHeightIn),
+    spineTextAllowed: pageCount >= 79,
+    formula: "Cover Width = Bleed + Back Cover Width + Spine Width + Front Cover Width + Bleed; Cover Height = Bleed + Trim Height + Bleed"
+  };
+}
+
+function roundNumber(value, digits = 3) {
+  return Number(Number(value || 0).toFixed(digits));
+}
+
+function buildKdpCoordinateMap(spec, dpi = 300) {
+  const bleed = spec.bleedIn;
+  const trimWidth = spec.trimWidthIn;
+  const trimHeight = spec.trimHeightIn;
+  const spine = spec.spineWidthIn;
+  const fullWidth = spec.expectedWidthIn;
+  const fullHeight = spec.expectedHeightIn;
+  const safeInset = 0.125;
+  const spineSafeInset = 0.0625;
+  const barcodeWidth = 2;
+  const barcodeHeight = 1.2;
+  const barcodeInset = 0.25;
+  const barcodeX = bleed + trimWidth - barcodeInset - barcodeWidth;
+  const barcodeY = bleed + trimHeight - barcodeInset - barcodeHeight;
+  const toPx = (value) => Math.round(value * dpi);
+  const toMmValue = (value) => inchesToMm(value);
+  const rect = (name, xIn, yIn, widthIn, heightIn, description) => ({
+    name,
+    description,
+    inches: {
+      x: roundNumber(xIn),
+      y: roundNumber(yIn),
+      width: roundNumber(widthIn),
+      height: roundNumber(heightIn),
+      right: roundNumber(xIn + widthIn),
+      bottom: roundNumber(yIn + heightIn)
+    },
+    mm: {
+      x: toMmValue(xIn),
+      y: toMmValue(yIn),
+      width: toMmValue(widthIn),
+      height: toMmValue(heightIn),
+      right: toMmValue(xIn + widthIn),
+      bottom: toMmValue(yIn + heightIn)
+    },
+    px: {
+      x: toPx(xIn),
+      y: toPx(yIn),
+      width: toPx(widthIn),
+      height: toPx(heightIn),
+      right: toPx(xIn + widthIn),
+      bottom: toPx(yIn + heightIn)
+    }
+  });
+
+  return {
+    origin: "top-left of submitted PDF page",
+    dpi,
+    fullCover: rect("PDF full cover", 0, 0, fullWidth, fullHeight, "Submitted PDF page including bleed."),
+    bleed: {
+      leftIn: bleed,
+      rightIn: bleed,
+      topIn: bleed,
+      bottomIn: bleed,
+      leftPx: toPx(bleed),
+      rightPx: toPx(bleed),
+      topPx: toPx(bleed),
+      bottomPx: toPx(bleed)
+    },
+    trimBox: rect("White trim box", bleed, bleed, (trimWidth * 2) + spine, trimHeight, "White dotted trim line / cut size after bleed is removed."),
+    backCover: rect("Back cover trim", bleed, bleed, trimWidth, trimHeight, "Back cover final trim area."),
+    spine: rect("Spine trim", bleed + trimWidth, bleed, spine, trimHeight, "Spine area between white spine-edge lines."),
+    frontCover: rect("Front cover trim", bleed + trimWidth + spine, bleed, trimWidth, trimHeight, "Front cover final trim area."),
+    backSafe: rect("Back cover red safe area", bleed + safeInset, bleed + safeInset, trimWidth - (safeInset * 2), trimHeight - (safeInset * 2), "Back cover text/logo safe area."),
+    frontSafe: rect("Front cover red safe area", bleed + trimWidth + spine + safeInset, bleed + safeInset, trimWidth - (safeInset * 2), trimHeight - (safeInset * 2), "Front cover text/logo safe area."),
+    spineSafe: rect("Spine red safe area", bleed + trimWidth + spineSafeInset, bleed + safeInset, Math.max(0, spine - (spineSafeInset * 2)), trimHeight - (safeInset * 2), "Spine text safe area."),
+    barcodeBox: rect("KDP barcode box", barcodeX, barcodeY, barcodeWidth, barcodeHeight, "KDP automatic barcode reserve on the lower-right back cover: 2 x 1.2 in, 0.25 in from spine and bottom trim."),
+    guideLines: {
+      white: {
+        trimLeftXIn: roundNumber(bleed),
+        trimRightXIn: roundNumber(fullWidth - bleed),
+        trimTopYIn: roundNumber(bleed),
+        trimBottomYIn: roundNumber(fullHeight - bleed),
+        spineLeftXIn: roundNumber(bleed + trimWidth),
+        spineRightXIn: roundNumber(bleed + trimWidth + spine),
+        trimLeftXPx: toPx(bleed),
+        trimRightXPx: toPx(fullWidth - bleed),
+        trimTopYPx: toPx(bleed),
+        trimBottomYPx: toPx(fullHeight - bleed),
+        spineLeftXPx: toPx(bleed + trimWidth),
+        spineRightXPx: toPx(bleed + trimWidth + spine)
+      },
+      red: {
+        safeLeftXIn: roundNumber(bleed + safeInset),
+        safeRightXIn: roundNumber(fullWidth - bleed - safeInset),
+        safeTopYIn: roundNumber(bleed + safeInset),
+        safeBottomYIn: roundNumber(fullHeight - bleed - safeInset),
+        spineSafeLeftXIn: roundNumber(bleed + trimWidth + spineSafeInset),
+        spineSafeRightXIn: roundNumber(bleed + trimWidth + spine - spineSafeInset),
+        safeLeftXPx: toPx(bleed + safeInset),
+        safeRightXPx: toPx(fullWidth - bleed - safeInset),
+        safeTopYPx: toPx(bleed + safeInset),
+        safeBottomYPx: toPx(fullHeight - bleed - safeInset),
+        spineSafeLeftXPx: toPx(bleed + trimWidth + spineSafeInset),
+        spineSafeRightXPx: toPx(bleed + trimWidth + spine - spineSafeInset)
+      }
+    }
+  };
+}
+
+function parsePdfBoxNumbers(match) {
+  if (!match) {
+    return null;
+  }
+  const values = match
+    .slice(1, 5)
+    .map((item) => Number.parseFloat(item));
+  if (values.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+  return values;
+}
+
+function extractPdfImageDpiCandidates(text, pdfWidthIn, pdfHeightIn) {
+  const candidates = [];
+  const imageRegex = /<<[\s\S]{0,2500}?\/Subtype\s*\/Image[\s\S]{0,2500}?>>/g;
+  const matches = text.match(imageRegex) || [];
+
+  matches.forEach((block) => {
+    const width = Number.parseFloat(block.match(/\/Width\s+(\d+(?:\.\d+)?)/)?.[1] || "");
+    const height = Number.parseFloat(block.match(/\/Height\s+(\d+(?:\.\d+)?)/)?.[1] || "");
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+
+    candidates.push({
+      pixelWidth: Math.round(width),
+      pixelHeight: Math.round(height),
+      ifFullPageDpiX: Number((width / pdfWidthIn).toFixed(1)),
+      ifFullPageDpiY: Number((height / pdfHeightIn).toFixed(1)),
+      ifFullPageMinDpi: Number((Math.min(width / pdfWidthIn, height / pdfHeightIn)).toFixed(1))
+    });
+  });
+
+  return candidates.sort((a, b) => (b.pixelWidth * b.pixelHeight) - (a.pixelWidth * a.pixelHeight));
+}
+
+function parsePdfInfo(filePath) {
+  const buffer = fs.readFileSync(filePath);
+  const text = buffer.toString("latin1");
+  const version = text.match(/%PDF-(\d+(?:\.\d+)?)/)?.[1] || "";
+  const pageMatches = text.match(/\/Type\s*\/Page\b(?!s)/g) || [];
+  const mediaBox = parsePdfBoxNumbers(text.match(/\/MediaBox\s*\[\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\]/));
+  const cropBox = parsePdfBoxNumbers(text.match(/\/CropBox\s*\[\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\]/));
+  const box = mediaBox || cropBox;
+  if (!box) {
+    throw new Error("Could not read PDF MediaBox or CropBox.");
+  }
+
+  const widthPt = Math.abs(box[2] - box[0]);
+  const heightPt = Math.abs(box[3] - box[1]);
+  const widthIn = widthPt / 72;
+  const heightIn = heightPt / 72;
+  const pageCount = pageMatches.length || null;
+  const imageDpiCandidates = extractPdfImageDpiCandidates(text, widthIn, heightIn);
+
+  return {
+    version,
+    pageCount,
+    encrypted: /\/Encrypt\b/.test(text),
+    hasAcroForm: /\/AcroForm\b/.test(text),
+    hasCropBox: Boolean(cropBox),
+    boxType: mediaBox ? "MediaBox" : "CropBox",
+    widthPt: Number(widthPt.toFixed(3)),
+    heightPt: Number(heightPt.toFixed(3)),
+    widthIn: Number(widthIn.toFixed(3)),
+    heightIn: Number(heightIn.toFixed(3)),
+    widthMm: inchesToMm(widthIn),
+    heightMm: inchesToMm(heightIn),
+    imageDpiCandidates,
+    largestImage: imageDpiCandidates[0] || null,
+    fileSizeBytes: buffer.length
+  };
+}
+
+function makeKdpCheck(status, title, detail) {
+  return { status, title, detail };
+}
+
+function buildKdpAcceptanceReport({ bookName, pdfFileName, pdfPath, pdfInfo, spec }) {
+  const toleranceIn = 0.01;
+  const widthDelta = Number((pdfInfo.widthIn - spec.expectedWidthIn).toFixed(3));
+  const heightDelta = Number((pdfInfo.heightIn - spec.expectedHeightIn).toFixed(3));
+  const spineSafeWidthIn = Math.max(0, spec.spineWidthIn - 0.125);
+  const requiredPixelWidth = Math.ceil(spec.expectedWidthIn * 300);
+  const requiredPixelHeight = Math.ceil(spec.expectedHeightIn * 300);
+  const coordinateMap = buildKdpCoordinateMap(spec, 300);
+  const checks = [];
+
+  checks.push(makeKdpCheck(
+    "pass",
+    "PDF file accepted for inspection",
+    `${pdfFileName} (${Math.round(pdfInfo.fileSizeBytes / 1024)} KB)`
+  ));
+
+  if (pdfInfo.encrypted) {
+    checks.push(makeKdpCheck("fail", "PDF is encrypted", "KDP print files should be upload-ready without password protection."));
+  } else {
+    checks.push(makeKdpCheck("pass", "PDF is not encrypted", "No /Encrypt marker was found."));
+  }
+
+  if (pdfInfo.pageCount === 1) {
+    checks.push(makeKdpCheck("pass", "Cover PDF is one page", "A wraparound paperback cover should be submitted as one continuous cover PDF."));
+  } else if (pdfInfo.pageCount) {
+    checks.push(makeKdpCheck("fail", "Cover PDF is not one page", `Detected ${pdfInfo.pageCount} page objects.`));
+  } else {
+    checks.push(makeKdpCheck("warn", "Page count could not be confirmed", "The PDF dimensions were readable, but page object counting was inconclusive."));
+  }
+
+  if (Math.abs(widthDelta) <= toleranceIn && Math.abs(heightDelta) <= toleranceIn) {
+    checks.push(makeKdpCheck(
+      "pass",
+      "Full cover size matches KDP formula",
+      `PDF ${pdfInfo.widthIn} x ${pdfInfo.heightIn} in; expected ${spec.expectedWidthIn} x ${spec.expectedHeightIn} in.`
+    ));
+  } else {
+    checks.push(makeKdpCheck(
+      "fail",
+      "Full cover size does not match KDP formula",
+      `PDF ${pdfInfo.widthIn} x ${pdfInfo.heightIn} in; expected ${spec.expectedWidthIn} x ${spec.expectedHeightIn} in; delta ${widthDelta} x ${heightDelta} in.`
+    ));
+  }
+
+  if (Math.abs(spec.bleedIn - 0.125) <= 0.001) {
+    checks.push(makeKdpCheck("pass", "Bleed setting is KDP standard", "0.125 in / 3.2 mm bleed is required for covers."));
+  } else {
+    checks.push(makeKdpCheck("warn", "Bleed setting is not the usual KDP value", `Current bleed is ${spec.bleedIn} in. KDP cover guidance uses 0.125 in.`));
+  }
+
+  const largestImage = pdfInfo.largestImage;
+  if (largestImage) {
+    if (largestImage.ifFullPageMinDpi >= 300) {
+      checks.push(makeKdpCheck(
+        "pass",
+        "Largest embedded image meets 300 DPI if used full-page",
+        `Largest image is ${largestImage.pixelWidth} x ${largestImage.pixelHeight} px; full-cover requirement is about ${requiredPixelWidth} x ${requiredPixelHeight} px.`
+      ));
+    } else {
+      checks.push(makeKdpCheck(
+        "fail",
+        "Largest embedded image may be below 300 DPI",
+        `Largest image is ${largestImage.pixelWidth} x ${largestImage.pixelHeight} px, about ${largestImage.ifFullPageDpiX} x ${largestImage.ifFullPageDpiY} DPI if it spans the full cover. Full-cover target is at least ${requiredPixelWidth} x ${requiredPixelHeight} px.`
+      ));
+    }
+  } else {
+    checks.push(makeKdpCheck(
+      "review",
+      "300 DPI image resolution could not be verified",
+      `KDP expects cover/manuscript images to be at least 300 DPI. For this cover size, a full-cover raster image should be at least ${requiredPixelWidth} x ${requiredPixelHeight} px. No embedded raster image dimensions were detected, so inspect the source/export settings.`
+    ));
+  }
+
+  if (spec.spineTextAllowed) {
+    checks.push(makeKdpCheck("info", "Spine text allowed by page count", `${spec.pageCount} pages is at least 79 pages; spine safe text width is about ${spineSafeWidthIn.toFixed(3)} in / ${inchesToMm(spineSafeWidthIn)} mm.`));
+  } else {
+    checks.push(makeKdpCheck("warn", "Spine text risk", "KDP only prints spine text on books with 79 pages or more."));
+  }
+
+  checks.push(makeKdpCheck(
+    "review",
+    "Spine text visual safety must be checked",
+    "The file can pass size checks while still failing visually. Spine title, author, logo, and publisher marks must sit fully between the red spine safety lines and must not touch the white spine-edge/trim lines."
+  ));
+  checks.push(makeKdpCheck(
+    "review",
+    "Front/back text safe-zone review required",
+    "All important text, logos, and barcode content must stay inside the red safe margin. Background art may extend to the PDF edge/bleed area."
+  ));
+  checks.push(makeKdpCheck(
+    "manual",
+    "Other manual visual checks still needed",
+    "Confirm no white border, no crop marks, flattened layers, embedded fonts or rasterized text quality issues, readable text, and correct barcode area."
+  ));
+
+  const hasFail = checks.some((item) => item.status === "fail");
+  const hasWarn = checks.some((item) => item.status === "warn");
+  const hasReview = checks.some((item) => item.status === "review" || item.status === "manual");
+  const technicalVerdict = hasFail ? "fail" : hasWarn ? "review" : "pass";
+  const verdict = hasFail ? "fail" : hasWarn || hasReview ? "review" : "pass";
+
+  return {
+    generatedAt: formatLocalTimestamp(),
+    bookName,
+    pdfFileName,
+    pdfPath,
+    verdict,
+    technicalVerdict,
+    visualReviewRequired: hasReview,
+    requiredResolution: {
+      dpi: 300,
+      fullCoverPixelWidth: requiredPixelWidth,
+      fullCoverPixelHeight: requiredPixelHeight
+    },
+    coordinateMap,
+    spec,
+    pdf: pdfInfo,
+    deltas: {
+      widthIn: widthDelta,
+      heightIn: heightDelta,
+      toleranceIn
+    },
+    checks,
+    sources: [
+      {
+        label: "Amazon KDP Paperback Submission Guidelines",
+        url: "https://kdp.amazon.com/en_US/help/topic/G201857950"
+      },
+      {
+        label: "Amazon KDP Fix Paperback and Hardcover Formatting Issues",
+        url: "https://kdp.amazon.com/en_US/help/topic/G201834260"
+      }
+    ]
+  };
+}
+
+function buildKdpAcceptanceMarkdown(report) {
+  const statusLabel = {
+    pass: "PASS",
+    fail: "FAIL",
+    warn: "WARN",
+    review: "REVIEW",
+    info: "INFO",
+    manual: "MANUAL"
+  };
+  const lines = [];
+  lines.push("# KDP Acceptance Report");
+  lines.push("");
+  lines.push(`- BookName: ${report.bookName}`);
+  lines.push(`- PDF: ${report.pdfFileName}`);
+  lines.push(`- Verdict: ${statusLabel[report.verdict] || report.verdict}`);
+  lines.push(`- Technical size verdict: ${statusLabel[report.technicalVerdict] || report.technicalVerdict || "unknown"}`);
+  lines.push(`- Visual review required: ${report.visualReviewRequired ? "yes" : "no"}`);
+  lines.push(`- Generated: ${report.generatedAt}`);
+  lines.push("");
+  lines.push("## Expected Cover Size");
+  lines.push("");
+  lines.push(`- Trim: ${report.spec.trimWidthIn} x ${report.spec.trimHeightIn} in`);
+  lines.push(`- Page count: ${report.spec.pageCount}`);
+  lines.push(`- Paper: ${report.spec.paperTypeLabel}`);
+  lines.push(`- Spine: ${report.spec.spineWidthIn} in / ${report.spec.spineWidthMm} mm`);
+  lines.push(`- Bleed: ${report.spec.bleedIn} in / ${report.spec.bleedMm} mm`);
+  lines.push(`- Full cover: ${report.spec.expectedWidthIn} x ${report.spec.expectedHeightIn} in`);
+  lines.push(`- Full cover: ${report.spec.expectedWidthMm} x ${report.spec.expectedHeightMm} mm`);
+  lines.push("");
+  lines.push("## Uploaded PDF");
+  lines.push("");
+  lines.push(`- Page box: ${report.pdf.boxType}`);
+  lines.push(`- Page count: ${report.pdf.pageCount || "unknown"}`);
+  lines.push(`- Size: ${report.pdf.widthIn} x ${report.pdf.heightIn} in`);
+  lines.push(`- Size: ${report.pdf.widthMm} x ${report.pdf.heightMm} mm`);
+  lines.push(`- Delta: ${report.deltas.widthIn} x ${report.deltas.heightIn} in`);
+  lines.push(`- Required raster baseline: ${report.requiredResolution.fullCoverPixelWidth} x ${report.requiredResolution.fullCoverPixelHeight} px at ${report.requiredResolution.dpi} DPI`);
+  if (report.pdf.largestImage) {
+    lines.push(`- Largest embedded image: ${report.pdf.largestImage.pixelWidth} x ${report.pdf.largestImage.pixelHeight} px`);
+    lines.push(`- Largest image full-page effective DPI: ${report.pdf.largestImage.ifFullPageDpiX} x ${report.pdf.largestImage.ifFullPageDpiY}`);
+  } else {
+    lines.push("- Largest embedded image: not detected");
+  }
+  lines.push("");
+  lines.push("## PDF Coordinate Map");
+  lines.push("");
+  lines.push(`- Origin: ${report.coordinateMap.origin}`);
+  lines.push(`- Coordinate DPI: ${report.coordinateMap.dpi}`);
+  [
+    report.coordinateMap.fullCover,
+    report.coordinateMap.trimBox,
+    report.coordinateMap.backCover,
+    report.coordinateMap.spine,
+    report.coordinateMap.frontCover,
+    report.coordinateMap.backSafe,
+    report.coordinateMap.spineSafe,
+    report.coordinateMap.frontSafe
+  ].forEach((item) => {
+    lines.push(`- ${item.name}: ${item.inches.width} x ${item.inches.height} in; x=${item.inches.x}, y=${item.inches.y}; px x=${item.px.x}, y=${item.px.y}, w=${item.px.width}, h=${item.px.height}`);
+  });
+  lines.push("");
+  lines.push("## Checks");
+  lines.push("");
+  report.checks.forEach((check) => {
+    lines.push(`- [${statusLabel[check.status] || check.status}] ${check.title}: ${check.detail}`);
+  });
+  lines.push("");
+  lines.push("## KDP Sources");
+  report.sources.forEach((source) => {
+    lines.push(`- ${source.label}: ${source.url}`);
+  });
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function extractResponseText(response) {
+  if (typeof response?.output_text === "string") {
+    return response.output_text;
+  }
+  const parts = [];
+  (response?.output || []).forEach((item) => {
+    (item?.content || []).forEach((content) => {
+      if (typeof content?.text === "string") {
+        parts.push(content.text);
+      }
+    });
+  });
+  return parts.join("\n").trim();
+}
+
+function parseJsonFromModelText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    throw new Error("Model returned empty text.");
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/(\{[\s\S]*\})/);
+    if (!match) {
+      throw new Error("Model did not return JSON.");
+    }
+    return JSON.parse(match[1]);
+  }
+}
+
+function normalizeVisionRegion(region, index, imageWidth, imageHeight, coordinateScale = { x: 1, y: 1 }) {
+  const rawX = Number(region.x ?? region.left ?? 0);
+  const rawY = Number(region.y ?? region.top ?? 0);
+  const rawWidth = Number(region.width ?? region.w ?? 0);
+  const rawHeight = Number(region.height ?? region.h ?? 0);
+  const rawRight = Number(region.right ?? (rawX + rawWidth));
+  const rawBottom = Number(region.bottom ?? (rawY + rawHeight));
+  const rawCenterX = Number(region.center_x ?? region.centerX ?? region.mid_x ?? (rawX + (rawWidth / 2)));
+  const x = Math.max(0, Math.round(rawX * coordinateScale.x));
+  const y = Math.max(0, Math.round(rawY * coordinateScale.y));
+  const width = Math.max(0, Math.round(rawWidth * coordinateScale.x));
+  const height = Math.max(0, Math.round(rawHeight * coordinateScale.y));
+  const centerX = Math.min(imageWidth, Math.max(0, Math.round(rawCenterX * coordinateScale.x)));
+  const scaledRight = rawRight * coordinateScale.x;
+  const scaledBottom = rawBottom * coordinateScale.y;
+  const finalRight = Math.min(imageWidth, Math.round(Number.isFinite(scaledRight) ? scaledRight : (x + width)));
+  const finalBottom = Math.min(imageHeight, Math.round(Number.isFinite(scaledBottom) ? scaledBottom : (y + height)));
+  const normalizedWidth = Math.max(0, finalRight - x || width);
+  const normalizedHeight = Math.max(0, finalBottom - y || height);
+
+  return {
+    id: String(region.id || `llm-${index + 1}`),
+    zone: "unclassified",
+    text: String(region.text || "").trim(),
+    confidence: Number(Number(region.confidence ?? 0.75).toFixed(2)),
+    orientation: String(region.orientation || "unknown"),
+    x,
+    y,
+    width: normalizedWidth,
+    height: normalizedHeight,
+    right: Math.min(imageWidth, x + normalizedWidth),
+    bottom: Math.min(imageHeight, y + normalizedHeight),
+    centerX: Number.isFinite(centerX) ? centerX : Math.round(x + (normalizedWidth / 2)),
+    source: "llm_vision",
+    notes: String(region.notes || ""),
+    raw: {
+      x: rawX,
+      y: rawY,
+      width: rawWidth,
+      height: rawHeight,
+      right: rawRight,
+      bottom: rawBottom,
+      centerX: rawCenterX
+    },
+    coordinateScale: {
+      x: coordinateScale.x,
+      y: coordinateScale.y
+    }
+  };
+}
+
+function getNextCoverArtifacts(bookRoot, edition = "ebook") {
+  const nextRoot = path.join(bookRoot, "07_cover", "next", edition);
+  const nextPrintRoot = path.join(bookRoot, "07_cover", "next", "print");
+  const baseRoot = path.join(nextRoot, "base");
+  const promptRoot = path.join(nextRoot, "prompts");
+  const importRoot = path.join(nextRoot, "imports");
+  const reviewRoot = path.join(nextRoot, "reviews");
+  const layoutRoot = path.join(nextRoot, "layout");
+  const printRoot = path.join(nextPrintRoot, "print_spread");
+  const mockupRoot = path.join(nextRoot, "mockup");
+  const finalRoot = path.join(nextRoot, "final");
+  const finalReportPath = path.join(finalRoot, "next_cover_report.md");
+  const promptReportPath = path.join(promptRoot, "midjourney_prompt_report.md");
+  const imageEditReportPath = path.join(layoutRoot, "ai_image_edit_report.md");
+  const reportParts = [promptReportPath, imageEditReportPath, finalReportPath]
+    .filter((item) => fs.existsSync(item))
+    .map((item) => fs.readFileSync(item, "utf8"));
+
+  return {
+    edition,
+    hasBaseBrief: fs.existsSync(path.join(baseRoot, "base_brief.json")),
+    hasPrompts: fs.existsSync(path.join(promptRoot, "base_prompts.json")) ||
+      fs.existsSync(path.join(promptRoot, "midjourney_prompt.txt")),
+    hasReview: fs.existsSync(path.join(reviewRoot, "base_review.json")),
+    importFiles: listFilesByExtensions(importRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    layoutFiles: listFilesByExtensions(layoutRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    printSpreadFiles: listFilesByExtensions(printRoot, [".png", ".jpg", ".jpeg", ".webp", ".pdf"]),
+    mockupFiles: listFilesByExtensions(mockupRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    finalFiles: listFilesByExtensions(finalRoot, [".png", ".jpg", ".jpeg", ".webp", ".pdf"]),
+    reportText: reportParts.join("\r\n\r\n---\r\n\r\n")
+  };
+}
+
+function getLatestFileByExtensions(dirPath, extensions) {
+  if (!fs.existsSync(dirPath)) {
+    return "";
+  }
+
+  const normalized = extensions.map((ext) => ext.toLowerCase());
+  const files = fs.readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && normalized.includes(path.extname(entry.name).toLowerCase()))
+    .map((entry) => {
+      const fullPath = path.join(dirPath, entry.name);
+      return { name: entry.name, mtime: fs.statSync(fullPath).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+
+  return files[0]?.name || "";
+}
+
+function getCoverWorkbenchState(bookRoot, edition = "ebook") {
+  const nextRoot = path.join(bookRoot, "07_cover", "next", edition);
+  const promptRoot = path.join(nextRoot, "prompts");
+  const importRoot = path.join(nextRoot, "imports");
+  const layoutRoot = path.join(nextRoot, "layout");
+  const oldCoverRoot = resolveCoverRoot(bookRoot, "ebook");
+  const oldBriefRoot = path.join(oldCoverRoot, "brief");
+  const statePath = path.join(nextRoot, "workbench_state.json");
+  const promptPath = path.join(promptRoot, "midjourney_prompt.txt");
+  const legacyPromptPath = path.join(oldBriefRoot, "cover_midjourney_prompt.txt");
+  const assistantJsonPath = path.join(oldBriefRoot, "cover_assistant_last.json");
+  const assistantMdPath = path.join(oldBriefRoot, "cover_assistant_last.md");
+  const imageEditReportPath = path.join(layoutRoot, "ai_image_edit_report.json");
+  const savedState = readJsonFileSafe(statePath) || {};
+  const imageEditReport = readJsonFileSafe(imageEditReportPath) || {};
+  const importFiles = listFilesByExtensions(importRoot, [".png", ".jpg", ".jpeg", ".webp"]);
+
+  const latestImport = savedState.latest_import_file ||
+    getLatestFileByExtensions(importRoot, [".png", ".jpg", ".jpeg", ".webp"]);
+  const selectedImport = importFiles.includes(savedState.selected_import_file)
+    ? savedState.selected_import_file
+    : latestImport;
+  const latestEdited = savedState.latest_edited_file ||
+    path.basename(String(imageEditReport.output_image || "")) ||
+    getLatestFileByExtensions(layoutRoot, [".png", ".jpg", ".jpeg", ".webp"]);
+
+  return {
+    edition,
+    prompt: readTextIfExists(promptPath) || readTextIfExists(legacyPromptPath),
+    assistantRequest: savedState.assistant_request || "",
+    assistantResponse: readTextIfExists(assistantMdPath),
+    assistantResult: readJsonFileSafe(assistantJsonPath),
+    editText: savedState.edit_text || imageEditReport.cover_text?.raw || "",
+    publisher: savedState.publisher || imageEditReport.cover_text?.publisher || "",
+    imageModel: savedState.image_model || imageEditReport.image_model || "gpt-image-1.5",
+    importFiles,
+    selectedImportFile: selectedImport,
+    latestImportFile: latestImport,
+    latestEditedFile: latestEdited,
+    statePath,
+    imageEditReport
   };
 }
 
@@ -1330,12 +2030,14 @@ function sendText(res, statusCode, text, type = "text/plain; charset=utf-8") {
   res.end(text);
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, maxBytes = 5_000_000) {
   return new Promise((resolve, reject) => {
     let raw = "";
+    let size = 0;
     req.on("data", (chunk) => {
+      size += chunk.length;
       raw += chunk;
-      if (raw.length > 5_000_000) {
+      if (size > maxBytes) {
         reject(new Error("Request body too large."));
       }
     });
@@ -1463,7 +2165,8 @@ function serveStatic(reqPath, res) {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
-    ".json": "application/json; charset=utf-8"
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml; charset=utf-8"
   };
 
   sendText(res, 200, fs.readFileSync(filePath), types[ext] || "application/octet-stream");
@@ -1656,6 +2359,32 @@ function validateAssetFileName(fileName) {
   }
 }
 
+function sanitizeImportedImageFileName(fileName, fallbackExt) {
+  const ext = path.extname(String(fileName || "")).toLowerCase() || fallbackExt;
+  if (![".png", ".jpg", ".jpeg", ".webp"].includes(ext)) {
+    throw new Error("Unsupported image file type.");
+  }
+
+  const stem = path.basename(String(fileName || "external-base-image"), path.extname(String(fileName || "")))
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "external-base-image";
+  return `${stem}${ext}`;
+}
+
+function sanitizeImportedPdfFileName(fileName) {
+  const ext = path.extname(String(fileName || "")).toLowerCase() || ".pdf";
+  if (ext !== ".pdf") {
+    throw new Error("Only PDF files can be submitted to the KDP acceptance tool.");
+  }
+
+  const stem = path.basename(String(fileName || "cover-upload"), path.extname(String(fileName || "")))
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "cover-upload";
+  return `${stem}.pdf`;
+}
+
 function validateLanguageCode(languageCode) {
   if (!languageCode || typeof languageCode !== "string") {
     throw new Error("language is required.");
@@ -1706,6 +2435,8 @@ function validateAbsoluteFolderPath(folderPath) {
 }
 
 function resolveCoverSectionRoot(paths, section) {
+  const nextRoot = path.join(paths.bookRoot, "07_cover", "next", "ebook");
+  const nextPrintRoot = path.join(paths.bookRoot, "07_cover", "next", "print");
   switch (section) {
     case "drafts":
       return paths.coverDraftRoot;
@@ -1715,6 +2446,18 @@ function resolveCoverSectionRoot(paths, section) {
       return paths.coverMockupRoot;
     case "final":
       return paths.coverFinalRoot;
+    case "kdp-acceptance":
+      return getKdpAcceptanceRoot(paths.bookRoot);
+    case "next-imports":
+      return path.join(nextRoot, "imports");
+    case "next-layout":
+      return path.join(nextRoot, "layout");
+    case "next-print-spread":
+      return path.join(nextPrintRoot, "print_spread");
+    case "next-mockup":
+      return path.join(nextRoot, "mockup");
+    case "next-final":
+      return path.join(nextRoot, "final");
     default:
       throw new Error("Invalid cover section.");
   }
@@ -2159,7 +2902,119 @@ async function handleRun(route, body, res) {
           { flag: "-Request", value: body.request || undefined },
           { flag: "-Title", value: body.title || undefined },
           { flag: "-Subtitle", value: body.subtitle || undefined },
-          { flag: "-Author", value: body.author || undefined }
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Model", value: body.model || undefined }
+        ], { route, bookName });
+        break;
+      case "cover-midjourney-prompt-ai":
+        job = runScript("08n-midjourney-prompt.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Model", value: body.model || "gpt-5.2" }
+        ], { route, bookName });
+        break;
+      case "cover-next":
+        job = runScript("08n-cover.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Variants", value: body.variants || 4 },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) },
+          { flag: "-SkipMockup", type: "switch", enabled: Boolean(body.skipMockup) },
+          { flag: "-SkipPrintSpread", type: "switch", enabled: Boolean(body.skipPrintSpread) }
+        ], { route, bookName });
+        break;
+      case "cover-next-brief":
+        job = runScript("08n-base-brief.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-prompt":
+        job = runScript("08n-base-prompt.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-generate":
+        job = runScript("08n-base-generate.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Variants", value: body.variants || 4 },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-review":
+        job = runScript("08n-base-review.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-layout":
+        job = runScript("08n-title-layout.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-image-edit":
+        job = runScript("08n-image-edit.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-InputFile", value: body.inputFile || undefined },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Publisher", value: body.publisher || undefined },
+          { flag: "-CoverText", value: body.coverText || undefined },
+          { flag: "-ImageModel", value: body.imageModel || "gpt-image-1.5" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-print":
+        job = runScript("08n-cover.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: "print" },
+          { flag: "-Title", value: body.title || undefined },
+          { flag: "-Subtitle", value: body.subtitle || undefined },
+          { flag: "-Author", value: body.author || undefined },
+          { flag: "-Variants", value: body.variants || 4 },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-mockup":
+        job = runScript("08n-mockup.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Mode", value: body.mode || "auto" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "cover-next-export":
+        job = runScript("08n-export.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
         ], { route, bookName });
         break;
       case "publish":
@@ -3032,6 +3887,294 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/kdp-acceptance") {
+    const bookName = url.searchParams.get("bookName");
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+      sendJson(res, 200, {
+        bookName,
+        kdpAcceptance: getKdpAcceptanceState(paths.bookRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/kdp-acceptance-pdf") {
+    const bookName = url.searchParams.get("bookName");
+    const fileName = url.searchParams.get("fileName");
+
+    if (!bookName || !fileName) {
+      sendJson(res, 400, { error: "bookName and fileName are required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      validateAssetFileName(fileName);
+      if (!/\.pdf$/i.test(fileName)) {
+        throw new Error("Only PDF files can be previewed here.");
+      }
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      const targetPath = path.resolve(acceptanceRoot, path.basename(fileName));
+      const rootResolved = path.resolve(acceptanceRoot);
+      if (!targetPath.startsWith(rootResolved + path.sep)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "KDP acceptance PDF not found." });
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "no-store",
+        "Content-Disposition": `inline; filename="${path.basename(targetPath).replace(/"/g, "")}"`
+      });
+      res.end(fs.readFileSync(targetPath));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-acceptance") {
+    try {
+      const body = await readJsonBody(req, 120_000_000);
+      const bookName = body.bookName;
+      const dataUrl = typeof body.dataUrl === "string" ? body.dataUrl : "";
+      const originalName = typeof body.fileName === "string" ? body.fileName : "cover-upload.pdf";
+
+      validateBookName(bookName);
+      const match = dataUrl.match(/^data:(application\/pdf|application\/octet-stream);base64,([A-Za-z0-9+/=\r\n]+)$/);
+      if (!match) {
+        throw new Error("Invalid PDF data.");
+      }
+
+      const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+      if (!buffer.length) {
+        throw new Error("PDF file is empty.");
+      }
+      if (buffer.length > 90_000_000) {
+        throw new Error("PDF file is too large for the local acceptance preview.");
+      }
+      if (buffer.slice(0, 5).toString("latin1") !== "%PDF-") {
+        throw new Error("Uploaded file does not look like a PDF.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      ensureDir(acceptanceRoot);
+
+      const safeOriginalName = sanitizeImportedPdfFileName(originalName);
+      const stamp = formatFileStamp();
+      const fileName = `kdp-check-${stamp}-${safeOriginalName}`;
+      const targetPath = path.resolve(acceptanceRoot, fileName);
+      const rootResolved = path.resolve(acceptanceRoot);
+      if (!targetPath.startsWith(rootResolved + path.sep)) {
+        throw new Error("Invalid PDF target path.");
+      }
+
+      fs.writeFileSync(targetPath, buffer);
+      const spec = buildKdpPaperbackCoverSpec({
+        trimWidthIn: body.trimWidthIn,
+        trimHeightIn: body.trimHeightIn,
+        bleedIn: body.bleedIn,
+        pageCount: body.pageCount,
+        paperType: body.paperType,
+        spineWidthIn: body.useCustomSpineWidth ? body.spineWidthIn : undefined
+      });
+      const pdfInfo = parsePdfInfo(targetPath);
+      const report = buildKdpAcceptanceReport({
+        bookName,
+        pdfFileName: fileName,
+        pdfPath: targetPath,
+        pdfInfo,
+        spec
+      });
+      const reportPath = path.join(acceptanceRoot, "kdp_acceptance_report.json");
+      const reportTextPath = path.join(acceptanceRoot, "kdp_acceptance_report.md");
+      writeJsonFile(reportPath, report);
+      fs.writeFileSync(reportTextPath, buildKdpAcceptanceMarkdown(report), "utf8");
+
+      sendJson(res, 200, {
+        bookName,
+        kdpAcceptance: getKdpAcceptanceState(paths.bookRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-llm-text-regions") {
+    try {
+      const body = await readJsonBody(req, 80_000_000);
+      const bookName = body.bookName;
+      const imageDataUrl = typeof body.imageDataUrl === "string" ? body.imageDataUrl : "";
+      const imageWidth = Math.round(Number(body.imageWidth || 0));
+      const imageHeight = Math.round(Number(body.imageHeight || 0));
+      const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : "gpt-5.2";
+
+      validateBookName(bookName);
+      if (!process.env.OPENAI_API_KEY) {
+        throw new Error("OPENAI_API_KEY not set.");
+      }
+      if (!/^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(imageDataUrl)) {
+        throw new Error("imageDataUrl must be a PNG data URL.");
+      }
+      if (imageWidth < 100 || imageHeight < 100) {
+        throw new Error("imageWidth and imageHeight are required.");
+      }
+      const paths = getWorkspacePaths(bookName);
+      const visionRoot = path.join(getKdpAcceptanceRoot(paths.bookRoot), "llm_text_regions");
+      ensureDir(visionRoot);
+      const stamp = formatFileStamp();
+      const baseFileName = `kdp-llm-text-${stamp}`;
+      const imageFileName = `${baseFileName}.png`;
+      const resultFileName = `${baseFileName}.json`;
+      const latestFileName = "latest_llm_text_regions.json";
+      const imagePath = path.join(visionRoot, imageFileName);
+      const resultPath = path.join(visionRoot, resultFileName);
+      const latestPath = path.join(visionRoot, latestFileName);
+      const imageBuffer = Buffer.from(imageDataUrl.replace(/^data:image\/png;base64,/, "").replace(/\s/g, ""), "base64");
+      fs.writeFileSync(imagePath, imageBuffer);
+
+      const prompt = [
+        "You are inspecting a flattened PNG render of a KDP paperback full-cover PDF.",
+        `The PNG size is ${imageWidth} x ${imageHeight} pixels. The coordinate origin is the top-left corner.`,
+        "Your only task is to detect visible text regions and return their full pixel bounding boxes.",
+        "Do not classify regions as front/back/spine. Do not crop, clamp, or force a text box into any book area. If text crosses a fold, trim, margin, or panel boundary, return the full bounding box that covers the visible text.",
+        "Ignore stars, dots, guide lines, light rays, decorative borders, book art, barcode lines, and non-text ornaments.",
+        "Return bounding boxes for coherent text blocks, not every tiny speck. Split by natural text blocks: title, subtitle, author, spine title, publisher/logo text, back-cover paragraphs.",
+        "Coordinates must be pixel coordinates in the provided PNG, origin at top-left, x/y/width/height integers.",
+        "For every region, also return center_x: the x-coordinate of the vertical center axis of that visible text region. For normal boxes this is x + width / 2; for spine/back/front-cover text, still use the text region's own visual center axis in PNG pixels.",
+        "Use notes to state whether the text appears on the front cover, book spine, or back cover when visually clear.",
+        "Return JSON only with this schema:",
+        '{"image":{"width":number,"height":number},"regions":[{"id":"string","text":"visible text if readable","x":number,"y":number,"width":number,"height":number,"center_x":number,"confidence":0-1,"orientation":"horizontal|vertical|rotated|unknown","notes":"front cover|book spine|back cover + short detail"}]}'
+      ].join("\n");
+
+      const response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: prompt },
+                { type: "input_image", image_url: imageDataUrl }
+              ]
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenAI vision request failed (${response.status}): ${errorText.slice(0, 500)}`);
+      }
+
+      const responseJson = await response.json();
+      const modelText = extractResponseText(responseJson);
+      const parsed = parseJsonFromModelText(modelText);
+      const modelImageWidth = Math.max(1, Math.round(Number(parsed?.image?.width || imageWidth)));
+      const modelImageHeight = Math.max(1, Math.round(Number(parsed?.image?.height || imageHeight)));
+      const coordinateScale = {
+        x: imageWidth / modelImageWidth,
+        y: imageHeight / modelImageHeight
+      };
+      const regions = (Array.isArray(parsed.regions) ? parsed.regions : [])
+        .map((region, index) => normalizeVisionRegion(region, index, imageWidth, imageHeight, coordinateScale))
+        .filter((region) => region.width > 0 && region.height > 0);
+      const savedResult = {
+        bookName,
+        createdAt: formatLocalTimestamp(),
+        model,
+        prompt,
+        image: {
+          width: imageWidth,
+          height: imageHeight,
+          fileName: imageFileName,
+          path: imagePath,
+          bytes: imageBuffer.length
+        },
+        modelImage: {
+          width: modelImageWidth,
+          height: modelImageHeight
+        },
+        coordinateScale,
+        regions,
+        parsed,
+        rawText: modelText,
+        usage: responseJson.usage || null,
+        responseId: responseJson.id || "",
+        responseCreatedAt: responseJson.created_at || null,
+        responseStatus: responseJson.status || "",
+        rawResponse: responseJson
+      };
+      writeJsonFile(resultPath, savedResult);
+      writeJsonFile(latestPath, savedResult);
+      appendJsonLine(path.join(visionRoot, "llm_text_regions_runs.jsonl"), {
+        bookName,
+        createdAt: savedResult.createdAt,
+        model,
+        resultFileName,
+        imageFileName,
+        image: savedResult.image,
+        modelImage: savedResult.modelImage,
+        coordinateScale,
+        regionCount: regions.length,
+        usage: savedResult.usage
+      });
+
+      sendJson(res, 200, {
+        bookName,
+        model,
+        image: {
+          width: imageWidth,
+          height: imageHeight
+        },
+        modelImage: {
+          width: modelImageWidth,
+          height: modelImageHeight
+        },
+        coordinateScale,
+        regions,
+        rawText: modelText,
+        usage: responseJson.usage || null,
+        responseId: responseJson.id || "",
+        responseStatus: responseJson.status || "",
+        createdAt: savedResult.createdAt,
+        saved: {
+          resultFileName,
+          imageFileName,
+          latestFileName,
+          resultPath,
+          imagePath,
+          latestPath
+        }
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/cover-copy") {
     const bookName = url.searchParams.get("bookName");
 
@@ -3079,6 +4222,247 @@ const server = http.createServer(async (req, res) => {
       });
 
       sendJson(res, 200, { bookName, prompt });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/cover-midjourney-prompt-result") {
+    const bookName = url.searchParams.get("bookName");
+    const edition = url.searchParams.get("edition") || "ebook";
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      if (!["ebook", "print"].includes(edition)) {
+        throw new Error("Invalid edition.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const promptRoot = path.join(paths.bookRoot, "07_cover", "next", edition, "prompts");
+      const promptPath = path.join(promptRoot, "midjourney_prompt.txt");
+      const reportJsonPath = path.join(promptRoot, "midjourney_prompt_report.json");
+      const reportMdPath = path.join(promptRoot, "midjourney_prompt_report.md");
+
+      if (!fs.existsSync(promptPath)) {
+        sendJson(res, 404, { error: "midjourney_prompt.txt not found." });
+        return;
+      }
+
+      sendJson(res, 200, {
+        bookName,
+        edition,
+        prompt: fs.readFileSync(promptPath, "utf8").replace(/^\uFEFF/, ""),
+        reportText: readTextIfExists(reportMdPath),
+        reportJson: readJsonFileSafe(reportJsonPath),
+        paths: {
+          prompt: promptPath,
+          report: reportMdPath,
+          reportJson: reportJsonPath
+        }
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/cover-workbench-state") {
+    const bookName = url.searchParams.get("bookName");
+    const edition = url.searchParams.get("edition") || "ebook";
+
+    if (!bookName) {
+      sendJson(res, 400, { error: "bookName is required." });
+      return;
+    }
+
+    try {
+      validateBookName(bookName);
+      if (!["ebook", "print"].includes(edition)) {
+        throw new Error("Invalid edition.");
+      }
+      const paths = getWorkspacePaths(bookName);
+      sendJson(res, 200, {
+        bookName,
+        workbench: getCoverWorkbenchState(paths.bookRoot, edition)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/cover-workbench-state") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const edition = body.nextEdition || body.edition || "ebook";
+      validateBookName(bookName);
+      if (!["ebook", "print"].includes(edition)) {
+        throw new Error("Invalid edition.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const nextRoot = path.join(paths.bookRoot, "07_cover", "next", edition);
+      const importRoot = path.join(nextRoot, "imports");
+      const statePath = path.join(nextRoot, "workbench_state.json");
+      const existingState = readJsonFileSafe(statePath) || {};
+      const nextState = {
+        ...existingState,
+        updated_at: formatLocalTimestamp()
+      };
+
+      if (typeof body.selectedImportFile === "string" && body.selectedImportFile.trim()) {
+        const selectedImportFile = path.basename(body.selectedImportFile.trim());
+        validateAssetFileName(selectedImportFile);
+        if (!/\.(png|jpg|jpeg|webp)$/i.test(selectedImportFile)) {
+          throw new Error("Selected import must be an image file.");
+        }
+        const selectedPath = path.join(importRoot, selectedImportFile);
+        if (!selectedPath.startsWith(importRoot) || !fs.existsSync(selectedPath)) {
+          throw new Error("Selected import image not found.");
+        }
+        nextState.selected_import_file = selectedImportFile;
+        nextState.latest_import_file = selectedImportFile;
+        nextState.latest_import_path = selectedPath;
+      }
+
+      ["editText", "publisher", "imageModel"].forEach((key) => {
+        if (typeof body[key] === "string") {
+          const stateKey = key === "editText" ? "edit_text" : key === "imageModel" ? "image_model" : key;
+          nextState[stateKey] = body[key];
+        }
+      });
+
+      writeJsonFile(statePath, nextState);
+      sendJson(res, 200, {
+        bookName,
+        workbench: getCoverWorkbenchState(paths.bookRoot, edition)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/cover-midjourney-prompt/save") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const edition = body.nextEdition || body.edition || "ebook";
+      const prompt = typeof body.prompt === "string" ? body.prompt : "";
+      validateBookName(bookName);
+      if (!["ebook", "print"].includes(edition)) {
+        throw new Error("Invalid edition.");
+      }
+      if (!prompt.trim()) {
+        throw new Error("Prompt is empty.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      ensureDir(paths.coverBriefRoot);
+      const promptPath = path.join(paths.coverBriefRoot, "cover_midjourney_prompt.txt");
+      const nextPromptPath = path.join(paths.bookRoot, "07_cover", "next", edition, "prompts", "midjourney_prompt.txt");
+      ensureDir(path.dirname(nextPromptPath));
+      fs.writeFileSync(promptPath, prompt, "utf8");
+      fs.writeFileSync(nextPromptPath, prompt, "utf8");
+      const statePath = path.join(paths.bookRoot, "07_cover", "next", edition, "workbench_state.json");
+      const existingState = readJsonFileSafe(statePath) || {};
+      writeJsonFile(statePath, {
+        ...existingState,
+        updated_at: formatLocalTimestamp(),
+        midjourney_prompt_file: nextPromptPath
+      });
+
+      sendJson(res, 200, {
+        bookName,
+        edition,
+        fileName: "cover_midjourney_prompt.txt",
+        path: promptPath,
+        nextPath: nextPromptPath,
+        prompt
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/cover-base-image/import") {
+    try {
+      const body = await readJsonBody(req, 40_000_000);
+      const bookName = body.bookName;
+      const edition = body.nextEdition || body.edition || "ebook";
+      const dataUrl = typeof body.dataUrl === "string" ? body.dataUrl : "";
+      const originalName = typeof body.fileName === "string" ? body.fileName : "";
+
+      validateBookName(bookName);
+      if (!["ebook", "print"].includes(edition)) {
+        throw new Error("Invalid edition.");
+      }
+
+      const match = dataUrl.match(/^data:(image\/png|image\/jpeg|image\/webp);base64,([A-Za-z0-9+/=\r\n]+)$/);
+      if (!match) {
+        throw new Error("Invalid image data.");
+      }
+
+      const mimeType = match[1];
+      const fallbackExt = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp"
+      }[mimeType];
+      const safeOriginalName = sanitizeImportedImageFileName(originalName, fallbackExt);
+      const stamp = formatFileStamp();
+      const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+      if (!buffer.length) {
+        throw new Error("Image file is empty.");
+      }
+      if (buffer.length > 30_000_000) {
+        throw new Error("Image file is too large.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const importRoot = path.join(paths.bookRoot, "07_cover", "next", edition, "imports");
+      ensureDir(importRoot);
+      let fileName = `imported-base-${stamp}-${safeOriginalName}`;
+      let targetPath = path.resolve(importRoot, fileName);
+      let suffix = 2;
+      while (fs.existsSync(targetPath)) {
+        const ext = path.extname(fileName);
+        const stem = path.basename(fileName, ext);
+        fileName = `${stem}-${suffix}${ext}`;
+        targetPath = path.resolve(importRoot, fileName);
+        suffix += 1;
+      }
+      if (!targetPath.startsWith(path.resolve(importRoot) + path.sep)) {
+        throw new Error("Invalid image target path.");
+      }
+
+      fs.writeFileSync(targetPath, buffer);
+      const statePath = path.join(paths.bookRoot, "07_cover", "next", edition, "workbench_state.json");
+      const existingState = readJsonFileSafe(statePath) || {};
+      writeJsonFile(statePath, {
+        ...existingState,
+        updated_at: formatLocalTimestamp(),
+        latest_import_file: fileName,
+        selected_import_file: fileName,
+        latest_import_path: targetPath
+      });
+      sendJson(res, 200, {
+        bookName,
+        edition,
+        fileName,
+        mimeType,
+        size: buffer.length,
+        path: targetPath,
+        section: "next-imports"
+      });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }

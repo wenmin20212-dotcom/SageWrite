@@ -8,9 +8,13 @@
   </head>
   <body>
     <div class="page-shell">
+      <div class="brand-masthead">
+        <img src="/sagewrite-press-mark.svg" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
+      </div>
+
       <header class="hero">
         <div>
-        <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.04.16-multilingual-build</span></p>
+        <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.04.25-flow-nav-build</span></p>
           <h1>写作引擎 Web 控制台</h1>
           <p class="hero-copy">
             用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -35,8 +39,89 @@
         </div>
       </header>
 
-      <main class="layout">
-        <section class="panel project-picker-panel">
+      <div class="workspace-frame">
+        <aside class="flow-nav" aria-label="SageWrite 流程导航">
+          <div class="flow-nav-header">
+            <span>Workflow</span>
+            <strong>流程导航</strong>
+          </div>
+          <nav class="flow-nav-list">
+            <button class="flow-nav-item active" type="button" data-flow-target="project">
+              <span>项目</span>
+              <strong>选择与状态</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="intake">
+              <span>01</span>
+              <strong>初始化</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="structure">
+              <span>02</span>
+              <strong>生成目录</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="expand">
+              <span>02b</span>
+              <strong>扩展小节</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="write">
+              <span>03</span>
+              <strong>写章节</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="translate">
+              <span>03T</span>
+              <strong>翻译</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="refine">
+              <span>03R</span>
+              <strong>修饰</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="check">
+              <span>04</span>
+              <strong>检查</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="build">
+              <span>05</span>
+              <strong>构建</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="cover">
+              <span>08</span>
+              <strong>封面</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="publish">
+              <span>09</span>
+              <strong>上架</strong>
+            </button>
+          </nav>
+        </aside>
+
+        <div class="workspace-main">
+          <section class="project-summary-panel" aria-live="polite">
+            <div class="project-summary-copy">
+              <span class="project-summary-kicker">Current Project</span>
+              <h2 id="project-summary-title">尚未选择项目</h2>
+              <p id="project-summary-meta">选择一个 BookName 后，这里会显示当前项目的关键进度。</p>
+            </div>
+            <div class="project-summary-grid">
+              <div class="project-summary-card">
+                <span>当前状态</span>
+                <strong id="project-summary-current">暂无运行</strong>
+              </div>
+              <div class="project-summary-card">
+                <span>目录</span>
+                <strong id="project-summary-toc">未选择</strong>
+              </div>
+              <div class="project-summary-card">
+                <span>章节 / 输出</span>
+                <strong id="project-summary-output">-</strong>
+              </div>
+              <div class="project-summary-card project-summary-next">
+                <span>建议下一步</span>
+                <strong id="project-summary-next">先选择项目</strong>
+              </div>
+            </div>
+          </section>
+
+          <main class="layout">
+        <section class="panel project-picker-panel" data-flow-section="project">
           <div class="panel-header">
             <h2>项目选择</h2>
           </div>
@@ -65,7 +150,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="status">
           <div class="panel-header">
             <h2>项目状态</h2>
           </div>
@@ -85,7 +170,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="intake">
           <div class="panel-header">
             <h2>01 初始化项目</h2>
           </div>
@@ -143,7 +228,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="structure">
           <div class="panel-header">
             <h2>02 生成目录</h2>
           </div>
@@ -171,7 +256,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="expand">
           <div class="panel-header">
             <h2>02b 扩展小节</h2>
           </div>
@@ -225,7 +310,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="write">
           <div class="panel-header">
             <h2>03 写章节</h2>
           </div>
@@ -294,7 +379,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="translate">
           <div class="panel-header">
             <h2>03T 多语言翻译</h2>
           </div>
@@ -365,7 +450,7 @@
           </details>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-flow-section="refine">
           <div class="panel-header">
             <h2>03R 多语言修饰</h2>
           </div>
@@ -452,7 +537,7 @@
           </div>
         </div>
 
-        <section class="panel compact-panel">
+        <section class="panel compact-panel" data-flow-section="check">
           <div class="panel-header">
             <h2>04 检查</h2>
           </div>
@@ -480,7 +565,7 @@
           </details>
         </section>
 
-        <section class="panel compact-panel">
+        <section class="panel compact-panel" data-flow-section="build">
           <div class="panel-header">
             <h2>05 构建文档</h2>
           </div>
@@ -530,7 +615,7 @@
           </details>
         </section>
 
-        <section class="panel cover-panel">
+        <section class="panel cover-panel" data-flow-section="cover">
           <div class="panel-header">
             <h2>08 封面系统</h2>
             <button id="toggle-cover-panel" class="ghost-button" type="button" aria-expanded="false">展开</button>
@@ -652,7 +737,27 @@
                   </div>
                   <div class="cover-report-wrap">
                     <div class="cover-report-title">MidJourney 封面底图提示词</div>
-                    <textarea id="cover-midjourney-prompt" class="cover-report" rows="9" readonly spellcheck="false">点击上方按钮后，这里会显示一段可直接参考的 MidJourney 封面底图提示词。</textarea>
+                    <textarea id="cover-midjourney-prompt" class="cover-report" rows="9" spellcheck="false">点击上方按钮后，这里会显示一段可直接参考的 MidJourney 封面底图提示词。</textarea>
+                    <div class="cover-copy-actions">
+                      <button id="copy-cover-midjourney-prompt" class="ghost-button" type="button">复制提示词</button>
+                      <button id="save-cover-midjourney-prompt" class="ghost-button" type="button">保存提示词</button>
+                    </div>
+                  </div>
+                  <div class="cover-report-wrap">
+                    <div class="cover-report-title">外部底图导入</div>
+                    <div id="cover-base-import-dropzone" class="cover-base-import-dropzone" tabindex="0">
+                      <input id="cover-base-import-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                      <div class="cover-base-import-preview" id="cover-base-import-preview">
+                        <span>选择、拖入或粘贴一张外部生成的封面底图</span>
+                      </div>
+                      <div class="cover-base-import-meta" id="cover-base-import-meta">支持 PNG / JPG / WEBP，保存后进入 08N Imports。</div>
+                    </div>
+                    <div class="cover-copy-actions">
+                      <button id="prev-cover-base-import" class="ghost-button" type="button">上一张底图</button>
+                      <button id="next-cover-base-import" class="ghost-button" type="button">下一张底图</button>
+                      <button id="select-cover-base-import" class="ghost-button" type="button">选择底图</button>
+                      <button id="save-cover-base-import" class="ghost-button" type="button">保存底图</button>
+                    </div>
                   </div>
                   <div class="cover-summary">
                     这一层决定的是生成节奏和执行路径：想快速试方向时可以减少候选数或跳过中间阶段，想完整生成整套素材时就保持 full 流程。
@@ -663,36 +768,74 @@
               <details id="cover-operations-shell" class="workbench-shell" open>
                 <summary>
                   <div class="workbench-summary">
-                    <span class="workbench-kicker">Run</span>
-                    <strong class="workbench-title">生成操作工作台</strong>
-                    <span class="workbench-meta">这里集中放执行入口和目录打开动作，适合连续试错、快速迭代封面结果。</span>
+                    <span class="workbench-kicker">Edit</span>
+                    <strong class="workbench-title">修图工作台</strong>
+                    <span class="workbench-meta">取出已保存的底图，清除图中原有字符，再用标题、副标题、作者和出版社完成封面文字修图。</span>
+                  </div>
+                </summary>
+                <div class="workbench-body">
+                  <div class="cover-report-wrap">
+                    <div class="cover-report-title">封面文字</div>
+                    <div class="form-grid cover-edit-grid">
+                      <label class="field">
+                        <span>出版社</span>
+                        <input id="cover-edit-publisher" type="text" placeholder="出版社或品牌名">
+                      </label>
+                      <label class="field">
+                        <span>图像模型</span>
+                        <input id="cover-edit-image-model" type="text" value="gpt-image-1.5">
+                      </label>
+                    </div>
+                    <textarea id="cover-edit-text" class="cover-report" rows="6" spellcheck="false">书名：
+副标题：
+作者：
+出版社：</textarea>
+                    <div class="cover-copy-actions">
+                      <button id="refresh-cover-edit-text" class="ghost-button" type="button">刷新文字要素</button>
+                      <button id="run-cover-image-edit" class="primary-button" type="button">调用图形模型修图</button>
+                    </div>
+                  </div>
+                  <div class="cover-report-wrap">
+                    <div class="cover-report-title">修图结果</div>
+                    <div id="cover-edit-result-preview" class="cover-edit-result-preview">
+                      <span>调用图形模型修图后，这里会显示新生成的封面图。</span>
+                    </div>
+                    <div id="cover-edit-result-meta" class="cover-base-import-meta">尚未生成修图结果。</div>
+                  </div>
+                </div>
+              </details>
+
+              <details id="cover-next-shell" class="workbench-shell" open>
+                <summary>
+                  <div class="workbench-summary">
+                    <span class="workbench-kicker">08N</span>
+                    <strong class="workbench-title">Next cover flow</strong>
+                    <span class="workbench-meta">New parallel cover pipeline: no-text base image, prompt package, review, local title layout, KDP print spread, mockup, export.</span>
                   </div>
                 </summary>
                 <div class="workbench-body">
                   <div class="cover-browser-header">
-                    <div class="cover-browser-title">封面执行入口</div>
+                    <div class="cover-browser-title">08N folders</div>
                     <div class="cover-folder-actions">
-                      <button class="ghost-button" id="open-cover-drafts" type="button">打开 drafts</button>
-                      <button class="ghost-button" id="open-cover-layout" type="button">打开 layout</button>
-                      <button class="ghost-button" id="open-cover-mockup" type="button">打开 mockup</button>
-                      <button class="ghost-button" id="open-cover-final" type="button">打开 final</button>
+                      <button class="ghost-button" id="open-cover-next-imports" type="button">open imports</button>
+                      <button class="ghost-button" id="open-cover-next-layout" type="button">open layout</button>
+                      <button class="ghost-button" id="open-cover-next-print-spread" type="button">open print spread</button>
+                      <button class="ghost-button" id="open-cover-next-mockup" type="button">open mockup</button>
+                      <button class="ghost-button" id="open-cover-next-final" type="button">open final</button>
                     </div>
                   </div>
-                  <div class="cover-folder-notes">
-                    <div>drafts：草稿方向</div>
-                    <div>layout：排版稿</div>
-                    <div>mockup：展示样机</div>
-                    <div>final：最终成品</div>
-                  </div>
                   <div class="cover-submit-actions">
-                    <button class="ghost-button" id="run-cover-drafts" type="button">生成草稿 drafts</button>
-                    <button class="ghost-button" id="run-cover-layout" type="button">基于当前草稿生成 layout</button>
-                    <button class="ghost-button" id="run-cover-mockup" type="button">基于 layout 生成 mockup</button>
-                    <button class="primary-button" type="submit">运行 08-cover.ps1</button>
+                    <button class="ghost-button" id="run-cover-next-brief" type="button">base brief</button>
+                    <button class="ghost-button" id="run-cover-next-prompt" type="button">prompts</button>
+                    <button class="ghost-button" id="run-cover-next-generate" type="button">base image</button>
+                    <button class="ghost-button" id="run-cover-next-review" type="button">review</button>
+                    <button class="ghost-button" id="run-cover-next-layout" type="button">title layout</button>
+                    <button class="ghost-button" id="run-cover-next-print" type="button">KDP print</button>
+                    <button class="ghost-button" id="run-cover-next-mockup" type="button">mockup</button>
+                    <button class="ghost-button" id="run-cover-next-export" type="button">export</button>
+                    <button class="primary-button" id="run-cover-next-all" type="button">run 08n-cover.ps1</button>
                   </div>
-                  <div class="cover-summary">
-                    你现在可以分三步推进：先生成 drafts，人工看方向后再推进到 layout，再基于 layout 生成 mockup。需要整链路重跑时，下面仍然保留原来的 `运行 08-cover.ps1`。
-                  </div>
+                  <div class="cover-summary">08N keeps all output under 07_cover/next and leaves the old 08 flow untouched.</div>
                 </div>
               </details>
             </form>
@@ -758,16 +901,166 @@
                   </div>
                 </div>
 
+                <div id="cover-next-summary" class="cover-summary">08N next cover flow has not produced artifacts yet.</div>
+                <div class="cover-gallery-grid">
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">08N Imports</div>
+                    <div id="cover-next-imports" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">No 08N imports yet.</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">08N Layout</div>
+                    <div id="cover-next-layout" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">No 08N layout yet.</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">08N Print</div>
+                    <div id="cover-next-print-spread" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">No 08N print spread yet.</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">08N Mockup</div>
+                    <div id="cover-next-mockup" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">No 08N mockup yet.</div>
+                    </div>
+                  </div>
+                  <div class="cover-gallery-section">
+                    <div class="cover-gallery-title">08N Final</div>
+                    <div id="cover-next-final" class="cover-gallery-list">
+                      <div class="cover-gallery-empty">No 08N final yet.</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-report-wrap">
+                  <div class="cover-report-title">08N export report (next_cover_report.md)</div>
+                  <textarea id="cover-next-report" class="cover-report" readonly spellcheck="false">Run 08n-export.ps1 to see final/next_cover_report.md.</textarea>
+                </div>
+
                 <div class="cover-report-wrap">
                   <div class="cover-report-title">导出报告（cover_report.md）</div>
                   <textarea id="cover-report" class="cover-report" readonly spellcheck="false">运行 08-cover.ps1 后，这里会显示 final/cover_report.md 的内容。</textarea>
                 </div>
               </div>
             </details>
+
+            <details id="cover-kdp-review-shell" class="workbench-shell" open>
+              <summary>
+                <div class="workbench-summary">
+                  <span class="workbench-kicker">KDP_REVIEW</span>
+                  <strong class="workbench-title">KDP 验收工具平台</strong>
+                  <span class="workbench-meta">上传 KDP 封面 PDF，用裁切尺寸、页数、纸张和出血参数检查文件是否适合提交。</span>
+                </div>
+              </summary>
+              <div class="workbench-body">
+                <div class="cover-report-wrap kdp-acceptance-wrap">
+                  <div class="cover-browser-header">
+                    <div class="cover-report-title">KDP PDF 验收</div>
+                    <div class="cover-folder-actions">
+                      <button id="open-kdp-acceptance-folder" class="ghost-button" type="button">打开验收目录</button>
+                    </div>
+                  </div>
+                  <div class="kdp-acceptance-grid">
+                    <div class="kdp-acceptance-controls">
+                      <div class="kdp-fixed-spec">
+                        <span>裁切 6 x 9 in</span>
+                        <span>出血 0.125 in</span>
+                      </div>
+                      <input id="kdp-trim-width" type="hidden" value="6">
+                      <input id="kdp-trim-height" type="hidden" value="9">
+                      <input id="kdp-bleed" type="hidden" value="0.125">
+                      <div class="form-grid kdp-compact-grid">
+                        <label class="field">
+                          <span>页数</span>
+                          <input id="kdp-page-count" type="number" min="1" step="1" value="120">
+                        </label>
+                        <label class="field">
+                          <span>纸张</span>
+                          <select id="kdp-paper-type">
+                            <option value="bw-white">黑白 / 白纸</option>
+                            <option value="bw-cream">黑白 / 米色纸</option>
+                            <option value="premium-color">高级彩色</option>
+                            <option value="standard-color">标准彩色</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          <span>书脊宽度</span>
+                          <input id="kdp-spine-width" type="text" value="0.270 in / 6.86 mm" readonly>
+                        </label>
+                      </div>
+                      <input id="kdp-pdf-file" type="file" accept="application/pdf,.pdf" hidden>
+                      <div class="cover-copy-actions">
+                        <button id="select-kdp-pdf" class="ghost-button" type="button">选择 PDF</button>
+                        <button id="submit-kdp-pdf" class="primary-button" type="button">提交验收</button>
+                      </div>
+                      <div id="kdp-pdf-meta" class="cover-base-import-meta">尚未选择 PDF。</div>
+                      <div id="kdp-acceptance-summary" class="cover-summary">上传 KDP 封面 PDF 后，这里会显示验收结论。</div>
+                      <div id="kdp-size-rules" class="kdp-size-rules"></div>
+                      <div id="kdp-pdf-parameters" class="kdp-pdf-parameters"></div>
+                      <div id="kdp-acceptance-checks" class="kdp-check-list"></div>
+                    </div>
+                    <div class="kdp-acceptance-preview">
+                      <div id="kdp-guide-preview" class="kdp-guide-preview">
+                        <div class="kdp-guide-art">
+                          <div class="kdp-guide-label kdp-guide-back">BACK</div>
+                          <div class="kdp-guide-label kdp-guide-spine">SPINE</div>
+                          <div class="kdp-guide-label kdp-guide-front">FRONT</div>
+                          <div class="kdp-guide-trim"></div>
+                          <div class="kdp-guide-safe"></div>
+                          <div class="kdp-guide-fold kdp-guide-fold-left"></div>
+                          <div class="kdp-guide-fold kdp-guide-fold-right"></div>
+                          <div class="kdp-guide-spine-safe kdp-guide-spine-safe-left"></div>
+                          <div class="kdp-guide-spine-safe kdp-guide-spine-safe-right"></div>
+                          <div class="kdp-guide-barcode">BARCODE</div>
+                        </div>
+                        <div class="kdp-guide-legend">
+                          <span class="kdp-guide-white">白线：裁切线 / 书脊边缘</span>
+                          <span class="kdp-guide-red">红线：安全边距 / 文字边界</span>
+                          <span class="kdp-guide-barcode-legend">条码：封底右下角 2 x 1.2 in</span>
+                        </div>
+                      </div>
+                      <div class="kdp-pdf-viewer">
+                        <div class="kdp-pdf-toolbar">
+                          <button id="kdp-pdf-zoom-out" class="ghost-button" type="button">-</button>
+                          <button id="kdp-pdf-zoom-in" class="ghost-button" type="button">+</button>
+                          <button id="kdp-pdf-fit" class="ghost-button" type="button">适合宽度</button>
+                          <button id="kdp-pdf-actual" class="ghost-button" type="button">100%</button>
+                          <button id="kdp-llm-text" class="ghost-button" type="button">LLM识别文字区域</button>
+                          <button id="kdp-ocr-text" class="ghost-button" type="button">识别文字区域</button>
+                          <span id="kdp-pdf-zoom-label">未加载 PDF</span>
+                        </div>
+                        <div id="kdp-pdf-stage" class="kdp-pdf-stage">
+                          <div id="kdp-pdf-page" class="kdp-pdf-page">
+                            <canvas id="kdp-pdf-canvas"></canvas>
+                            <div id="kdp-pdf-overlay" class="kdp-pdf-overlay">
+                              <div class="kdp-pdf-trim"></div>
+                              <div class="kdp-pdf-safe"></div>
+                              <div class="kdp-pdf-fold kdp-pdf-fold-left"></div>
+                              <div class="kdp-pdf-fold kdp-pdf-fold-right"></div>
+                              <div class="kdp-pdf-spine-safe kdp-pdf-spine-safe-left"></div>
+                              <div class="kdp-pdf-spine-safe kdp-pdf-spine-safe-right"></div>
+                              <div class="kdp-pdf-barcode">BARCODE</div>
+                              <div id="kdp-pdf-text-layer" class="kdp-pdf-text-layer"></div>
+                            </div>
+                          </div>
+                          <div id="kdp-pdf-empty" class="cover-gallery-empty">提交 PDF 后，这里会显示自定义 KDP 检视器。</div>
+                        </div>
+                      </div>
+                      <div id="kdp-text-region-report" class="kdp-text-region-report">
+                        <div class="cover-gallery-empty">点击“识别文字区域”后，这里会按封底、书脊、封面列出 OCR 坐标。</div>
+                      </div>
+                    </div>
+                  </div>
+                  <textarea id="kdp-acceptance-report" class="cover-report" readonly spellcheck="false">提交 PDF 后，这里会显示 KDP 验收报告。</textarea>
+                </div>
+              </div>
+            </details>
           </div>
         </section>
 
-        <section class="panel publish-panel">
+        <section class="panel publish-panel" data-flow-section="publish">
           <div class="panel-header">
             <h2>09 上架中心</h2>
             <div class="publish-header-actions">
@@ -1062,7 +1355,7 @@
           </div>
         </section>
 
-        <section class="panel log-panel">
+        <section class="panel log-panel" data-flow-section="log">
           <div class="panel-header">
             <h2>运行日志</h2>
             <div class="log-panel-actions">
@@ -1072,7 +1365,9 @@
           </div>
           <pre id="log-output" class="log-output">这里会显示 PowerShell 输出。</pre>
         </section>
-      </main>
+          </main>
+        </div>
+      </div>
     </div>
 
     <script src="/app.js"></script>

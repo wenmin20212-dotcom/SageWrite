@@ -132,10 +132,13 @@ $StrategyJsonPath      = Join-Path $CoverBriefRoot "cover_strategy.json"
 $CopyJsonPath          = Join-Path $CoverBriefRoot "cover_copy.json"
 $AssistantJsonPath     = Join-Path $CoverBriefRoot "cover_assistant_last.json"
 $AssistantMarkdownPath = Join-Path $CoverBriefRoot "cover_assistant_last.md"
+$NextCoverRoot         = Join-Path $CoverBaseRoot "next\$Edition"
+$WorkbenchStatePath    = Join-Path $NextCoverRoot "workbench_state.json"
 
 Ensure-Directory -Path $CoverBaseRoot
 Ensure-Directory -Path $CoverRoot
 Ensure-Directory -Path $CoverBriefRoot
+Ensure-Directory -Path $NextCoverRoot
 
 if ([string]::IsNullOrWhiteSpace($Request)) {
     throw "Request is required."
@@ -192,8 +195,8 @@ You are an AI assistant for book-cover ideation, cover prompt writing, and visua
 
 Reply in Chinese unless the user explicitly asks for another language.
 Use the cover context when it helps.
-If the user asks for a MidJourney prompt, return a ready-to-copy prompt.
-For cover base-image prompts, prefer image-only guidance and avoid visible title typography inside the generated image unless the user explicitly asks for it.
+If the user asks for a MidJourney prompt, return a ready-to-copy English prompt.
+For cover base-image prompts, use image-only guidance. The image must contain absolutely no text of any kind: no title, no author name, no typography, no letters, no numbers, no Chinese characters, no logos, no watermarks, and no marks that look like writing.
 
 Current cover context:
 $CoverContext
@@ -254,6 +257,21 @@ $AssistantResult = [ordered]@{
 
 Write-JsonUtf8 -Data $AssistantResult -Path $AssistantJsonPath
 Set-Content -LiteralPath $AssistantMarkdownPath -Value $ResponseText -Encoding UTF8
+
+$WorkbenchState = Read-JsonUtf8Safe -Path $WorkbenchStatePath
+$NextWorkbenchState = [ordered]@{
+    updated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    assistant_request = $Request
+    assistant_response_path = $AssistantMarkdownPath
+}
+if ($WorkbenchState) {
+    foreach ($property in $WorkbenchState.PSObject.Properties) {
+        if (-not $NextWorkbenchState.Contains($property.Name)) {
+            $NextWorkbenchState[$property.Name] = $property.Value
+        }
+    }
+}
+Write-JsonUtf8 -Data $NextWorkbenchState -Path $WorkbenchStatePath
 
 Write-Host "07a-cover-assist completed successfully."
 Write-Host ("Result JSON: " + $AssistantJsonPath)

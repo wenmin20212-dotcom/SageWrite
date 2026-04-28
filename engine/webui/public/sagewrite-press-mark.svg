@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 250" role="img" aria-labelledby="title desc">
+  <title id="title">SageWrite Press</title>
+  <desc id="desc">SageWrite Press brand mark with a gold feather and the text Inspiring Ideas. Empowering Writers.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07121d"/>
+      <stop offset="0.58" stop-color="#07101a"/>
+      <stop offset="1" stop-color="#02070d"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7c569"/>
+      <stop offset="0.45" stop-color="#d79a38"/>
+      <stop offset="1" stop-color="#9f651f"/>
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="980" height="250" rx="24" fill="url(#bg)"/>
+  <path d="M53 191c34-18 69-18 108 0" fill="none" stroke="#dca448" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M112 34c-21 23-38 54-49 92-6 21-9 40-9 57 20-10 39-28 55-54 18-29 29-61 33-95-10 8-20 17-30 29Z" fill="url(#gold)" filter="url(#softGlow)"/>
+  <path d="M60 183C83 133 107 85 135 39" fill="none" stroke="#1a160f" stroke-width="4" stroke-linecap="round"/>
+  <path d="M80 139c13-2 27-7 41-16M90 113c13-2 27-8 42-17M103 87c11-3 22-8 33-16M70 161c10-3 21-7 33-14" fill="none" stroke="#1a160f" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M55 184c3-22 6-41 10-58" fill="none" stroke="#dca448" stroke-width="3.2" stroke-linecap="round"/>
+
+  <text x="192" y="88" fill="#e6b15b" font-family="Georgia, 'Times New Roman', serif" font-size="46" letter-spacing=".2">
+    SageWrite Press
+  </text>
+  <text x="193" y="137" fill="#efe7dc" font-family="Georgia, 'Times New Roman', serif" font-size="26">
+    Inspiring Ideas. Empowering Writers.
+  </text>
+  <text x="193" y="184" fill="#efe7dc" font-family="Georgia, 'Times New Roman', serif" font-size="25">
+    www.sagewritepress.com
+  </text>
+</svg>

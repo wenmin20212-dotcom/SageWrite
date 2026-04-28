@@ -17,7 +17,14 @@ param(
 
     [switch]$Force,
     [switch]$SkipLayout,
-    [switch]$SkipMockup
+    [switch]$SkipMockup,
+
+    [double]$PrintTrimWidthIn = 6.0,
+    [double]$PrintTrimHeightIn = 9.0,
+    [double]$PrintBleedIn = 0.125,
+    [double]$PrintSpineWidthIn = 0.595,
+    [int]$PrintPageCount = 264,
+    [int]$PrintDpi = 300
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -520,11 +527,17 @@ try {
 
     Write-Stage "08z export"
     Invoke-CoverModule -ScriptPath $Module08z -ModuleName "08z-export" -Arguments @{
-        BookName   = $BookName
-        Edition    = $Edition
-        SkipLayout = $SkipLayout
-        SkipMockup = $SkipMockup
-        Force      = $Force
+        BookName          = $BookName
+        Edition           = $Edition
+        SkipLayout        = $SkipLayout
+        SkipMockup        = $SkipMockup
+        Force             = $Force
+        PrintTrimWidthIn  = $PrintTrimWidthIn
+        PrintTrimHeightIn = $PrintTrimHeightIn
+        PrintBleedIn      = $PrintBleedIn
+        PrintSpineWidthIn = $PrintSpineWidthIn
+        PrintPageCount    = $PrintPageCount
+        PrintDpi          = $PrintDpi
     }
 
     Write-Stage "08h frontmatter"
