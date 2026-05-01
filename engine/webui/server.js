@@ -120,6 +120,59 @@ function formatFileStamp(date = new Date()) {
   return formatLocalTimestamp(date).replace(/[: ]/g, "-");
 }
 
+function formatCompactFileStamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds())
+  ].join("");
+}
+
+function getUniqueFileName(dirPath, preferredFileName, date = new Date()) {
+  const safeFileName = path.basename(String(preferredFileName || "file"));
+  const preferredPath = path.resolve(dirPath, safeFileName);
+  const rootResolved = path.resolve(dirPath);
+  if (!preferredPath.startsWith(rootResolved + path.sep)) {
+    throw new Error("Invalid target file name.");
+  }
+  if (!fs.existsSync(preferredPath)) {
+    return safeFileName;
+  }
+  const ext = path.extname(safeFileName);
+  const stem = path.basename(safeFileName, ext);
+  return `${stem}-${formatCompactFileStamp(date)}${ext}`;
+}
+
+function formatKdpFixReportWithHeader(reportText, { createdAt, bookName, source = {} } = {}) {
+  const cleanOneLine = (value) => String(value || "").replace(/[\r\n]+/g, " ").trim();
+  const sourceType = cleanOneLine(source.type || "");
+  const sourceDirectory = cleanOneLine(source.directory || "");
+  const sourceFileName = cleanOneLine(source.fileName || "");
+  const sourceRelativePath = cleanOneLine(source.relativePath || "");
+  const originalFileName = cleanOneLine(source.originalFileName || "");
+  const header = [
+    `# KDP 封面修改意见报告（生成时间：${createdAt}）`,
+    "",
+    `- BookName：${cleanOneLine(bookName) || "-"}`,
+    `- 针对文件类型：${sourceType || "-"}`,
+    `- 源文件目录：${sourceDirectory || "-"}`,
+    `- 源文件名：${sourceFileName || "-"}`,
+    `- 源文件路径：${sourceRelativePath || "-"}`,
+    ...(originalFileName && originalFileName !== sourceFileName ? [`- 原始上传文件名：${originalFileName}`] : []),
+    ""
+  ];
+  const body = String(reportText || "")
+    .replace(/^# KDP 封面修改意见报告(?:（生成时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}）)?\s*/u, "")
+    .replace(/\n---\n生成时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s*$/u, "")
+    .trimStart()
+    .replace(/^(?:- (?:BookName|针对文件类型|源文件目录|源文件名|源文件路径|原始上传文件名)：[^\n]*\n)+\s*/u, "");
+  return `${header.join("\n")}${body}`.trimEnd() + "\n";
+}
+
 function appendJsonLine(filePath, payload) {
   ensureDir(path.dirname(filePath));
   fs.appendFileSync(filePath, `${JSON.stringify(payload)}\n`, "utf8");
@@ -301,6 +354,74 @@ function getKdpAcceptanceRoot(bookRoot) {
   return path.join(bookRoot, "07_cover", "kdp_acceptance");
 }
 
+function getKdpCurrentSourcePath(root) {
+  return path.join(root, "kdp_current_source.json");
+}
+
+function buildKdpCurrentSource({ type, directory = "07_cover/kdp_acceptance", fileName, relativePath, originalFileName = "" }) {
+  const cleanRelativePath = String(relativePath || fileName || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const cleanFileName = path.basename(cleanRelativePath || String(fileName || ""));
+  const cleanDirName = path.posix.dirname(cleanRelativePath);
+  const displayDirectory = cleanDirName && cleanDirName !== "."
+    ? `${directory}/${cleanDirName}`
+    : directory;
+  return {
+    type: String(type || path.extname(cleanFileName).replace(".", "") || "").toUpperCase(),
+    origin: "KDP acceptance directory",
+    directory: displayDirectory,
+    fileName: cleanFileName,
+    relativePath: cleanRelativePath ? `07_cover/kdp_acceptance/${cleanRelativePath}` : "",
+    acceptanceRelativePath: cleanRelativePath,
+    originalFileName: String(originalFileName || "")
+  };
+}
+
+function writeKdpCurrentSource(root, source) {
+  ensureDir(root);
+  const next = {
+    ...source,
+    updatedAt: formatLocalTimestamp()
+  };
+  writeJsonFile(getKdpCurrentSourcePath(root), next);
+  return next;
+}
+
+function readKdpCurrentSource(root) {
+  return readJsonFileSafe(getKdpCurrentSourcePath(root));
+}
+
+function getKdpEffectiveCurrentSource(root) {
+  const saved = readKdpCurrentSource(root);
+  if (saved) {
+    return saved;
+  }
+  const workbench = getKdpFixWorkbenchState(root);
+  if (workbench?.sourceFileName && fs.existsSync(path.join(getKdpFixWorkbenchRoot(root), "source", workbench.sourceFileName))) {
+    return writeKdpCurrentSource(root, buildKdpCurrentSource({
+      type: "PNG",
+      fileName: `fix_workbench/source/${workbench.sourceFileName}`,
+      relativePath: `fix_workbench/source/${workbench.sourceFileName}`
+    }));
+  }
+  const pngFiles = listFilesByExtensions(root, [".png"]);
+  if (pngFiles.length) {
+    const newest = pngFiles
+      .map((fileName) => {
+        const filePath = path.join(root, fileName);
+        return { fileName, mtime: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime)[0];
+    if (newest) {
+      return writeKdpCurrentSource(root, buildKdpCurrentSource({
+        type: "PNG",
+        fileName: newest.fileName,
+        relativePath: newest.fileName
+      }));
+    }
+  }
+  return null;
+}
+
 function getKdpLatestLlmTextRegionsState(root) {
   const visionRoot = path.join(root, "llm_text_regions");
   const latestPath = path.join(visionRoot, "latest_llm_text_regions.json");
@@ -326,6 +447,9 @@ function getKdpLatestLlmTextRegionsState(root) {
       resultFileName: path.basename(latestPath),
       imageFileName: latest.image?.fileName || "",
       latestFileName: "latest_llm_text_regions.json",
+      resultRelativePath: "07_cover/kdp_acceptance/llm_text_regions/latest_llm_text_regions.json",
+      imageRelativePath: latest.image?.fileName ? `07_cover/kdp_acceptance/llm_text_regions/${latest.image.fileName}` : "",
+      latestRelativePath: "07_cover/kdp_acceptance/llm_text_regions/latest_llm_text_regions.json",
       resultPath: latestPath,
       imagePath: latest.image?.path || "",
       latestPath
@@ -334,6 +458,77 @@ function getKdpLatestLlmTextRegionsState(root) {
   return {
     hasLatest: true,
     latest: latestSlim
+  };
+}
+
+function getKdpLatestFixReportState(root) {
+  const reportRoot = path.join(root, "fix_reports");
+  const latestJsonPath = path.join(reportRoot, "latest_kdp_fix_report.json");
+  const latestTextPath = path.join(reportRoot, "latest_kdp_fix_report.md");
+  const latest = readJsonFileSafe(latestJsonPath);
+  const reportText = readTextIfExists(latestTextPath);
+  if (!latest && !reportText) {
+    return {
+      hasLatest: false,
+      latest: null
+    };
+  }
+  return {
+    hasLatest: true,
+    latest: {
+      bookName: latest?.bookName || "",
+      createdAt: latest?.createdAt || "",
+      reportText: reportText || latest?.reportText || "",
+      spec: latest?.spec || null,
+      textRegionCount: latest?.textRegionCount || 0,
+      saved: {
+        resultFileName: path.basename(latestJsonPath),
+        textFileName: path.basename(latestTextPath),
+        resultPath: latestJsonPath,
+        textPath: latestTextPath,
+        latestPath: latestJsonPath,
+        backupDir: path.join(reportRoot, "back")
+      }
+    }
+  };
+}
+
+function getKdpFixWorkbenchRoot(root) {
+  return path.join(root, "fix_workbench");
+}
+
+function getKdpFixWorkbenchState(root) {
+  const workRoot = getKdpFixWorkbenchRoot(root);
+  const sourceRoot = path.join(workRoot, "source");
+  const outputRoot = path.join(workRoot, "output");
+  const cropRoot = path.join(workRoot, "crops");
+  const fillRoot = path.join(workRoot, "fills");
+  const compositeRoot = path.join(workRoot, "composites");
+  const pdfRoot = path.join(workRoot, "pdfs");
+  const promptRoot = path.join(workRoot, "prompts");
+  const statePath = path.join(workRoot, "workbench_state.json");
+  const savedState = readJsonFileSafe(statePath) || {};
+  return {
+    hasState: Boolean(savedState && Object.keys(savedState).length),
+    ...savedState,
+    sourceFiles: listFilesByExtensions(sourceRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    outputFiles: listFilesByExtensions(outputRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    cropFiles: listFilesByExtensions(cropRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    fillFiles: listFilesByExtensions(fillRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    compositeFiles: listFilesByExtensions(compositeRoot, [".png", ".jpg", ".jpeg", ".webp"]),
+    pdfFiles: listFilesByExtensions(pdfRoot, [".pdf"]),
+    promptFiles: listFilesByExtensions(promptRoot, [".txt", ".md"]),
+    roots: {
+      workRoot,
+      sourceRoot,
+      outputRoot,
+      cropRoot,
+      fillRoot,
+      compositeRoot,
+      pdfRoot,
+      promptRoot,
+      statePath
+    }
   };
 }
 
@@ -347,8 +542,11 @@ function getKdpAcceptanceState(bookRoot) {
     hasReport: Boolean(report),
     report,
     reportText: readTextIfExists(reportTextPath),
+    currentSource: getKdpEffectiveCurrentSource(root),
     pdfFiles: listFilesByExtensions(root, [".pdf"]),
-    llmTextRegions: getKdpLatestLlmTextRegionsState(root)
+    llmTextRegions: getKdpLatestLlmTextRegionsState(root),
+    fixReport: getKdpLatestFixReportState(root),
+    fixWorkbench: getKdpFixWorkbenchState(root)
   };
 }
 
@@ -857,12 +1055,10 @@ function normalizeVisionRegion(region, index, imageWidth, imageHeight, coordinat
   const rawHeight = Number(region.height ?? region.h ?? 0);
   const rawRight = Number(region.right ?? (rawX + rawWidth));
   const rawBottom = Number(region.bottom ?? (rawY + rawHeight));
-  const rawCenterX = Number(region.center_x ?? region.centerX ?? region.mid_x ?? (rawX + (rawWidth / 2)));
   const x = Math.max(0, Math.round(rawX * coordinateScale.x));
   const y = Math.max(0, Math.round(rawY * coordinateScale.y));
   const width = Math.max(0, Math.round(rawWidth * coordinateScale.x));
   const height = Math.max(0, Math.round(rawHeight * coordinateScale.y));
-  const centerX = Math.min(imageWidth, Math.max(0, Math.round(rawCenterX * coordinateScale.x)));
   const scaledRight = rawRight * coordinateScale.x;
   const scaledBottom = rawBottom * coordinateScale.y;
   const finalRight = Math.min(imageWidth, Math.round(Number.isFinite(scaledRight) ? scaledRight : (x + width)));
@@ -882,7 +1078,6 @@ function normalizeVisionRegion(region, index, imageWidth, imageHeight, coordinat
     height: normalizedHeight,
     right: Math.min(imageWidth, x + normalizedWidth),
     bottom: Math.min(imageHeight, y + normalizedHeight),
-    centerX: Number.isFinite(centerX) ? centerX : Math.round(x + (normalizedWidth / 2)),
     source: "llm_vision",
     notes: String(region.notes || ""),
     raw: {
@@ -891,8 +1086,7 @@ function normalizeVisionRegion(region, index, imageWidth, imageHeight, coordinat
       width: rawWidth,
       height: rawHeight,
       right: rawRight,
-      bottom: rawBottom,
-      centerX: rawCenterX
+      bottom: rawBottom
     },
     coordinateScale: {
       x: coordinateScale.x,
@@ -2372,6 +2566,81 @@ function sanitizeImportedImageFileName(fileName, fallbackExt) {
   return `${stem}${ext}`;
 }
 
+function sanitizeKdpFixImageFileName(fileName) {
+  const ext = path.extname(String(fileName || "")).toLowerCase() || ".png";
+  if (![".png", ".jpg", ".jpeg", ".webp"].includes(ext)) {
+    throw new Error("Unsupported KDP fix image type.");
+  }
+  const stem = path.basename(String(fileName || "kdp-fix-image"), path.extname(String(fileName || "")))
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "kdp-fix-image";
+  return `${stem}${ext}`;
+}
+
+function sanitizeKdpFixPdfFileName(fileName) {
+  const ext = path.extname(String(fileName || "")).toLowerCase() || ".pdf";
+  if (ext !== ".pdf") {
+    throw new Error("Unsupported KDP fix PDF type.");
+  }
+  const stem = path.basename(String(fileName || "kdp-fix-pdf"), path.extname(String(fileName || "")))
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 90) || "kdp-fix-pdf";
+  return `${stem}.pdf`;
+}
+
+function resolveKdpAcceptanceFilePath(bookName, relativePath, allowedExtensions = [".pdf", ".png"]) {
+  validateBookName(bookName);
+  const paths = getWorkspacePaths(bookName);
+  const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+  const cleanRelative = String(relativePath || "")
+    .replace(/^[/\\]+/, "")
+    .replace(/\\/g, "/");
+  if (!cleanRelative || cleanRelative.includes("..") || path.isAbsolute(cleanRelative)) {
+    throw new Error("Invalid KDP acceptance file path.");
+  }
+  const ext = path.extname(cleanRelative).toLowerCase();
+  if (!allowedExtensions.includes(ext)) {
+    throw new Error("Unsupported KDP acceptance file type.");
+  }
+  const rootResolved = path.resolve(acceptanceRoot);
+  const targetPath = path.resolve(acceptanceRoot, cleanRelative);
+  if (!targetPath.startsWith(rootResolved + path.sep) && targetPath !== rootResolved) {
+    throw new Error("KDP acceptance file is outside the acceptance directory.");
+  }
+  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+    throw new Error("KDP acceptance file not found.");
+  }
+  return {
+    paths,
+    acceptanceRoot,
+    targetPath,
+    relativePath: cleanRelative,
+    ext
+  };
+}
+
+function getImageMimeTypeByPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp"
+  }[ext] || "application/octet-stream";
+}
+
+function getPngDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24 || buffer.slice(0, 8).toString("hex") !== "89504e470d0a1a0a") {
+    throw new Error("PNG data is invalid.");
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20)
+  };
+}
+
 function sanitizeImportedPdfFileName(fileName) {
   const ext = path.extname(String(fileName || "")).toLowerCase() || ".pdf";
   if (ext !== ".pdf") {
@@ -2559,6 +2828,44 @@ function runScript(scriptName, params, meta) {
   child.on("close", (code) => finishJob(job, code ?? -1));
 
   return job;
+}
+
+function runPowerShellJson(scriptName, params = []) {
+  const scriptPath = path.join(ENGINE_ROOT, scriptName);
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Script not found: ${scriptName}`);
+  }
+  const args = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath
+  ];
+  params.forEach((item) => {
+    if (item.type === "switch") {
+      if (item.enabled) args.push(item.flag);
+      return;
+    }
+    pushArg(args, item.flag, item.value);
+  });
+  const result = spawnSync("powershell.exe", args, {
+    cwd: ENGINE_ROOT,
+    env: process.env,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `${scriptName} failed.`).trim());
+  }
+  const text = String(result.stdout || "").trim();
+  if (!text) {
+    return null;
+  }
+  return JSON.parse(text);
 }
 
 function runDetachedScript(scriptName, params, meta, message = "") {
@@ -2987,6 +3294,32 @@ async function handleRun(route, body, res) {
           { flag: "-Publisher", value: body.publisher || undefined },
           { flag: "-CoverText", value: body.coverText || undefined },
           { flag: "-ImageModel", value: body.imageModel || "gpt-image-1.5" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "kdp-fix-image-edit":
+        job = runScript("kdp-fix-image-edit.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-SourceFile", value: body.sourceFileName || undefined },
+          { flag: "-PromptFile", value: body.promptFileName || undefined },
+          { flag: "-Prompt", value: body.prompt || undefined },
+          { flag: "-ImageModel", value: body.imageModel || "gpt-image-1.5" },
+          { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+        ], { route, bookName });
+        break;
+      case "kdp-acceptance-files":
+        job = runScript("kdp-acceptance-files.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-Action", value: body.action || "List" }
+        ], { route, bookName });
+        break;
+      case "kdp-imagemagick-fix":
+        job = runScript("kdp-imagemagick-fix.ps1", [
+          { flag: "-BookName", value: bookName },
+          { flag: "-SourceFile", value: body.sourceFileName || undefined },
+          { flag: "-InputEditFile", value: body.inputEditFileName || undefined },
+          { flag: "-InstructionJson", value: body.instructionJson || undefined },
+          { flag: "-InstructionFile", value: body.instructionFileName || undefined },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
         ], { route, bookName });
         break;
@@ -3908,6 +4241,38 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/kdp-acceptance-files") {
+    const bookName = url.searchParams.get("bookName");
+    try {
+      validateBookName(bookName);
+      const result = runPowerShellJson("kdp-acceptance-files.ps1", [
+        { flag: "-BookName", value: bookName },
+        { flag: "-Action", value: "List" }
+      ]);
+      sendJson(res, 200, result || { bookName, files: [] });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/kdp-acceptance-file") {
+    const bookName = url.searchParams.get("bookName");
+    const fileName = url.searchParams.get("fileName");
+    try {
+      const resolved = resolveKdpAcceptanceFilePath(bookName, fileName, [".pdf", ".png"]);
+      res.writeHead(200, {
+        "Content-Type": resolved.ext === ".pdf" ? "application/pdf" : "image/png",
+        "Cache-Control": "no-store",
+        "Content-Disposition": `inline; filename="${path.basename(resolved.targetPath).replace(/"/g, "")}"`
+      });
+      res.end(fs.readFileSync(resolved.targetPath));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/kdp-acceptance-pdf") {
     const bookName = url.searchParams.get("bookName");
     const fileName = url.searchParams.get("fileName");
@@ -3918,30 +4283,78 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      validateBookName(bookName);
-      validateAssetFileName(fileName);
       if (!/\.pdf$/i.test(fileName)) {
         throw new Error("Only PDF files can be previewed here.");
       }
-      const paths = getWorkspacePaths(bookName);
-      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
-      const targetPath = path.resolve(acceptanceRoot, path.basename(fileName));
-      const rootResolved = path.resolve(acceptanceRoot);
-      if (!targetPath.startsWith(rootResolved + path.sep)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
-      if (!fs.existsSync(targetPath)) {
-        sendJson(res, 404, { error: "KDP acceptance PDF not found." });
-        return;
-      }
+      const resolved = resolveKdpAcceptanceFilePath(bookName, fileName, [".pdf"]);
 
       res.writeHead(200, {
         "Content-Type": "application/pdf",
         "Cache-Control": "no-store",
-        "Content-Disposition": `inline; filename="${path.basename(targetPath).replace(/"/g, "")}"`
+        "Content-Disposition": `inline; filename="${path.basename(resolved.targetPath).replace(/"/g, "")}"`
       });
-      res.end(fs.readFileSync(targetPath));
+      res.end(fs.readFileSync(resolved.targetPath));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-acceptance-existing-file") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const fileName = body.fileName;
+      const resolved = resolveKdpAcceptanceFilePath(bookName, fileName, [".pdf", ".png"]);
+      if (resolved.ext === ".png") {
+        const currentSource = writeKdpCurrentSource(resolved.acceptanceRoot, buildKdpCurrentSource({
+          type: "PNG",
+          fileName: resolved.relativePath,
+          relativePath: resolved.relativePath
+        }));
+        sendJson(res, 200, {
+          bookName,
+          fileType: "png",
+          fileName: resolved.relativePath,
+          currentSource,
+          fileUrl: `/api/kdp-acceptance-file?bookName=${encodeURIComponent(bookName)}&fileName=${encodeURIComponent(resolved.relativePath)}`,
+          kdpAcceptance: getKdpAcceptanceState(resolved.paths.bookRoot)
+        });
+        return;
+      }
+
+      const spec = buildKdpPaperbackCoverSpec({
+        trimWidthIn: body.trimWidthIn,
+        trimHeightIn: body.trimHeightIn,
+        bleedIn: body.bleedIn,
+        pageCount: body.pageCount,
+        paperType: body.paperType
+      });
+      const pdfInfo = parsePdfInfo(resolved.targetPath);
+      const report = buildKdpAcceptanceReport({
+        bookName,
+        pdfFileName: resolved.relativePath,
+        pdfPath: resolved.targetPath,
+        pdfInfo,
+        spec
+      });
+      const reportPath = path.join(resolved.acceptanceRoot, "kdp_acceptance_report.json");
+      const reportTextPath = path.join(resolved.acceptanceRoot, "kdp_acceptance_report.md");
+      writeJsonFile(reportPath, report);
+      fs.writeFileSync(reportTextPath, buildKdpAcceptanceMarkdown(report), "utf8");
+      const currentSource = writeKdpCurrentSource(resolved.acceptanceRoot, buildKdpCurrentSource({
+        type: "PDF",
+        fileName: resolved.relativePath,
+        relativePath: resolved.relativePath
+      }));
+
+      sendJson(res, 200, {
+        bookName,
+        fileType: "pdf",
+        fileName: resolved.relativePath,
+        currentSource,
+        kdpAcceptance: getKdpAcceptanceState(resolved.paths.bookRoot)
+      });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
@@ -3977,8 +4390,7 @@ const server = http.createServer(async (req, res) => {
       ensureDir(acceptanceRoot);
 
       const safeOriginalName = sanitizeImportedPdfFileName(originalName);
-      const stamp = formatFileStamp();
-      const fileName = `kdp-check-${stamp}-${safeOriginalName}`;
+      const fileName = getUniqueFileName(acceptanceRoot, safeOriginalName);
       const targetPath = path.resolve(acceptanceRoot, fileName);
       const rootResolved = path.resolve(acceptanceRoot);
       if (!targetPath.startsWith(rootResolved + path.sep)) {
@@ -4006,9 +4418,70 @@ const server = http.createServer(async (req, res) => {
       const reportTextPath = path.join(acceptanceRoot, "kdp_acceptance_report.md");
       writeJsonFile(reportPath, report);
       fs.writeFileSync(reportTextPath, buildKdpAcceptanceMarkdown(report), "utf8");
+      writeKdpCurrentSource(acceptanceRoot, buildKdpCurrentSource({
+        type: "PDF",
+        fileName,
+        relativePath: fileName,
+        originalFileName: originalName
+      }));
 
       sendJson(res, 200, {
         bookName,
+        kdpAcceptance: getKdpAcceptanceState(paths.bookRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-acceptance-png") {
+    try {
+      const body = await readJsonBody(req, 120_000_000);
+      const bookName = body.bookName;
+      const dataUrl = typeof body.dataUrl === "string" ? body.dataUrl : "";
+      const originalName = typeof body.fileName === "string" ? body.fileName : "cover-upload.png";
+
+      validateBookName(bookName);
+      const match = dataUrl.match(/^data:image\/png;base64,([A-Za-z0-9+/=\r\n]+)$/);
+      if (!match) {
+        throw new Error("Invalid PNG data.");
+      }
+      const buffer = Buffer.from(match[1].replace(/\s/g, ""), "base64");
+      if (!buffer.length) {
+        throw new Error("PNG file is empty.");
+      }
+      if (buffer.length > 90_000_000) {
+        throw new Error("PNG file is too large for the local acceptance preview.");
+      }
+      if (buffer.slice(0, 8).toString("hex") !== "89504e470d0a1a0a") {
+        throw new Error("Uploaded file does not look like a PNG.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      ensureDir(acceptanceRoot);
+      const safeOriginalName = sanitizeImportedImageFileName(originalName, ".png");
+      const fileName = getUniqueFileName(acceptanceRoot, safeOriginalName);
+      const targetPath = path.resolve(acceptanceRoot, fileName);
+      const rootResolved = path.resolve(acceptanceRoot);
+      if (!targetPath.startsWith(rootResolved + path.sep)) {
+        throw new Error("Invalid PNG target path.");
+      }
+      fs.writeFileSync(targetPath, buffer);
+      const currentSource = writeKdpCurrentSource(acceptanceRoot, buildKdpCurrentSource({
+        type: "PNG",
+        fileName,
+        relativePath: fileName,
+        originalFileName: originalName
+      }));
+
+      sendJson(res, 200, {
+        bookName,
+        fileType: "png",
+        fileName,
+        currentSource,
+        fileUrl: `/api/kdp-acceptance-file?bookName=${encodeURIComponent(bookName)}&fileName=${encodeURIComponent(fileName)}`,
         kdpAcceptance: getKdpAcceptanceState(paths.bookRoot)
       });
     } catch (error) {
@@ -4022,33 +4495,52 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req, 80_000_000);
       const bookName = body.bookName;
       const imageDataUrl = typeof body.imageDataUrl === "string" ? body.imageDataUrl : "";
-      const imageWidth = Math.round(Number(body.imageWidth || 0));
-      const imageHeight = Math.round(Number(body.imageHeight || 0));
+      const sourceRelativePath = typeof body.sourceRelativePath === "string" ? body.sourceRelativePath : "";
+      let imageWidth = Math.round(Number(body.imageWidth || 0));
+      let imageHeight = Math.round(Number(body.imageHeight || 0));
       const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : "gpt-5.2";
 
       validateBookName(bookName);
       if (!process.env.OPENAI_API_KEY) {
         throw new Error("OPENAI_API_KEY not set.");
       }
-      if (!/^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(imageDataUrl)) {
-        throw new Error("imageDataUrl must be a PNG data URL.");
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      const visionRoot = path.join(acceptanceRoot, "llm_text_regions");
+      ensureDir(visionRoot);
+      const stamp = formatCompactFileStamp();
+      let imageBuffer = null;
+      let sourcePath = "";
+      let imageFileName = "";
+      if (sourceRelativePath) {
+        const resolved = resolveKdpAcceptanceFilePath(bookName, sourceRelativePath, [".png"]);
+        sourcePath = resolved.targetPath;
+        imageBuffer = fs.readFileSync(sourcePath);
+        const dimensions = getPngDimensions(imageBuffer);
+        imageWidth = dimensions.width;
+        imageHeight = dimensions.height;
+        imageFileName = getUniqueFileName(visionRoot, `llm-${path.basename(resolved.relativePath)}`);
+      } else {
+        if (!/^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(imageDataUrl)) {
+          throw new Error("imageDataUrl must be a PNG data URL unless sourceRelativePath is provided.");
+        }
+        imageBuffer = Buffer.from(imageDataUrl.replace(/^data:image\/png;base64,/, "").replace(/\s/g, ""), "base64");
+        const dimensions = getPngDimensions(imageBuffer);
+        imageWidth = imageWidth || dimensions.width;
+        imageHeight = imageHeight || dimensions.height;
+        imageFileName = `kdp-llm-text-${stamp}.png`;
       }
       if (imageWidth < 100 || imageHeight < 100) {
         throw new Error("imageWidth and imageHeight are required.");
       }
-      const paths = getWorkspacePaths(bookName);
-      const visionRoot = path.join(getKdpAcceptanceRoot(paths.bookRoot), "llm_text_regions");
-      ensureDir(visionRoot);
-      const stamp = formatFileStamp();
-      const baseFileName = `kdp-llm-text-${stamp}`;
-      const imageFileName = `${baseFileName}.png`;
+      const baseFileName = path.basename(imageFileName, ".png");
       const resultFileName = `${baseFileName}.json`;
       const latestFileName = "latest_llm_text_regions.json";
       const imagePath = path.join(visionRoot, imageFileName);
       const resultPath = path.join(visionRoot, resultFileName);
       const latestPath = path.join(visionRoot, latestFileName);
-      const imageBuffer = Buffer.from(imageDataUrl.replace(/^data:image\/png;base64,/, "").replace(/\s/g, ""), "base64");
       fs.writeFileSync(imagePath, imageBuffer);
+      const llmImageDataUrl = `data:image/png;base64,${imageBuffer.toString("base64")}`;
 
       const prompt = [
         "You are inspecting a flattened PNG render of a KDP paperback full-cover PDF.",
@@ -4058,10 +4550,9 @@ const server = http.createServer(async (req, res) => {
         "Ignore stars, dots, guide lines, light rays, decorative borders, book art, barcode lines, and non-text ornaments.",
         "Return bounding boxes for coherent text blocks, not every tiny speck. Split by natural text blocks: title, subtitle, author, spine title, publisher/logo text, back-cover paragraphs.",
         "Coordinates must be pixel coordinates in the provided PNG, origin at top-left, x/y/width/height integers.",
-        "For every region, also return center_x: the x-coordinate of the vertical center axis of that visible text region. For normal boxes this is x + width / 2; for spine/back/front-cover text, still use the text region's own visual center axis in PNG pixels.",
         "Use notes to state whether the text appears on the front cover, book spine, or back cover when visually clear.",
         "Return JSON only with this schema:",
-        '{"image":{"width":number,"height":number},"regions":[{"id":"string","text":"visible text if readable","x":number,"y":number,"width":number,"height":number,"center_x":number,"confidence":0-1,"orientation":"horizontal|vertical|rotated|unknown","notes":"front cover|book spine|back cover + short detail"}]}'
+        '{"image":{"width":number,"height":number},"regions":[{"id":"string","text":"visible text if readable","x":number,"y":number,"width":number,"height":number,"confidence":0-1,"orientation":"horizontal|vertical|rotated|unknown","notes":"front cover|book spine|back cover + short detail"}]}'
       ].join("\n");
 
       const response = await fetch("https://api.openai.com/v1/responses", {
@@ -4077,7 +4568,7 @@ const server = http.createServer(async (req, res) => {
               role: "user",
               content: [
                 { type: "input_text", text: prompt },
-                { type: "input_image", image_url: imageDataUrl }
+                { type: "input_image", image_url: llmImageDataUrl }
               ]
             }
           ]
@@ -4111,7 +4602,9 @@ const server = http.createServer(async (req, res) => {
           height: imageHeight,
           fileName: imageFileName,
           path: imagePath,
-          bytes: imageBuffer.length
+          bytes: imageBuffer.length,
+          sourcePath,
+          sourceRelativePath: sourceRelativePath || ""
         },
         modelImage: {
           width: modelImageWidth,
@@ -4164,11 +4657,504 @@ const server = http.createServer(async (req, res) => {
           resultFileName,
           imageFileName,
           latestFileName,
+          resultRelativePath: `07_cover/kdp_acceptance/llm_text_regions/${resultFileName}`,
+          imageRelativePath: `07_cover/kdp_acceptance/llm_text_regions/${imageFileName}`,
+          latestRelativePath: `07_cover/kdp_acceptance/llm_text_regions/${latestFileName}`,
           resultPath,
           imagePath,
           latestPath
         }
       });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-fix-report") {
+    try {
+      const body = await readJsonBody(req, 10_000_000);
+      const bookName = body.bookName;
+      const reportText = typeof body.reportText === "string" ? body.reportText : "";
+      const spec = body.spec && typeof body.spec === "object" ? body.spec : null;
+      const source = body.source && typeof body.source === "object" ? body.source : {};
+      const textRegionCount = Math.max(0, Math.round(Number(body.textRegionCount || 0)));
+
+      validateBookName(bookName);
+      if (!reportText.trim()) {
+        throw new Error("reportText is required.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const reportRoot = path.join(getKdpAcceptanceRoot(paths.bookRoot), "fix_reports");
+      const backupRoot = path.join(reportRoot, "back");
+      ensureDir(reportRoot);
+      ensureDir(backupRoot);
+
+      const createdAtDate = new Date();
+      const createdAt = formatLocalTimestamp(createdAtDate);
+      const stamp = formatCompactFileStamp(createdAtDate);
+      const baseFileName = `kdp-fix-report-${stamp}`;
+      const textFileName = `${baseFileName}.md`;
+      const resultFileName = `${baseFileName}.json`;
+      const textPath = path.join(reportRoot, textFileName);
+      const resultPath = path.join(reportRoot, resultFileName);
+      const latestTextPath = path.join(reportRoot, "latest_kdp_fix_report.md");
+      const latestJsonPath = path.join(reportRoot, "latest_kdp_fix_report.json");
+      const backups = [];
+
+      if (fs.existsSync(latestTextPath)) {
+        const backupTextName = `latest_kdp_fix_report.back-${stamp}.md`;
+        const backupTextPath = path.join(backupRoot, backupTextName);
+        fs.copyFileSync(latestTextPath, backupTextPath);
+        backups.push({ type: "text", fileName: backupTextName, path: backupTextPath });
+      }
+      if (fs.existsSync(latestJsonPath)) {
+        const backupJsonName = `latest_kdp_fix_report.back-${stamp}.json`;
+        const backupJsonPath = path.join(backupRoot, backupJsonName);
+        fs.copyFileSync(latestJsonPath, backupJsonPath);
+        backups.push({ type: "json", fileName: backupJsonName, path: backupJsonPath });
+      }
+
+      const savedReportText = formatKdpFixReportWithHeader(reportText, { createdAt, bookName, source });
+      const savedResult = {
+        bookName,
+        createdAt,
+        reportText: savedReportText,
+        spec,
+        source,
+        textRegionCount,
+        saved: {
+          resultFileName,
+          textFileName,
+          latestFileName: "latest_kdp_fix_report.json",
+          latestTextFileName: "latest_kdp_fix_report.md",
+          resultPath,
+          textPath,
+          latestPath: latestJsonPath,
+          latestTextPath,
+          backupDir: backupRoot,
+          backups
+        }
+      };
+
+      fs.writeFileSync(textPath, savedReportText, "utf8");
+      writeJsonFile(resultPath, savedResult);
+      fs.writeFileSync(latestTextPath, savedReportText, "utf8");
+      writeJsonFile(latestJsonPath, savedResult);
+      appendJsonLine(path.join(reportRoot, "kdp_fix_report_runs.jsonl"), {
+        bookName,
+        createdAt: savedResult.createdAt,
+        resultFileName,
+        textFileName,
+        source,
+        textRegionCount,
+        backups: backups.map((backup) => backup.fileName)
+      });
+
+      sendJson(res, 200, {
+        bookName,
+        fixReport: getKdpLatestFixReportState(getKdpAcceptanceRoot(paths.bookRoot)),
+        saved: savedResult.saved
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-fix-workbench/prepare") {
+    try {
+      const body = await readJsonBody(req, 80_000_000);
+      const bookName = body.bookName;
+      const imageDataUrl = typeof body.imageDataUrl === "string" ? body.imageDataUrl : "";
+      const prompt = typeof body.prompt === "string" ? body.prompt : "";
+      const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : "gpt-image-1.5";
+      const imageWidth = Math.round(Number(body.imageWidth || 0));
+      const imageHeight = Math.round(Number(body.imageHeight || 0));
+
+      validateBookName(bookName);
+      if (!/^data:image\/png;base64,[A-Za-z0-9+/=\r\n]+$/.test(imageDataUrl)) {
+        throw new Error("imageDataUrl must be a PNG data URL.");
+      }
+      if (!prompt.trim()) {
+        throw new Error("prompt is required.");
+      }
+      if (imageWidth < 100 || imageHeight < 100) {
+        throw new Error("imageWidth and imageHeight are required.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      const workRoot = getKdpFixWorkbenchRoot(acceptanceRoot);
+      const sourceRoot = path.join(workRoot, "source");
+      const promptRoot = path.join(workRoot, "prompts");
+      ensureDir(sourceRoot);
+      ensureDir(promptRoot);
+      const stamp = formatCompactFileStamp();
+      const sourceFileName = `kdp-fix-source-${stamp}.png`;
+      const promptFileName = `kdp-fix-prompt-${stamp}.txt`;
+      const sourcePath = path.join(sourceRoot, sourceFileName);
+      const promptPath = path.join(promptRoot, promptFileName);
+      const imageBuffer = Buffer.from(imageDataUrl.replace(/^data:image\/png;base64,/, "").replace(/\s/g, ""), "base64");
+      fs.writeFileSync(sourcePath, imageBuffer);
+      fs.writeFileSync(promptPath, prompt, "utf8");
+
+      const statePath = path.join(workRoot, "workbench_state.json");
+      const existing = readJsonFileSafe(statePath) || {};
+      const nextState = {
+        ...existing,
+        updatedAt: formatLocalTimestamp(),
+        model,
+        sourceFileName,
+        sourcePath,
+        sourceImage: {
+          width: imageWidth,
+          height: imageHeight,
+          bytes: imageBuffer.length
+        },
+        promptFileName,
+        promptPath,
+        prompt
+      };
+      writeJsonFile(statePath, nextState);
+      const currentSource = writeKdpCurrentSource(acceptanceRoot, buildKdpCurrentSource({
+        type: "PNG",
+        directory: "07_cover/kdp_acceptance",
+        fileName: `fix_workbench/source/${sourceFileName}`,
+        relativePath: `fix_workbench/source/${sourceFileName}`
+      }));
+      sendJson(res, 200, {
+        bookName,
+        prepared: true,
+        currentSource,
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-img-black/crop") {
+    try {
+      const body = await readJsonBody(req, 1_000_000);
+      const bookName = body.bookName;
+      const sourceFileName = typeof body.sourceFileName === "string" ? body.sourceFileName : "";
+      const x = Math.round(Number(body.x));
+      const y = Math.round(Number(body.y));
+      const width = Math.round(Number(body.width));
+      const height = Math.round(Number(body.height));
+
+      validateBookName(bookName);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+        throw new Error("x, y, width, and height are required numbers.");
+      }
+      if (x < 0 || y < 0 || width <= 0 || height <= 0) {
+        throw new Error("x/y must be >= 0 and width/height must be > 0.");
+      }
+
+      const result = runPowerShellJson("kdp-crop-image-region.ps1", [
+        { flag: "-BookName", value: bookName },
+        { flag: "-SourceFile", value: sourceFileName || undefined },
+        { flag: "-X", value: x },
+        { flag: "-Y", value: y },
+        { flag: "-Width", value: width },
+        { flag: "-Height", value: height },
+        { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+      ]);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      sendJson(res, 200, {
+        bookName,
+        crop: result,
+        cropImageUrl: result?.outputFileName
+          ? `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=crop&fileName=${encodeURIComponent(result.outputFileName)}&t=${Date.now()}`
+          : "",
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-img-black/resize") {
+    try {
+      const body = await readJsonBody(req, 1_000_000);
+      const bookName = body.bookName;
+      const inputFileName = typeof body.inputFileName === "string" ? body.inputFileName : "";
+      const scalePercent = Number(body.scalePercent);
+
+      validateBookName(bookName);
+      if (!Number.isFinite(scalePercent) || scalePercent <= 1 || scalePercent > 400) {
+        throw new Error("scalePercent must be > 1 and <= 400.");
+      }
+
+      const result = runPowerShellJson("kdp-resize-image-region.ps1", [
+        { flag: "-BookName", value: bookName },
+        { flag: "-InputFile", value: inputFileName || undefined },
+        { flag: "-ScalePercent", value: scalePercent },
+        { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+      ]);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      sendJson(res, 200, {
+        bookName,
+        resize: result,
+        crop: result,
+        cropImageUrl: result?.outputFileName
+          ? `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=crop&fileName=${encodeURIComponent(result.outputFileName)}&t=${Date.now()}`
+          : "",
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-img-black/state") {
+    try {
+      const body = await readJsonBody(req, 1_000_000);
+      const bookName = body.bookName;
+      const uiState = body.uiState && typeof body.uiState === "object" ? body.uiState : {};
+      validateBookName(bookName);
+
+      const cleanNumber = (value, fallback = "") => {
+        if (value === "" || value === null || value === undefined) return fallback;
+        const number = Math.round(Number(value));
+        return Number.isFinite(number) ? number : fallback;
+      };
+      const cleanColor = (value, fallback = "#07121b") => {
+        const text = String(value || "").trim();
+        return /^#[0-9a-fA-F]{6}$/.test(text) ? text : fallback;
+      };
+      const cleanPreset = String(uiState.fill?.preset || "").trim();
+      const cleanMode = String(uiState.fill?.mode || "Auto").trim();
+      const nextUiState = {
+        updatedAt: formatLocalTimestamp(),
+        crop: {
+          x: cleanNumber(uiState.crop?.x),
+          y: cleanNumber(uiState.crop?.y),
+          width: cleanNumber(uiState.crop?.width),
+          height: cleanNumber(uiState.crop?.height)
+        },
+        fill: {
+          color: cleanColor(uiState.fill?.color),
+          preset: /^#[0-9a-fA-F]{6}$/.test(cleanPreset) || cleanPreset === "custom" ? cleanPreset : "#07121b",
+          mode: cleanMode === "Solid" ? "Solid" : "Auto"
+        },
+        composite: {
+          x: cleanNumber(uiState.composite?.x),
+          y: cleanNumber(uiState.composite?.y)
+        },
+        resize: {
+          scalePercent: cleanNumber(uiState.resize?.scalePercent, 95)
+        }
+      };
+
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      const workRoot = getKdpFixWorkbenchRoot(acceptanceRoot);
+      ensureDir(workRoot);
+      const statePath = path.join(workRoot, "workbench_state.json");
+      const existing = readJsonFileSafe(statePath) || {};
+      writeJsonFile(statePath, {
+        ...existing,
+        updatedAt: nextUiState.updatedAt,
+        imgBlackUi: nextUiState
+      });
+      sendJson(res, 200, {
+        bookName,
+        imgBlackUi: nextUiState,
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-img-black/fill") {
+    try {
+      const body = await readJsonBody(req, 1_000_000);
+      const bookName = body.bookName;
+      const sourceFileName = typeof body.sourceFileName === "string" ? body.sourceFileName : "";
+      const fillColor = typeof body.fillColor === "string" ? body.fillColor : "#07121b";
+      const fillMode = body.fillMode === "Solid" ? "Solid" : "Auto";
+      const x = Math.round(Number(body.x));
+      const y = Math.round(Number(body.y));
+      const width = Math.round(Number(body.width));
+      const height = Math.round(Number(body.height));
+
+      validateBookName(bookName);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+        throw new Error("x, y, width, and height are required numbers.");
+      }
+      if (x < 0 || y < 0 || width <= 0 || height <= 0) {
+        throw new Error("x/y must be >= 0 and width/height must be > 0.");
+      }
+      if (!/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(fillColor)) {
+        throw new Error("fillColor must be a hex color like #07121b.");
+      }
+
+      const result = runPowerShellJson("kdp-fill-image-region.ps1", [
+        { flag: "-BookName", value: bookName },
+        { flag: "-SourceFile", value: sourceFileName || undefined },
+        { flag: "-X", value: x },
+        { flag: "-Y", value: y },
+        { flag: "-Width", value: width },
+        { flag: "-Height", value: height },
+        { flag: "-FillColor", value: fillColor },
+        { flag: "-FillMode", value: fillMode },
+        { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+      ]);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      sendJson(res, 200, {
+        bookName,
+        fill: result,
+        fillImageUrl: result?.outputFileName
+          ? `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=fill&fileName=${encodeURIComponent(result.outputFileName)}&t=${Date.now()}`
+          : "",
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-img-black/composite") {
+    try {
+      const body = await readJsonBody(req, 1_000_000);
+      const bookName = body.bookName;
+      const baseFileName = typeof body.baseFileName === "string" ? body.baseFileName : "";
+      const overlayFileName = typeof body.overlayFileName === "string" ? body.overlayFileName : "";
+      const x = Math.round(Number(body.x));
+      const y = Math.round(Number(body.y));
+
+      validateBookName(bookName);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        throw new Error("x and y are required numbers.");
+      }
+      if (x < 0 || y < 0) {
+        throw new Error("x/y must be >= 0.");
+      }
+
+      const result = runPowerShellJson("kdp-composite-image-region.ps1", [
+        { flag: "-BookName", value: bookName },
+        { flag: "-BaseFile", value: baseFileName || undefined },
+        { flag: "-OverlayFile", value: overlayFileName || undefined },
+        { flag: "-X", value: x },
+        { flag: "-Y", value: y },
+        { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+      ]);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      sendJson(res, 200, {
+        bookName,
+        composite: result,
+        compositeImageUrl: result?.outputFileName
+          ? `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=composite&fileName=${encodeURIComponent(result.outputFileName)}&t=${Date.now()}`
+          : "",
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/kdp-img-black/png-to-pdf") {
+    try {
+      const body = await readJsonBody(req, 1_000_000);
+      const bookName = body.bookName;
+      const inputFileName = typeof body.inputFileName === "string" ? body.inputFileName : "";
+      validateBookName(bookName);
+
+      const result = runPowerShellJson("kdp-png-to-pdf.ps1", [
+        { flag: "-BookName", value: bookName },
+        { flag: "-InputFile", value: inputFileName || undefined },
+        { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
+      ]);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      sendJson(res, 200, {
+        bookName,
+        pdf: result,
+        pdfUrl: result?.outputFileName
+          ? `/api/kdp-fix-pdf?bookName=${encodeURIComponent(bookName)}&fileName=${encodeURIComponent(result.outputFileName)}&t=${Date.now()}`
+          : "",
+        fixWorkbench: getKdpFixWorkbenchState(acceptanceRoot)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/kdp-fix-pdf") {
+    const bookName = url.searchParams.get("bookName");
+    const fileName = url.searchParams.get("fileName");
+    try {
+      validateBookName(bookName);
+      const safeFileName = sanitizeKdpFixPdfFileName(fileName);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      const targetRoot = path.join(getKdpFixWorkbenchRoot(acceptanceRoot), "pdfs");
+      const targetPath = path.resolve(targetRoot, safeFileName);
+      const rootResolved = path.resolve(targetRoot);
+      if (!targetPath.startsWith(rootResolved + path.sep)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "KDP fix PDF not found." });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "no-store",
+        "Content-Disposition": `inline; filename="${path.basename(targetPath).replace(/"/g, "")}"`
+      });
+      res.end(fs.readFileSync(targetPath));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/kdp-fix-image") {
+    const bookName = url.searchParams.get("bookName");
+    const kind = url.searchParams.get("kind");
+    const fileName = url.searchParams.get("fileName");
+    try {
+      validateBookName(bookName);
+      if (!["source", "output", "crop", "fill", "composite"].includes(kind || "")) {
+        throw new Error("kind must be source, output, crop, fill, or composite.");
+      }
+      const safeFileName = sanitizeKdpFixImageFileName(fileName);
+      const paths = getWorkspacePaths(bookName);
+      const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
+      const kindFolder = kind === "crop" ? "crops" : kind === "fill" ? "fills" : kind === "composite" ? "composites" : kind;
+      const targetRoot = path.join(getKdpFixWorkbenchRoot(acceptanceRoot), kindFolder);
+      const targetPath = path.resolve(targetRoot, safeFileName);
+      const rootResolved = path.resolve(targetRoot);
+      if (!targetPath.startsWith(rootResolved + path.sep)) {
+        sendJson(res, 403, { error: "Forbidden." });
+        return;
+      }
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "KDP fix image not found." });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": getImageMimeTypeByPath(targetPath),
+        "Cache-Control": "no-store"
+      });
+      res.end(fs.readFileSync(targetPath));
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }

@@ -36,6 +36,10 @@ const state = {
     tesseract: null,
     document: null,
     page: null,
+    mode: "pdf",
+    image: null,
+    imageSize: null,
+    source: null,
     url: "",
     scale: 1,
     spec: null,
@@ -46,6 +50,7 @@ const state = {
     renderTask: null,
     loading: false
   },
+  kdpFixWorkbench: {},
   activeFlowTarget: "project",
   suppressFlowSync: false
 };
@@ -68,6 +73,8 @@ const COVER_VISUAL_WORKBENCH_STORAGE_KEY = "sagewrite-cover-visual-workbench-ope
 const COVER_OPERATIONS_WORKBENCH_STORAGE_KEY = "sagewrite-cover-operations-workbench-open";
 const COVER_RESULTS_WORKBENCH_STORAGE_KEY = "sagewrite-cover-results-workbench-open";
 const COVER_KDP_REVIEW_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-review-workbench-open";
+const COVER_KDP_FIX_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-fix-workbench-open";
+const COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-img-black-workbench-open";
 const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
 const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
 const SELECTED_BOOKNAME_STORAGE_KEY = "sagewrite-selected-bookname";
@@ -268,6 +275,15 @@ function initWorkbenchState(selector, storageKey, defaultOpen = false) {
   }
   const stored = localStorage.getItem(storageKey);
   panel.open = stored === null ? Boolean(defaultOpen) : stored === "1";
+}
+
+function mountKdpFixModule() {
+  const mount = $("#kdp-fix-module-mount");
+  const panel = $(".kdp-fix-report-panel");
+  if (!mount || !panel || panel.parentElement === mount) {
+    return;
+  }
+  mount.appendChild(panel);
 }
 
 function getFlowWorkbench(targetId = "project") {
@@ -721,6 +737,19 @@ function formatTimeLabel(date = new Date()) {
     second: "2-digit",
     hour12: false
   });
+}
+
+function formatKdpReportTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate())
+  ].join("-") + " " + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds())
+  ].join(":");
 }
 
 function initPublishUiState() {
@@ -1747,6 +1776,10 @@ function setKdpPdfViewerStatus(text) {
 function clearKdpPdfViewer(message = "提交 PDF 后，这里会显示自定义 KDP 检视器。") {
   state.kdpPdf.document = null;
   state.kdpPdf.page = null;
+  state.kdpPdf.mode = "pdf";
+  state.kdpPdf.image = null;
+  state.kdpPdf.imageSize = null;
+  state.kdpPdf.source = null;
   state.kdpPdf.url = "";
   state.kdpPdf.spec = null;
   state.kdpPdf.ocrCanvasWidth = 0;
@@ -1776,7 +1809,9 @@ function getKdpPdfFitScale() {
   if (!stage || !page) {
     return 1;
   }
-  const baseViewport = page.getViewport({ scale: 1 });
+  const baseViewport = state.kdpPdf.mode === "image" && state.kdpPdf.imageSize
+    ? state.kdpPdf.imageSize
+    : page.getViewport({ scale: 1 });
   const availableWidth = Math.max(240, stage.clientWidth - 32);
   return Math.max(0.2, Math.min(4, availableWidth / baseViewport.width));
 }
@@ -1799,7 +1834,12 @@ async function renderKdpPdfPage() {
     }
   }
 
-  const viewport = page.getViewport({ scale: state.kdpPdf.scale });
+  const viewport = state.kdpPdf.mode === "image" && state.kdpPdf.imageSize
+    ? {
+        width: state.kdpPdf.imageSize.width * state.kdpPdf.scale,
+        height: state.kdpPdf.imageSize.height * state.kdpPdf.scale
+      }
+    : page.getViewport({ scale: state.kdpPdf.scale });
   const context = canvas.getContext("2d");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
@@ -1815,6 +1855,12 @@ async function renderKdpPdfPage() {
   pageWrap.classList.add("is-visible");
   if (empty) empty.hidden = true;
   setKdpPdfViewerStatus(`${Math.round(state.kdpPdf.scale * 100)}%`);
+
+  if (state.kdpPdf.mode === "image" && state.kdpPdf.image) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(state.kdpPdf.image, 0, 0, canvas.width, canvas.height);
+    return;
+  }
 
   const renderTask = page.render({ canvasContext: context, viewport });
   state.kdpPdf.renderTask = renderTask;
@@ -1886,6 +1932,10 @@ async function loadKdpPdfViewer(url, spec, latestVision = null) {
   }
   setKdpPdfViewerStatus("加载中");
   state.kdpPdf.url = url;
+  state.kdpPdf.mode = "pdf";
+  state.kdpPdf.image = null;
+  state.kdpPdf.imageSize = null;
+  state.kdpPdf.source = state.kdpPdf.source || { type: "PDF" };
   state.kdpPdf.loading = true;
   state.kdpPdf.textRegions = [];
   state.kdpPdf.visionDebug = null;
@@ -1906,6 +1956,57 @@ async function loadKdpPdfViewer(url, spec, latestVision = null) {
     restoreKdpLatestVisionResult(latestVision, state.kdpPdf.spec);
   } catch (error) {
     clearKdpPdfViewer(`PDF.js 加载失败：${error.message}`);
+  } finally {
+    state.kdpPdf.loading = false;
+  }
+}
+
+async function loadKdpImageViewer(url, spec, latestVision = null) {
+  if (!url) {
+    clearKdpPdfViewer();
+    return;
+  }
+  state.kdpPdf.spec = spec || getCurrentKdpGuideSpec();
+  const empty = $("#kdp-pdf-empty");
+  if (empty) {
+    empty.hidden = false;
+    empty.textContent = "Loading PNG KDP viewer...";
+  }
+  setKdpPdfViewerStatus("Loading PNG");
+  state.kdpPdf.url = url;
+  state.kdpPdf.mode = "image";
+  state.kdpPdf.source = state.kdpPdf.source || { type: "PNG" };
+  state.kdpPdf.loading = true;
+  state.kdpPdf.document = null;
+  state.kdpPdf.textRegions = [];
+  state.kdpPdf.visionDebug = null;
+  state.kdpPdf.ocrCanvasWidth = 0;
+  state.kdpPdf.ocrCanvasHeight = 0;
+  renderKdpTextRegions([]);
+  renderKdpTextRegionReport([]);
+
+  try {
+    const image = await loadImageElement(url);
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    state.kdpPdf.image = image;
+    state.kdpPdf.imageSize = { width, height };
+    state.kdpPdf.page = {
+      getViewport: ({ scale = 1 } = {}) => ({ width: width * scale, height: height * scale }),
+      render: ({ canvasContext, viewport }) => {
+        canvasContext.clearRect(0, 0, Math.ceil(viewport.width), Math.ceil(viewport.height));
+        canvasContext.drawImage(image, 0, 0, Math.ceil(viewport.width), Math.ceil(viewport.height));
+        return { promise: Promise.resolve(), cancel() {} };
+      }
+    };
+    state.kdpPdf.ocrCanvasWidth = width;
+    state.kdpPdf.ocrCanvasHeight = height;
+    state.kdpPdf.scale = getKdpPdfFitScale();
+    await renderKdpPdfPage();
+    restoreKdpLatestVisionResult(latestVision, state.kdpPdf.spec);
+    setKdpPdfViewerStatus(`PNG ${width} x ${height}px`);
+  } catch (error) {
+    clearKdpPdfViewer(`PNG load failed: ${error.message}`);
   } finally {
     state.kdpPdf.loading = false;
   }
@@ -2116,8 +2217,7 @@ function normalizeOcrWord(word, index, spec, dpi = 300) {
     width: Math.round(width),
     height: Math.round(height),
     right: Math.round(x1),
-    bottom: Math.round(y1),
-    centerX: Math.round(x0 + (width / 2))
+    bottom: Math.round(y1)
   };
   const decision = getKdpZoneDecisionForBox(box, spec, dpi);
   const displayBox = getKdpDisplayBoxForRegion(box, decision, spec, dpi);
@@ -2132,8 +2232,7 @@ function normalizeOcrWord(word, index, spec, dpi = 300) {
       width: roundForDisplay(box.width / dpi),
       height: roundForDisplay(box.height / dpi),
       right: roundForDisplay(box.right / dpi),
-      bottom: roundForDisplay(box.bottom / dpi),
-      centerX: roundForDisplay(box.centerX / dpi)
+      bottom: roundForDisplay(box.bottom / dpi)
     }
   };
 }
@@ -2231,6 +2330,133 @@ function formatKdpLlmUsage(usage) {
   return `tokens input ${input} · output ${output} · total ${total}${cachedPart}`;
 }
 
+function formatKdpLlmSavedPath(saved, key) {
+  if (!saved) return "-";
+  const explicit = key === "json"
+    ? (saved.resultRelativePath || saved.resultPathRelative)
+    : (saved.imageRelativePath || saved.imagePathRelative);
+  if (explicit) return explicit;
+  const fileName = key === "json" ? saved.resultFileName : saved.imageFileName;
+  return fileName ? `07_cover/kdp_acceptance/llm_text_regions/${fileName}` : "-";
+}
+
+function setKdpSourceMetadata(source = null) {
+  const fileName = source?.fileName || source?.relativePath || source?.originalFileName || "";
+  state.kdpPdf.source = source ? {
+    type: getKdpFileTypeLabel(fileName, source.type),
+    origin: source.origin || "",
+    directory: source.directory || "",
+    fileName: source.fileName || "",
+    relativePath: source.relativePath || "",
+    originalFileName: source.originalFileName || ""
+  } : null;
+}
+
+function getKdpFileTypeLabel(fileName = "", fallback = "") {
+  const normalizedName = String(fileName || "").toLowerCase();
+  if (/\.pdf(?:$|[?#])/.test(normalizedName)) return "PDF";
+  if (/\.png(?:$|[?#])/.test(normalizedName)) return "PNG";
+  const normalizedFallback = String(fallback || "").toUpperCase();
+  if (normalizedFallback === "PDF" || normalizedFallback === "PNG") return normalizedFallback;
+  return "";
+}
+
+function getKdpAcceptanceSourceMetadata(fileName, type = "") {
+  const normalizedFileName = String(fileName || "");
+  const normalizedPath = normalizedFileName.replaceAll("\\", "/");
+  const slashIndex = normalizedPath.lastIndexOf("/");
+  const directory = slashIndex >= 0
+    ? `07_cover/kdp_acceptance/${normalizedPath.slice(0, slashIndex)}`
+    : "07_cover/kdp_acceptance";
+  const baseName = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
+  const normalizedType = getKdpFileTypeLabel(normalizedPath || normalizedFileName, type) || "PDF";
+  return {
+    type: normalizedType,
+    origin: "KDP acceptance directory",
+    directory,
+    fileName: baseName,
+    relativePath: normalizedPath ? `07_cover/kdp_acceptance/${normalizedPath}` : ""
+  };
+}
+
+function getKdpLocalUploadSourceMetadata(file) {
+  if (!file) return null;
+  const type = getKdpFileTypeLabel(file.name, file.type === "image/png" ? "PNG" : "") || "PDF";
+  return {
+    type,
+    origin: "local upload",
+    directory: "local upload",
+    fileName: file.name,
+    relativePath: "",
+    originalFileName: file.name
+  };
+}
+
+function getKdpFixReportHeaderLines(generatedAt = formatKdpReportTimestamp()) {
+  const source = state.kdpPdf.source || {};
+  return [
+    `# KDP 封面修改意见报告（生成时间：${generatedAt}）`,
+    "",
+    `- BookName：${getBookName() || "-"}`,
+    `- 针对文件类型：${source.type || (state.kdpPdf.mode === "image" ? "PNG" : "PDF")}`,
+    `- 源文件目录：${source.directory || "-"}`,
+    `- 源文件名：${source.fileName || "-"}`,
+    `- 源文件路径：${source.relativePath || "-"}`,
+    ...(source.originalFileName && source.originalFileName !== source.fileName ? [`- 原始上传文件名：${source.originalFileName}`] : []),
+    ""
+  ];
+}
+
+function renderKdpCurrentFileMeta({
+  status = "尚未选择 PDF/PNG。",
+  type = "",
+  fileName = "",
+  path = "",
+  detail = ""
+} = {}) {
+  const meta = $("#kdp-pdf-meta");
+  if (!meta) return;
+  if (!fileName && !path && !detail) {
+    meta.classList.remove("has-file");
+    meta.textContent = status;
+    return;
+  }
+  meta.classList.add("has-file");
+  meta.innerHTML = `
+    <strong>当前检查文件</strong>
+    <span>${escapeHtml(status)}</span>
+    ${type ? `<span>类型：${escapeHtml(type)}</span>` : ""}
+    ${fileName ? `<span>文件名：${escapeHtml(fileName)}</span>` : ""}
+    ${path ? `<span>路径：${escapeHtml(path)}</span>` : ""}
+    ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
+  `;
+}
+
+function renderKdpCurrentSourceMeta(status = "已加载") {
+  const source = state.kdpPdf.source || null;
+  if (!source) {
+    renderKdpCurrentFileMeta();
+    return;
+  }
+  const fileName = source.fileName || source.relativePath || source.originalFileName || "";
+  const type = getKdpFileTypeLabel(fileName, source.type);
+  renderKdpCurrentFileMeta({
+    status,
+    type,
+    fileName: source.fileName || source.originalFileName || "",
+    path: source.relativePath || source.directory || source.origin || "",
+    detail: source.originalFileName && source.originalFileName !== source.fileName
+      ? `原始上传文件名：${source.originalFileName}`
+      : ""
+  });
+}
+
+function getKdpSourceAcceptanceRelativePath(source = {}) {
+  if (source.acceptanceRelativePath) return source.acceptanceRelativePath;
+  const relativePath = String(source.relativePath || "").replaceAll("\\", "/");
+  return relativePath.replace(/^07_cover\/kdp_acceptance\//i, "");
+}
+
 function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
   const panel = $("#kdp-text-region-report");
   if (!panel) {
@@ -2258,7 +2484,7 @@ function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
       LLM coordinate calibration: model ${escapeHtml(debug.modelImage?.width || "-")} x ${escapeHtml(debug.modelImage?.height || "-")}
       -> PNG ${escapeHtml(debug.image?.width || "-")} x ${escapeHtml(debug.image?.height || "-")}
       · scale ${escapeHtml(scaleX.toFixed(4))} / ${escapeHtml(scaleY.toFixed(4))}
-      ${debug.saved?.resultFileName ? `<br>Saved: ${escapeHtml(debug.saved.resultFileName)} · ${escapeHtml(debug.saved.imageFileName || "")}` : ""}
+      ${debug.saved?.resultFileName ? `<br>Saved: ${escapeHtml(formatKdpLlmSavedPath(debug.saved, "json"))} · ${escapeHtml(formatKdpLlmSavedPath(debug.saved, "png"))}` : ""}
     </div>
   ` : "";
 
@@ -2275,7 +2501,6 @@ function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
               <th>y px</th>
               <th>w px</th>
               <th>h px</th>
-              <th>中轴 x px</th>
               <th>right px</th>
               <th>bottom px</th>
               <th>判定依据</th>
@@ -2284,7 +2509,6 @@ function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
               <th>y in</th>
               <th>w in</th>
               <th>h in</th>
-              <th>中轴 x in</th>
             </tr>
           </thead>
           <tbody>
@@ -2296,7 +2520,6 @@ function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
                 <td>${escapeHtml(item.y)}</td>
                 <td>${escapeHtml(item.width)}</td>
                 <td>${escapeHtml(item.height)}</td>
-                <td>${escapeHtml(item.centerX ?? Math.round(item.x + (item.width / 2)))}</td>
                 <td>${escapeHtml(item.right)}</td>
                 <td>${escapeHtml(item.bottom)}</td>
                 <td>${escapeHtml(item.zoneReason || "-")}</td>
@@ -2305,7 +2528,6 @@ function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
                 <td>${escapeHtml(item.inches.y)}</td>
                 <td>${escapeHtml(item.inches.width)}</td>
                 <td>${escapeHtml(item.inches.height)}</td>
-                <td>${escapeHtml(item.inches.centerX ?? roundForDisplay((item.centerX || 0) / 300))}</td>
               </tr>
             `).join("")}
           </tbody>
@@ -2313,6 +2535,1409 @@ function renderKdpTextRegionReport(regions = state.kdpPdf.textRegions || []) {
       </div>
     </details>
   `).join("");
+}
+
+function getKdpRectPx(rect) {
+  if (!rect) return null;
+  const x = Number(rect.x || 0);
+  const y = Number(rect.y || 0);
+  const width = Number(rect.width || 0);
+  const height = Number(rect.height || 0);
+  return {
+    x,
+    y,
+    width,
+    height,
+    right: Number(rect.right ?? (x + width)),
+    bottom: Number(rect.bottom ?? (y + height))
+  };
+}
+
+function getKdpSpecRectsPx(spec, dpi = 300) {
+  const bleed = Number(spec.bleed || 0.125);
+  const trimWidth = Number(spec.trimWidth || 6);
+  const trimHeight = Number(spec.trimHeight || 9);
+  const spine = Number(spec.spine || 0);
+  const safeInset = Number(spec.frontBackSafeInsetFromTrim || 0.125);
+  const spineSafeInset = Number(spec.spineSafeInset || 0.0625);
+  const barcodeWidth = Number(spec.barcodeWidth || 2);
+  const barcodeHeight = Number(spec.barcodeHeight || 1.2);
+  const barcodeInset = Number(spec.barcodeInset || 0.25);
+  const px = (value) => Math.round(Number(value || 0) * dpi);
+  const rect = (x, y, width, height) => ({
+    x: px(x),
+    y: px(y),
+    width: px(width),
+    height: px(height),
+    right: px(x + width),
+    bottom: px(y + height),
+    centerX: px(x + (width / 2))
+  });
+  return {
+    fullCover: rect(0, 0, (trimWidth * 2) + spine + (bleed * 2), trimHeight + (bleed * 2)),
+    whiteTrim: rect(bleed, bleed, (trimWidth * 2) + spine, trimHeight),
+    backTrim: rect(bleed, bleed, trimWidth, trimHeight),
+    spineTrim: rect(bleed + trimWidth, bleed, spine, trimHeight),
+    frontTrim: rect(bleed + trimWidth + spine, bleed, trimWidth, trimHeight),
+    backSafe: rect(bleed + safeInset, bleed + safeInset, trimWidth - (safeInset * 2), trimHeight - (safeInset * 2)),
+    spineSafe: rect(bleed + trimWidth + spineSafeInset, bleed + safeInset, Math.max(0, spine - (spineSafeInset * 2)), trimHeight - (safeInset * 2)),
+    frontSafe: rect(bleed + trimWidth + spine + safeInset, bleed + safeInset, trimWidth - (safeInset * 2), trimHeight - (safeInset * 2)),
+    barcode: rect(bleed + trimWidth - barcodeInset - barcodeWidth, bleed + trimHeight - barcodeInset - barcodeHeight, barcodeWidth, barcodeHeight)
+  };
+}
+
+function getKdpPdfActualSizePx(dpi = 300) {
+  if (state.kdpPdf.mode === "image" && state.kdpPdf.imageSize) {
+    return {
+      width: Math.round(state.kdpPdf.imageSize.width),
+      height: Math.round(state.kdpPdf.imageSize.height)
+    };
+  }
+  if (!state.kdpPdf.page) {
+    return null;
+  }
+  const viewport = state.kdpPdf.page.getViewport({ scale: dpi / 72 });
+  return {
+    width: Math.ceil(viewport.width),
+    height: Math.ceil(viewport.height)
+  };
+}
+
+function getKdpPngActualSizePx() {
+  const debugImage = state.kdpPdf.visionDebug?.image || null;
+  const width = Math.round(Number(state.kdpPdf.ocrCanvasWidth || debugImage?.width || 0));
+  const height = Math.round(Number(state.kdpPdf.ocrCanvasHeight || debugImage?.height || 0));
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function getKdpScaledCenterAxes(rects, actualSize) {
+  const baseWidth = Math.max(1, Number(rects.fullCover?.width || 0));
+  const scaleX = actualSize?.width ? actualSize.width / baseWidth : 1;
+  const axis = (rect) => Math.round(Number(rect.centerX || 0) * scaleX);
+  return {
+    width: actualSize?.width || baseWidth,
+    height: actualSize?.height || rects.fullCover.height,
+    scaleX,
+    back: axis(rects.backTrim),
+    spine: axis(rects.spineTrim),
+    front: axis(rects.frontTrim),
+    full: axis(rects.fullCover)
+  };
+}
+
+function formatKdpAxisDelta(pdfAxis, pngAxis) {
+  if (!pngAxis) {
+    return "PNG 未生成/未恢复，暂不能比较。";
+  }
+  const delta = pngAxis - pdfAxis;
+  if (delta === 0) return "一致";
+  if (Math.abs(delta) <= 1) return `基本一致，差 ${delta}px（通常是 PDF 渲染取整差）`;
+  return `不一致，差 ${delta}px`;
+}
+
+function getKdpOverlapArea(a, b) {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.right, b.right);
+  const bottom = Math.min(a.bottom, b.bottom);
+  return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+function describeKdpRegionIssues(region, safeRect, options = {}) {
+  const box = getKdpRectPx(region.displayBox || region);
+  if (!box || !safeRect) {
+    return ["坐标不足，需要重新识别文字区域。"];
+  }
+  const issues = [];
+  if (box.x < safeRect.x) issues.push(`左侧越过安全线 ${safeRect.x - box.x}px`);
+  if (box.right > safeRect.right) issues.push(`右侧越过安全线 ${box.right - safeRect.right}px`);
+  if (box.y < safeRect.y) issues.push(`上侧越过安全线 ${safeRect.y - box.y}px`);
+  if (box.bottom > safeRect.bottom) issues.push(`下侧越过安全线 ${box.bottom - safeRect.bottom}px`);
+  if (options.barcodeRect) {
+    const overlap = getKdpOverlapArea(box, options.barcodeRect);
+    if (overlap > 0) issues.push(`压到 KDP 条码预留区，重叠面积约 ${Math.round(overlap)}px²`);
+  }
+  return issues.length ? issues : ["未发现明显安全线/条码区冲突。"];
+}
+
+function buildKdpPreciseMoveAdvice(region, safeRect, options = {}) {
+  const box = getKdpRectPx(region.displayBox || region);
+  if (!box || !safeRect) {
+    return "坐标不足，无法计算精确移动量。";
+  }
+  const boxCenterX = Math.round(box.x + (box.width / 2));
+  const safeCenterX = Math.round(safeRect.x + (safeRect.width / 2));
+  const deltaX = safeCenterX - boxCenterX;
+  const horizontalText = deltaX > 0 ? `向右移动 ${deltaX}px` : deltaX < 0 ? `向左移动 ${Math.abs(deltaX)}px` : "水平居中无需移动";
+  const widthAdvice = box.width > safeRect.width
+    ? `当前宽度 ${box.width}px 大于安全宽度 ${safeRect.width}px，需先缩小至少 ${box.width - safeRect.width}px，目标宽度 <= ${safeRect.width}px`
+    : `当前宽度 ${box.width}px，小于/等于安全宽度 ${safeRect.width}px`;
+  const verticalMoves = [];
+  if (box.y < safeRect.y) verticalMoves.push(`向下移动至少 ${safeRect.y - box.y}px`);
+  if (box.bottom > safeRect.bottom) verticalMoves.push(`向上移动至少 ${box.bottom - safeRect.bottom}px`);
+  const barcodeAdvice = options.barcodeRect && getKdpOverlapArea(box, options.barcodeRect) > 0
+    ? "同时需要离开条码预留区"
+    : "";
+  return [
+    `区域安全框：x=${safeRect.x}, w=${safeRect.width}, center=${safeCenterX}px`,
+    `文字框：x=${box.x}, w=${box.width}, center=${boxCenterX}px`,
+    widthAdvice,
+    `水平建议：${horizontalText}`,
+    verticalMoves.length ? `垂直建议：${verticalMoves.join("；")}` : "垂直建议：无需移动",
+    barcodeAdvice
+  ].filter(Boolean).join("；");
+}
+
+function buildKdpFixReport() {
+  const regions = state.kdpPdf.textRegions || [];
+  const spec = state.kdpPdf.spec || getCurrentKdpGuideSpec();
+  const dpi = 300;
+  const rects = getKdpSpecRectsPx(spec, dpi);
+  const isImageMode = state.kdpPdf.mode === "image";
+  const primaryLabel = isImageMode ? "PNG" : "PDF";
+  const primarySize = isImageMode ? getKdpPngActualSizePx() : getKdpPdfActualSizePx(dpi);
+  const primaryAxes = getKdpScaledCenterAxes(rects, primarySize);
+  const pngSize = getKdpPngActualSizePx();
+  const pngAxes = !isImageMode && pngSize ? getKdpScaledCenterAxes(rects, pngSize) : null;
+  const groups = {
+    back: regions.filter((item) => item.zone === "back"),
+    spine: regions.filter((item) => item.zone === "spine"),
+    front: regions.filter((item) => item.zone === "front")
+  };
+  const lines = [
+    ...getKdpFixReportHeaderLines(),
+    "生成方式：程序根据当前文字区域坐标、红线安全区、白线裁切/书脊线、KDP 条码区自动生成；未调用 LLM。",
+    `坐标基准：PDF/PNG 左上角，${dpi} DPI 像素坐标。`,
+    "区域中轴线（x 坐标）：",
+    `- ${primaryLabel} 文件实际尺寸：${primaryAxes.width} x ${primaryAxes.height}px；x 缩放=${primaryAxes.scaleX.toFixed(6)}`,
+    `  - 封底中轴线：x=${primaryAxes.back}px`,
+    `  - 书脊中轴线：x=${primaryAxes.spine}px`,
+    `  - 封面中轴线：x=${primaryAxes.front}px`,
+    `  - 整张 ${primaryLabel} 中轴线：x=${primaryAxes.full}px`,
+    ...(!isImageMode ? [
+      pngAxes
+        ? `- PNG 文件实际尺寸：${pngAxes.width} x ${pngAxes.height}px；x 缩放=${pngAxes.scaleX.toFixed(6)}`
+        : "- PNG 文件实际尺寸：未生成/未恢复，暂不能计算。",
+      ...(pngAxes ? [
+        `  - 封底中轴线：x=${pngAxes.back}px；与 PDF 比较：${formatKdpAxisDelta(primaryAxes.back, pngAxes.back)}`,
+        `  - 书脊中轴线：x=${pngAxes.spine}px；与 PDF 比较：${formatKdpAxisDelta(primaryAxes.spine, pngAxes.spine)}`,
+        `  - 封面中轴线：x=${pngAxes.front}px；与 PDF 比较：${formatKdpAxisDelta(primaryAxes.front, pngAxes.front)}`,
+        `  - 整张 PNG 中轴线：x=${pngAxes.full}px；与 PDF 比较：${formatKdpAxisDelta(primaryAxes.full, pngAxes.full)}`
+      ] : [])
+    ] : []),
+    "- 说明：后续自动修图如果改变 PNG 宽度或裁切比例，上述 PNG 中轴线会随之变化；程序会用这一组数判断修图前后是否偏移。",
+    ""
+  ];
+  [
+    ["back", "一、封底", rects.backSafe, rects.backTrim, { barcodeRect: rects.barcode }],
+    ["spine", "二、书脊", rects.spineSafe, rects.spineTrim, {}],
+    ["front", "三、封面", rects.frontSafe, rects.frontTrim, {}]
+  ].forEach(([zone, heading, safeRect, trimRect, options]) => {
+    const items = groups[zone] || [];
+    lines.push(heading, "");
+    lines.push(`- 本区域裁切区中轴线：x=${trimRect.centerX}px；红线安全区中轴线：x=${safeRect.centerX}px。`);
+    if (!items.length) {
+      lines.push("- 未识别到文字区域。");
+      lines.push("- 修改建议：无需针对文字位置做自动修图任务，除非肉眼发现遗漏。", "");
+      return;
+    }
+    items.forEach((item, index) => {
+      const box = getKdpRectPx(item.displayBox || item);
+      const rawBox = getKdpRectPx(item);
+      const issues = describeKdpRegionIssues(item, safeRect, options);
+      const hasIssue = issues.some((issue) => !issue.includes("未发现"));
+      lines.push(`${index + 1}. 文字：${item.text || "(blank)"}`);
+      lines.push(`   - 原始坐标：x=${rawBox.x}, y=${rawBox.y}, w=${rawBox.width}, h=${rawBox.height}, right=${rawBox.right}, bottom=${rawBox.bottom}`);
+      if (item.displayBox?.adjusted) {
+        lines.push(`   - 显示修正坐标：x=${box.x}, y=${box.y}, w=${box.width}, h=${box.height}`);
+      }
+      lines.push(`   - 程序判定：${item.zoneReason || "按区域坐标归类"}`);
+      lines.push(`   - 检查结果：${issues.join("；")}`);
+      lines.push(`   - 修改建议：${hasIssue ? buildKdpPreciseMoveAdvice(item, safeRect, options) : "暂不需要调整位置。"}`);
+    });
+    lines.push("");
+  });
+  return lines.join("\n");
+}
+
+function getKdpFixReportPlaceholder() {
+  return "点击“生成修改意见报告”后，这里会按封底、书脊、封面输出程序生成的修改意见。";
+}
+
+function getKdpFixCommandPromptPlaceholder() {
+  return "点击“生成修改命令提示词”后，这里会输出给自动修图 LLM/图像模型使用的任务提示词。";
+}
+
+function getKdpImageMagickInstructionPlaceholder() {
+  return "点击“生成ImageMagick指令集”后，这里会输出可编辑的书脊修图 JSON 指令。";
+}
+
+function renderKdpSavedFixReport(acceptance) {
+  const reportField = $("#kdp-fix-report");
+  const promptField = $("#kdp-fix-command-prompt");
+  const imageMagickField = $("#kdp-imagemagick-instructions");
+  if (!reportField) return;
+  const savedText = acceptance?.fixReport?.latest?.reportText || "";
+  reportField.value = savedText || getKdpFixReportPlaceholder();
+  if (promptField) promptField.value = getKdpFixCommandPromptPlaceholder();
+  if (imageMagickField && !imageMagickField.value) {
+    imageMagickField.value = getKdpImageMagickInstructionPlaceholder();
+  }
+}
+
+function getKdpFixCommandTasks(rects) {
+  const zoneSpecs = [
+    { key: "back", label: "BACK COVER", safeRect: rects.backSafe, trimRect: rects.backTrim, options: { barcodeRect: rects.barcode } },
+    { key: "spine", label: "SPINE", safeRect: rects.spineSafe, trimRect: rects.spineTrim, options: {} },
+    { key: "front", label: "FRONT COVER", safeRect: rects.frontSafe, trimRect: rects.frontTrim, options: {} }
+  ];
+  const tasks = [];
+  zoneSpecs.forEach((zoneSpec) => {
+    (state.kdpPdf.textRegions || [])
+      .filter((item) => item.zone === zoneSpec.key)
+      .forEach((item) => {
+        const box = getKdpRectPx(item.displayBox || item);
+        const rawBox = getKdpRectPx(item);
+        if (!box || !zoneSpec.safeRect) return;
+        const issues = [];
+        if (box.x < zoneSpec.safeRect.x) issues.push(`left overflow ${zoneSpec.safeRect.x - box.x}px`);
+        if (box.right > zoneSpec.safeRect.right) issues.push(`right overflow ${box.right - zoneSpec.safeRect.right}px`);
+        if (box.y < zoneSpec.safeRect.y) issues.push(`top overflow ${zoneSpec.safeRect.y - box.y}px`);
+        if (box.bottom > zoneSpec.safeRect.bottom) issues.push(`bottom overflow ${box.bottom - zoneSpec.safeRect.bottom}px`);
+        const barcodeOverlap = zoneSpec.options.barcodeRect ? getKdpOverlapArea(box, zoneSpec.options.barcodeRect) : 0;
+        if (barcodeOverlap > 0) issues.push(`barcode overlap about ${Math.round(barcodeOverlap)} px^2`);
+        if (!issues.length) return;
+        const boxCenterX = Math.round(box.x + (box.width / 2));
+        const safeCenterX = Math.round(zoneSpec.safeRect.x + (zoneSpec.safeRect.width / 2));
+        const deltaX = safeCenterX - boxCenterX;
+        const moveX = deltaX > 0 ? `move right ${deltaX}px` : deltaX < 0 ? `move left ${Math.abs(deltaX)}px` : "keep current x center";
+        const verticalMoves = [];
+        if (box.y < zoneSpec.safeRect.y) verticalMoves.push(`move down at least ${zoneSpec.safeRect.y - box.y}px`);
+        if (box.bottom > zoneSpec.safeRect.bottom) verticalMoves.push(`move up at least ${box.bottom - zoneSpec.safeRect.bottom}px`);
+        const scaleText = box.width > zoneSpec.safeRect.width
+          ? `reduce width by at least ${box.width - zoneSpec.safeRect.width}px; target width <= ${zoneSpec.safeRect.width}px`
+          : `keep width <= ${zoneSpec.safeRect.width}px`;
+        tasks.push({
+          zone: zoneSpec.label,
+          text: item.text || "(unreadable text)",
+          box,
+          rawBox,
+          safeRect: zoneSpec.safeRect,
+          trimRect: zoneSpec.trimRect,
+          issues,
+          actions: [scaleText, moveX, ...verticalMoves],
+          centerAxisX: zoneSpec.trimRect.centerX,
+          safeCenterX
+        });
+      });
+  });
+  return tasks;
+}
+
+function buildKdpFixCommandPrompt() {
+  const spec = state.kdpPdf.spec || getCurrentKdpGuideSpec();
+  const dpi = 300;
+  const rects = getKdpSpecRectsPx(spec, dpi);
+  const pdfAxes = getKdpScaledCenterAxes(rects, getKdpPdfActualSizePx(dpi));
+  const pngSize = getKdpPngActualSizePx();
+  const pngAxes = pngSize ? getKdpScaledCenterAxes(rects, pngSize) : null;
+  const tasks = getKdpFixCommandTasks(rects);
+  if (!tasks.length) {
+    return [
+      "Edit the attached KDP cover PNG.",
+      "",
+      `Canvas: preserve the exact input size (${pngAxes ? `${pngAxes.width} x ${pngAxes.height}px` : `${pdfAxes.width} x ${pdfAxes.height}px @ ${dpi} DPI`}).`,
+      "No text blocks currently require movement based on the detected safe-area and barcode checks.",
+      "Do not change the image."
+    ].join("\n");
+  }
+  const touchedZones = [...new Set(tasks.map((task) => task.zone))];
+  const relevantAxes = touchedZones.map((zone) => {
+    if (zone === "BACK COVER") return `back cover center x=${pngAxes?.back ?? pdfAxes.back}`;
+    if (zone === "SPINE") return `spine center x=${pngAxes?.spine ?? pdfAxes.spine}`;
+    return `front cover center x=${pngAxes?.front ?? pdfAxes.front}`;
+  }).join("; ");
+  const taskLines = tasks.map((task, index) => [
+    `${index + 1}. ${task.zone}`,
+    `   Text: "${task.text}"`,
+    `   Current box: x=${task.rawBox.x}, y=${task.rawBox.y}, w=${task.rawBox.width}, h=${task.rawBox.height}, right=${task.rawBox.right}, bottom=${task.rawBox.bottom}`,
+    `   Safe box: x=${task.safeRect.x}, y=${task.safeRect.y}, w=${task.safeRect.width}, h=${task.safeRect.height}, right=${task.safeRect.right}, bottom=${task.safeRect.bottom}`,
+    `   Center reference: region center x=${task.centerAxisX}, safe center x=${task.safeCenterX}`,
+    `   Problem: ${task.issues.join("; ")}`,
+    `   Required edit: ${task.actions.join("; ")}.`
+  ].join("\n")).join("\n\n");
+  return [
+    "Edit the attached KDP cover PNG.",
+    "",
+    "Goal: fix only the listed text blocks so they sit fully inside their safe boxes.",
+    "",
+    `Canvas: preserve the exact input size (${pngAxes ? `${pngAxes.width} x ${pngAxes.height}px` : `${pdfAxes.width} x ${pdfAxes.height}px @ ${dpi} DPI`}). Do not crop, rotate, add borders, or shift the background.`,
+    `Relevant center axes: ${relevantAxes}.`,
+    "Do not change any text content. Do not move artwork, background, barcode area, trim lines, bleed lines, or guide lines.",
+    "",
+    "Required edits:",
+    taskLines,
+    "",
+    "Return only the corrected image."
+  ].join("\n");
+}
+
+function generateKdpFixCommandPrompt() {
+  const promptField = $("#kdp-fix-command-prompt");
+  const reportField = $("#kdp-fix-report");
+  if (!promptField) return;
+  if (!state.kdpPdf.textRegions?.length) {
+    promptField.value = "尚未识别文字区域。请先点击“LLM识别文字区域”，再生成修改意见报告和修改命令提示词。";
+    return;
+  }
+  const placeholder = getKdpFixReportPlaceholder();
+  let reportText = reportField?.value || "";
+  if (!reportText || reportText === placeholder || reportText.includes("点击“生成修改意见报告”")) {
+    reportText = buildKdpFixReport();
+    if (reportField) reportField.value = reportText;
+  }
+  promptField.value = buildKdpFixCommandPrompt();
+  setStatusBadge("已生成", "success");
+  setLog([
+    "KDP 修改命令提示词已生成。",
+    "来源：当前文字区域坐标 + 修改意见报告 + PDF/PNG 中轴线。",
+    "说明：本步骤只生成提示词，暂不调用 LLM，也不修改图片。"
+  ].join("\n"));
+}
+
+function toKdpInstructionRect(rect) {
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    w: Math.round(rect.width),
+    h: Math.round(rect.height)
+  };
+}
+
+function buildKdpImageMagickInstructionSet() {
+  const spec = state.kdpPdf.spec || getCurrentKdpGuideSpec();
+  const dpi = 300;
+  const rects = getKdpSpecRectsPx(spec, dpi);
+  const pngSize = getKdpPngActualSizePx();
+  const actualSize = pngSize || getKdpPdfActualSizePx(dpi);
+  const spineTasks = getKdpFixCommandTasks(rects).filter((task) => task.zone === "SPINE");
+  const operations = spineTasks.map((task, index) => {
+    const box = task.box;
+    const boxCenterX = Math.round(box.x + (box.width / 2));
+    const safeCenterX = Math.round(task.safeRect.x + (task.safeRect.width / 2));
+    const dx = safeCenterX - boxCenterX;
+    let dy = 0;
+    if (box.y < task.safeRect.y) {
+      dy = task.safeRect.y - box.y;
+    } else if (box.bottom > task.safeRect.bottom) {
+      dy = task.safeRect.bottom - box.bottom;
+    }
+    return {
+      id: `spine-${index + 1}`,
+      type: "move_region",
+      zone: "spine",
+      text: task.text,
+      reason: task.issues.join("; "),
+      sourceRect: toKdpInstructionRect(box),
+      targetRect: {
+        x: Math.round(box.x + dx),
+        y: Math.round(box.y + dy),
+        w: Math.round(box.width),
+        h: Math.round(box.height)
+      },
+      dx,
+      dy,
+      sourceCenterX: boxCenterX,
+      targetCenterX: safeCenterX,
+      spineSafeCenterX: safeCenterX,
+      clearSource: true,
+      fillSourceWith: "#07121b",
+      feather: 0
+    };
+  });
+  return {
+    version: 1,
+    scope: "spine",
+    engine: "ImageMagick",
+    canvas: {
+      width: actualSize.width,
+      height: actualSize.height,
+      preserveSourceSize: true,
+      outputDpi: 300
+    },
+    guides: {
+      spineTrim: toKdpInstructionRect(rects.spineTrim),
+      spineSafe: toKdpInstructionRect(rects.spineSafe),
+      spineTrimCenterX: Math.round(rects.spineTrim.centerX),
+      spineSafeCenterX: Math.round(rects.spineSafe.centerX)
+    },
+    notes: [
+      "Edit only the spine text regions listed in operations.",
+      "Review sourceRect, targetRect, dx, dy, and fillSourceWith before running.",
+      "clearSource fills the old rectangle with fillSourceWith; adjust this color manually if the local background is different."
+    ],
+    operations
+  };
+}
+
+function generateKdpImageMagickInstructions() {
+  const field = $("#kdp-imagemagick-instructions");
+  const status = $("#kdp-img-black-status");
+  if (!field) return;
+  if (!state.kdpPdf.textRegions?.length) {
+    field.value = "尚未识别文字区域。请先点击“LLM识别文字区域”，再生成 ImageMagick 指令集。";
+    if (status) status.textContent = "尚未识别文字区域。";
+    return;
+  }
+  const instructionSet = buildKdpImageMagickInstructionSet();
+  field.value = JSON.stringify(instructionSet, null, 2);
+  if (status) status.textContent = `已生成 ${instructionSet.operations.length} 条 ImageMagick 操作。`;
+  setStatusBadge("已生成", "success");
+  setLog([
+    "KDP ImageMagick 书脊指令集已生成。",
+    `Operations: ${instructionSet.operations.length}`,
+    "说明：可在文本框中人工修改 JSON；点击 ImageMagick修图 时会执行当前文本框内容。"
+  ].join("\n"));
+}
+
+function renderKdpFixWorkbench(workbench = state.kdpFixWorkbench || {}) {
+  state.kdpFixWorkbench = workbench || {};
+  const item = getSelectedWorkspaceItem();
+  const status = $("#kdp-edit-workbench-status");
+  const sourcePreview = $("#kdp-fix-source-preview");
+  const outputPreview = $("#kdp-fix-output-preview");
+  const sourceMeta = $("#kdp-fix-source-meta");
+  const outputMeta = $("#kdp-fix-output-meta");
+  const promptField = $("#kdp-fix-command-prompt");
+  const imageMagickField = $("#kdp-imagemagick-instructions");
+  if (promptField && workbench.prompt && promptField.value === getKdpFixCommandPromptPlaceholder()) {
+    promptField.value = workbench.prompt;
+  }
+  if (imageMagickField && workbench.imageMagickInstructions && imageMagickField.value === getKdpImageMagickInstructionPlaceholder()) {
+    imageMagickField.value = workbench.imageMagickInstructions;
+  }
+  if (status) {
+    status.textContent = workbench.outputFileName
+      ? `已生成：${workbench.outputFileName}`
+      : workbench.sourceFileName
+        ? `已准备：${workbench.sourceFileName}`
+        : "尚未准备修改文件。";
+  }
+  if (sourcePreview) {
+    sourcePreview.innerHTML = item?.bookName && workbench.sourceFileName
+      ? `<img src="/api/kdp-fix-image?bookName=${encodeURIComponent(item.bookName)}&kind=source&fileName=${encodeURIComponent(workbench.sourceFileName)}&t=${Date.now()}" alt="">`
+      : "<span>准备后显示源文件</span>";
+  }
+  if (outputPreview) {
+    outputPreview.innerHTML = item?.bookName && workbench.outputFileName
+      ? `<img src="/api/kdp-fix-image?bookName=${encodeURIComponent(item.bookName)}&kind=output&fileName=${encodeURIComponent(workbench.outputFileName)}&t=${Date.now()}" alt="">`
+      : "<span>执行后显示结果</span>";
+  }
+  if (sourceMeta) {
+    sourceMeta.textContent = workbench.sourceFileName
+      ? `${workbench.sourceFileName} · ${workbench.sourceImage?.width || "-"} x ${workbench.sourceImage?.height || "-"} px`
+      : "未准备。";
+  }
+  if (outputMeta) {
+    const run = workbench.latestRun;
+    outputMeta.textContent = workbench.outputFileName
+      ? `${workbench.outputFileName}${run?.durationSeconds ? ` · ${run.durationSeconds}s` : ""}`
+      : "未生成。";
+  }
+  renderKdpImgBlackWorkbenchState(workbench);
+}
+
+function loadKdpImgBlackSourceToWorkarea() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  const target = $("#kdp-img-black-workarea-1");
+  const fileLabel = $("#kdp-img-black-workarea-1-file");
+  const status = $("#kdp-img-black-status");
+  if (!target) return;
+  if (!workbench.sourceFileName) {
+    target.innerHTML = '<div class="cover-gallery-empty">尚未准备待修改 PNG。请先在 KDP 修图工作台点击“准备修改文件”。</div>';
+    if (fileLabel) fileLabel.textContent = "文件名：未加载";
+    if (status) status.textContent = "尚未准备待修改 PNG。";
+    return;
+  }
+  const src = `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=source&fileName=${encodeURIComponent(workbench.sourceFileName)}&t=${Date.now()}`;
+  if (fileLabel) fileLabel.textContent = `文件名：${workbench.sourceFileName}`;
+  target.innerHTML = `<div class="kdp-img-black-image-wrap"><img id="kdp-img-black-source-image" src="${src}" alt="待修改 PNG"></div>`;
+  if (status) status.textContent = `已载入待修改图：${workbench.sourceFileName}`;
+}
+
+function getKdpImgBlackStorageKey(bookName = getBookName()) {
+  return `sagewrite-kdp-img-black-state:${bookName || "default"}`;
+}
+
+function readKdpImgBlackLocalState(bookName = getBookName()) {
+  try {
+    return JSON.parse(localStorage.getItem(getKdpImgBlackStorageKey(bookName)) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeKdpImgBlackLocalState(uiState, bookName = getBookName()) {
+  try {
+    localStorage.setItem(getKdpImgBlackStorageKey(bookName), JSON.stringify(uiState || {}));
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
+  }
+}
+
+function getKdpImgBlackUiStateFromFields() {
+  const valueOrEmpty = (selector) => {
+    const value = $(selector)?.value;
+    return value === undefined || value === null || value === "" ? "" : Math.round(Number(value));
+  };
+  return {
+    crop: {
+      x: valueOrEmpty("#kdp-img-black-crop-x"),
+      y: valueOrEmpty("#kdp-img-black-crop-y"),
+      width: valueOrEmpty("#kdp-img-black-crop-width"),
+      height: valueOrEmpty("#kdp-img-black-crop-height")
+    },
+    fill: {
+      color: $("#kdp-img-black-fill-color")?.value || "#07121b",
+      preset: $("#kdp-img-black-fill-preset")?.value || "#07121b",
+      mode: $("#kdp-img-black-fill-mode")?.value || "Auto"
+    },
+    composite: {
+      x: valueOrEmpty("#kdp-img-black-composite-x"),
+      y: valueOrEmpty("#kdp-img-black-composite-y")
+    },
+    resize: {
+      scalePercent: valueOrEmpty("#kdp-img-black-resize-percent") || 95
+    }
+  };
+}
+
+let kdpImgBlackSaveTimer = null;
+
+function persistKdpImgBlackUiState({ immediate = false } = {}) {
+  const bookName = getBookName();
+  const uiState = getKdpImgBlackUiStateFromFields();
+  writeKdpImgBlackLocalState(uiState, bookName);
+  if (!bookName) return;
+
+  const save = async () => {
+    try {
+      const result = await api("/api/kdp-img-black/state", {
+        method: "POST",
+        body: JSON.stringify({ bookName, uiState })
+      });
+      if (result.fixWorkbench) {
+        state.kdpFixWorkbench = result.fixWorkbench;
+      }
+    } catch (error) {
+      appendLog(`KDP IMG Black 状态保存失败：${error.message}`);
+    }
+  };
+
+  if (kdpImgBlackSaveTimer) {
+    clearTimeout(kdpImgBlackSaveTimer);
+    kdpImgBlackSaveTimer = null;
+  }
+  if (immediate) {
+    save();
+    return;
+  }
+  kdpImgBlackSaveTimer = setTimeout(save, 350);
+}
+
+function setKdpImgBlackCropFields(crop = {}) {
+  [
+    ["#kdp-img-black-crop-x", crop.x],
+    ["#kdp-img-black-crop-y", crop.y],
+    ["#kdp-img-black-crop-width", crop.width],
+    ["#kdp-img-black-crop-height", crop.height]
+  ].forEach(([selector, value]) => {
+    const field = $(selector);
+    if (!field || value === undefined || value === null || value === "") return;
+    field.value = String(Math.round(Number(value)));
+  });
+}
+
+function getKdpImgBlackSavedCrop(workbench = state.kdpFixWorkbench || {}) {
+  const uiCrop = workbench.imgBlackUi?.crop || readKdpImgBlackLocalState().crop || {};
+  const latestCrop = workbench.latestCrop?.crop || {};
+  const latestFill = workbench.latestFill?.fill || {};
+  return {
+    x: uiCrop.x !== "" && uiCrop.x !== undefined ? uiCrop.x : (latestCrop.x ?? latestFill.x ?? ""),
+    y: uiCrop.y !== "" && uiCrop.y !== undefined ? uiCrop.y : (latestCrop.y ?? latestFill.y ?? ""),
+    width: uiCrop.width !== "" && uiCrop.width !== undefined ? uiCrop.width : (latestCrop.width ?? latestFill.width ?? ""),
+    height: uiCrop.height !== "" && uiCrop.height !== undefined ? uiCrop.height : (latestCrop.height ?? latestFill.height ?? "")
+  };
+}
+
+function renderKdpImgBlackSourceImage(bookName, sourceFileName, crop = null) {
+  const target = $("#kdp-img-black-workarea-1");
+  const fileLabel = $("#kdp-img-black-workarea-1-file");
+  if (!target || !bookName || !sourceFileName) return;
+  const src = `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=source&fileName=${encodeURIComponent(sourceFileName)}&t=${Date.now()}`;
+  if (fileLabel) fileLabel.textContent = `文件名：${sourceFileName}`;
+  target.innerHTML = `<div class="kdp-img-black-image-wrap"><img id="kdp-img-black-source-image" src="${src}" alt="待修改 PNG"></div>`;
+  const img = $("#kdp-img-black-source-image");
+  const mark = () => {
+    if (crop && crop.x !== "" && crop.y !== "" && crop.width !== "" && crop.height !== "") {
+      markKdpImgBlackCropRegion(img, crop);
+    }
+  };
+  img?.addEventListener("load", mark, { once: true });
+  if (img?.complete) mark();
+}
+
+function renderKdpImgBlackWorkbenchState(workbench = state.kdpFixWorkbench || {}) {
+  const item = getSelectedWorkspaceItem();
+  const bookName = item?.bookName || getBookName();
+  const localState = readKdpImgBlackLocalState(bookName);
+  const uiState = {
+    ...localState,
+    ...(workbench.imgBlackUi || {}),
+    crop: {
+      ...(localState.crop || {}),
+      ...(workbench.imgBlackUi?.crop || {})
+    },
+    fill: {
+      ...(localState.fill || {}),
+      ...(workbench.imgBlackUi?.fill || {})
+    },
+    composite: {
+      ...(localState.composite || {}),
+      ...(workbench.imgBlackUi?.composite || {})
+    },
+    resize: {
+      ...(localState.resize || {}),
+      ...(workbench.imgBlackUi?.resize || {})
+    }
+  };
+  const crop = getKdpImgBlackSavedCrop(workbench);
+  setKdpImgBlackCropFields(crop);
+  const resizeField = $("#kdp-img-black-resize-percent");
+  const resizePercent = uiState.resize?.scalePercent || workbench.latestResize?.scalePercent || 95;
+  if (resizeField) resizeField.value = String(Math.round(Number(resizePercent)));
+
+  const fillColor = uiState.fill?.color || workbench.latestFill?.fillColor || "#07121b";
+  const fillPreset = uiState.fill?.preset || fillColor;
+  const colorField = $("#kdp-img-black-fill-color");
+  const presetField = $("#kdp-img-black-fill-preset");
+  const modeField = $("#kdp-img-black-fill-mode");
+  if (colorField && /^#[0-9a-fA-F]{6}$/.test(fillColor)) colorField.value = fillColor;
+  if (modeField) modeField.value = uiState.fill?.mode === "Solid" ? "Solid" : "Auto";
+  if (presetField) {
+    const presetExists = Array.from(presetField.options).some((option) => option.value === fillPreset);
+    presetField.value = presetExists ? fillPreset : "custom";
+  }
+
+  if (bookName && workbench.sourceFileName) {
+    renderKdpImgBlackSourceImage(bookName, workbench.sourceFileName, crop);
+  }
+
+  const cropTarget = $("#kdp-img-black-workarea-2");
+  const cropMeta = $("#kdp-img-black-workarea-2-meta");
+  if (bookName && workbench.latestCrop?.outputFileName && cropTarget) {
+    const name = workbench.latestCrop.outputFileName;
+    cropTarget.innerHTML = `<img src="/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=crop&fileName=${encodeURIComponent(name)}&t=${Date.now()}" alt="局部小图">`;
+    if (cropMeta) cropMeta.textContent = `局部小图：${name} | 来源：${workbench.sourceFileName || "-"} | x=${workbench.latestCrop.crop?.x ?? "-"}, y=${workbench.latestCrop.crop?.y ?? "-"}, 宽=${workbench.latestCrop.crop?.width ?? "-"}, 长度=${workbench.latestCrop.crop?.height ?? "-"}`;
+  }
+
+  const fillTarget = $("#kdp-img-black-workarea-3");
+  const fillMeta = $("#kdp-img-black-workarea-3-meta");
+  if (bookName && workbench.latestFill?.outputFileName && fillTarget) {
+    const name = workbench.latestFill.outputFileName;
+    fillTarget.innerHTML = `<img src="/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=fill&fileName=${encodeURIComponent(name)}&t=${Date.now()}" alt="回填后的原图">`;
+    if (fillMeta) fillMeta.textContent = `回填图：${name} | 方式=${workbench.latestFill.fillMode || "Auto"} | 颜色=${workbench.latestFill.fillColor || fillColor} | x=${workbench.latestFill.fill?.x ?? "-"}, y=${workbench.latestFill.fill?.y ?? "-"}, 宽=${workbench.latestFill.fill?.width ?? "-"}, 长度=${workbench.latestFill.fill?.height ?? "-"}`;
+  }
+
+  const compositeX = uiState.composite?.x !== "" && uiState.composite?.x !== undefined
+    ? uiState.composite.x
+    : (workbench.latestComposite?.composite?.x ?? crop.x ?? "");
+  const compositeY = uiState.composite?.y !== "" && uiState.composite?.y !== undefined
+    ? uiState.composite.y
+    : (workbench.latestComposite?.composite?.y ?? crop.y ?? "");
+  [
+    ["#kdp-img-black-composite-x", compositeX],
+    ["#kdp-img-black-composite-y", compositeY]
+  ].forEach(([selector, value]) => {
+    const field = $(selector);
+    if (!field || value === undefined || value === null || value === "") return;
+    field.value = String(Math.round(Number(value)));
+  });
+
+  const compositeTarget = $("#kdp-img-black-workarea-4");
+  const compositeMeta = $("#kdp-img-black-workarea-4-meta");
+  const compositePath = $("#kdp-img-black-workarea-4-path");
+  const pdfMeta = $("#kdp-img-black-workarea-4-pdf");
+  const pdfPath = $("#kdp-img-black-workarea-4-pdf-path");
+  if (bookName && workbench.latestComposite?.outputFileName && compositeTarget) {
+    const name = workbench.latestComposite.outputFileName;
+    compositeTarget.innerHTML = `<img src="/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=composite&fileName=${encodeURIComponent(name)}&t=${Date.now()}" alt="拼接图">`;
+    if (compositeMeta) compositeMeta.textContent = `拼接图：${name} | x=${workbench.latestComposite.composite?.x ?? "-"}, y=${workbench.latestComposite.composite?.y ?? "-"}`;
+    if (compositePath) compositePath.textContent = `路径：${workbench.latestComposite.outputPath || "fix_workbench/composites/" + name}`;
+  }
+  if (bookName && workbench.latestPdf?.outputFileName) {
+    const name = workbench.latestPdf.outputFileName;
+    const href = `/api/kdp-fix-pdf?bookName=${encodeURIComponent(bookName)}&fileName=${encodeURIComponent(name)}&t=${Date.now()}`;
+    if (pdfMeta) pdfMeta.innerHTML = `PDF：<a href="${href}" target="_blank" rel="noopener">${escapeHtml(name)}</a>`;
+    if (pdfPath) pdfPath.textContent = `PDF路径：${workbench.latestPdf.outputPath || "fix_workbench/pdfs/" + name}`;
+  }
+
+  const status = $("#kdp-img-black-status");
+  if (status && (workbench.sourceFileName || workbench.latestCrop?.outputFileName || workbench.latestFill?.outputFileName || workbench.latestComposite?.outputFileName || workbench.latestPdf?.outputFileName)) {
+    status.textContent = "已恢复 imageMagcik 修图工作台状态，可继续往下做。";
+  }
+}
+
+function getKdpImgBlackCompositeParams() {
+  const x = Math.round(Number($("#kdp-img-black-composite-x")?.value));
+  const y = Math.round(Number($("#kdp-img-black-composite-y")?.value));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error("请先填写贴回X和贴回Y两个数字。");
+  }
+  if (x < 0 || y < 0) {
+    throw new Error("贴回X/Y不能小于 0。");
+  }
+  return { x, y };
+}
+
+function getKdpImgBlackResizePercent() {
+  const scalePercent = Number($("#kdp-img-black-resize-percent")?.value);
+  if (!Number.isFinite(scalePercent) || scalePercent <= 1 || scalePercent > 400) {
+    throw new Error("缩放比例必须大于 1 且不超过 400。例如 95 或 105。");
+  }
+  return scalePercent;
+}
+
+function getKdpImgBlackCropParams() {
+  const fields = {
+    x: $("#kdp-img-black-crop-x"),
+    y: $("#kdp-img-black-crop-y"),
+    width: $("#kdp-img-black-crop-width"),
+    height: $("#kdp-img-black-crop-height")
+  };
+  const params = Object.fromEntries(Object.entries(fields).map(([key, field]) => [
+    key,
+    Math.round(Number(field?.value))
+  ]));
+  if (!Number.isFinite(params.x) || !Number.isFinite(params.y) || !Number.isFinite(params.width) || !Number.isFinite(params.height)) {
+    throw new Error("请先填写相对X、相对Y、宽、长度四个数字。");
+  }
+  if (params.x < 0 || params.y < 0 || params.width <= 0 || params.height <= 0) {
+    throw new Error("相对坐标不能小于 0，宽和长度必须大于 0。");
+  }
+  return params;
+}
+
+function markKdpImgBlackCropRegion(img, params) {
+  const wrap = img.closest(".kdp-img-black-image-wrap");
+  if (!wrap || !img.naturalWidth || !img.naturalHeight) return;
+  wrap.querySelector(".kdp-img-black-crop-marker")?.remove();
+  const scaleX = img.clientWidth / img.naturalWidth;
+  const scaleY = img.clientHeight / img.naturalHeight;
+  const marker = document.createElement("div");
+  marker.className = "kdp-img-black-crop-marker";
+  marker.style.left = `${params.x * scaleX}px`;
+  marker.style.top = `${params.y * scaleY}px`;
+  marker.style.width = `${params.width * scaleX}px`;
+  marker.style.height = `${params.height * scaleY}px`;
+  wrap.appendChild(marker);
+}
+
+async function cropKdpImgBlackSourceRegion() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  const img = $("#kdp-img-black-source-image");
+  const target = $("#kdp-img-black-workarea-2");
+  const meta = $("#kdp-img-black-workarea-2-meta");
+  const status = $("#kdp-img-black-status");
+  if (!workbench.sourceFileName) {
+    throw new Error("尚未准备待修改 PNG。请先在 KDP 修图工作台点击“准备修改文件”。");
+  }
+  if (!img || !target) {
+    throw new Error("请先点击“取待修改图”，把原图载入图形工作区1。");
+  }
+  if (!img.complete || !img.naturalWidth || !img.naturalHeight) {
+    throw new Error("待修改图还没有加载完成，请稍后再取局部小图。");
+  }
+  const params = getKdpImgBlackCropParams();
+  if (params.x + params.width > img.naturalWidth || params.y + params.height > img.naturalHeight) {
+    throw new Error(`局部小图范围超出原图。原图尺寸：${img.naturalWidth} x ${img.naturalHeight}px。`);
+  }
+
+  persistKdpImgBlackUiState({ immediate: true });
+  if (status) status.textContent = "正在调用 kdp-crop-image-region.ps1 截取局部小图...";
+  const result = await api("/api/kdp-img-black/crop", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      sourceFileName: workbench.sourceFileName,
+      x: params.x,
+      y: params.y,
+      width: params.width,
+      height: params.height,
+      force: true
+    })
+  });
+  if (result.fixWorkbench) {
+    state.kdpFixWorkbench = result.fixWorkbench;
+  }
+  const imageUrl = result.cropImageUrl || `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=crop&fileName=${encodeURIComponent(result.crop?.outputFileName || "")}&t=${Date.now()}`;
+  target.innerHTML = `<img src="${imageUrl}" alt="局部小图">`;
+  markKdpImgBlackCropRegion(img, params);
+
+  const sourceName = state.kdpFixWorkbench?.sourceFileName || "待修改图";
+  const outputName = result.crop?.outputFileName || "局部小图";
+  const label = `${outputName} | 来源：${sourceName} | x=${params.x}, y=${params.y}, 宽=${params.width}, 长度=${params.height}`;
+  if (meta) meta.textContent = `局部小图：${label}`;
+  if (status) status.textContent = `已调用 kdp-crop-image-region.ps1 生成局部小图：${outputName}`;
+}
+
+async function resizeKdpImgBlackCropImage() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  const target = $("#kdp-img-black-workarea-2");
+  const meta = $("#kdp-img-black-workarea-2-meta");
+  const status = $("#kdp-img-black-status");
+  if (!workbench.latestCrop?.outputFileName) {
+    throw new Error("请先在图形工作区2生成局部小图。");
+  }
+  if (!target) return;
+
+  const scalePercent = getKdpImgBlackResizePercent();
+  persistKdpImgBlackUiState({ immediate: true });
+  if (status) status.textContent = `正在调用 kdp-resize-image-region.ps1 缩放局部小图到 ${scalePercent}%...`;
+  const result = await api("/api/kdp-img-black/resize", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      inputFileName: workbench.latestCrop.outputFileName,
+      scalePercent,
+      force: true
+    })
+  });
+  if (result.fixWorkbench) {
+    state.kdpFixWorkbench = result.fixWorkbench;
+  }
+  const outputName = result.resize?.outputFileName || "缩放图";
+  const imageUrl = result.cropImageUrl || `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=crop&fileName=${encodeURIComponent(outputName)}&t=${Date.now()}`;
+  target.innerHTML = `<img src="${imageUrl}" alt="缩放后的局部小图">`;
+  if (meta) {
+    const size = result.resize?.output ? `${result.resize.output.width} x ${result.resize.output.height}px` : "-";
+    meta.textContent = `局部小图：${outputName} | 缩放=${scalePercent}% | 尺寸=${size}`;
+  }
+  if (status) status.textContent = `已调用 kdp-resize-image-region.ps1 生成缩放图：${outputName}`;
+}
+
+function getKdpImgBlackFillColor() {
+  const colorField = $("#kdp-img-black-fill-color");
+  const value = String(colorField?.value || "#07121b").trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(value)) {
+    throw new Error("请选择有效的回填颜色。");
+  }
+  return value;
+}
+
+async function fillKdpImgBlackSourceRegion() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  const img = $("#kdp-img-black-source-image");
+  const target = $("#kdp-img-black-workarea-3");
+  const meta = $("#kdp-img-black-workarea-3-meta");
+  const status = $("#kdp-img-black-status");
+  if (!workbench.sourceFileName) {
+    throw new Error("尚未准备待修改 PNG。请先在 KDP 修图工作台点击“准备修改文件”。");
+  }
+  if (!img || !target) {
+    throw new Error("请先点击“取待修改图”，把原图载入图形工作区1。");
+  }
+  if (!img.complete || !img.naturalWidth || !img.naturalHeight) {
+    throw new Error("待修改图还没有加载完成，请稍后再回填原图。");
+  }
+  const params = getKdpImgBlackCropParams();
+  if (params.x + params.width > img.naturalWidth || params.y + params.height > img.naturalHeight) {
+    throw new Error(`回填区域超出原图。原图尺寸：${img.naturalWidth} x ${img.naturalHeight}px。`);
+  }
+  const fillColor = getKdpImgBlackFillColor();
+  const fillMode = $("#kdp-img-black-fill-mode")?.value === "Solid" ? "Solid" : "Auto";
+
+  persistKdpImgBlackUiState({ immediate: true });
+  if (status) status.textContent = fillMode === "Auto"
+    ? "正在调用 kdp-fill-image-region.ps1 自动取样回填原图..."
+    : "正在调用 kdp-fill-image-region.ps1 纯色回填原图...";
+  const result = await api("/api/kdp-img-black/fill", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      sourceFileName: workbench.sourceFileName,
+      x: params.x,
+      y: params.y,
+      width: params.width,
+      height: params.height,
+      fillColor,
+      fillMode,
+      force: true
+    })
+  });
+  if (result.fixWorkbench) {
+    state.kdpFixWorkbench = result.fixWorkbench;
+  }
+  const imageUrl = result.fillImageUrl || `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=fill&fileName=${encodeURIComponent(result.fill?.outputFileName || "")}&t=${Date.now()}`;
+  target.innerHTML = `<img src="${imageUrl}" alt="回填后的原图">`;
+  markKdpImgBlackCropRegion(img, params);
+
+  const sourceName = state.kdpFixWorkbench?.sourceFileName || "待修改图";
+  const outputName = result.fill?.outputFileName || "回填图";
+  const label = `${outputName} | 来源：${sourceName} | 方式=${fillMode} | 颜色=${fillColor} | x=${params.x}, y=${params.y}, 宽=${params.width}, 长度=${params.height}`;
+  if (meta) meta.textContent = `回填图：${label}`;
+  if (status) status.textContent = `已调用 kdp-fill-image-region.ps1 生成回填图：${outputName}`;
+}
+
+async function compositeKdpImgBlackImages() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  const target = $("#kdp-img-black-workarea-4");
+  const meta = $("#kdp-img-black-workarea-4-meta");
+  const pathLabel = $("#kdp-img-black-workarea-4-path");
+  const status = $("#kdp-img-black-status");
+  if (!workbench.latestCrop?.outputFileName) {
+    throw new Error("请先在图形工作区2生成局部小图。");
+  }
+  if (!workbench.latestFill?.outputFileName) {
+    throw new Error("请先在图形工作区3生成回填后的原图。");
+  }
+  if (!target) return;
+
+  const params = getKdpImgBlackCompositeParams();
+  persistKdpImgBlackUiState({ immediate: true });
+  if (status) status.textContent = "正在调用 kdp-composite-image-region.ps1 拼接图片...";
+  const result = await api("/api/kdp-img-black/composite", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      baseFileName: workbench.latestFill.outputFileName,
+      overlayFileName: workbench.latestCrop.outputFileName,
+      x: params.x,
+      y: params.y,
+      force: true
+    })
+  });
+  if (result.fixWorkbench) {
+    state.kdpFixWorkbench = result.fixWorkbench;
+  }
+  const outputName = result.composite?.outputFileName || "拼接图";
+  const outputPath = result.composite?.outputPath || "";
+  const imageUrl = result.compositeImageUrl || `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=composite&fileName=${encodeURIComponent(outputName)}&t=${Date.now()}`;
+  target.innerHTML = `<img src="${imageUrl}" alt="拼接图">`;
+  if (meta) meta.textContent = `拼接图：${outputName} | x=${params.x}, y=${params.y}`;
+  if (pathLabel) pathLabel.textContent = `路径：${outputPath || "-"}`;
+  if (status) status.textContent = `已调用 kdp-composite-image-region.ps1 生成拼接图：${outputName}`;
+}
+
+async function convertKdpImgBlackCompositePngToPdf() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  const pdfMeta = $("#kdp-img-black-workarea-4-pdf");
+  const pdfPath = $("#kdp-img-black-workarea-4-pdf-path");
+  const status = $("#kdp-img-black-status");
+  if (!workbench.latestComposite?.outputFileName) {
+    throw new Error("请先在图形工作区4生成当前拼接 PNG。");
+  }
+
+  if (status) status.textContent = "正在调用 kdp-png-to-pdf.ps1 将当前 PNG 文件转换为 PDF...";
+  const result = await api("/api/kdp-img-black/png-to-pdf", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      inputFileName: workbench.latestComposite.outputFileName,
+      force: true
+    })
+  });
+  if (result.fixWorkbench) {
+    state.kdpFixWorkbench = result.fixWorkbench;
+  }
+  const outputName = result.pdf?.outputFileName || "PDF";
+  const outputPath = result.pdf?.outputPath || "";
+  const href = result.pdfUrl || `/api/kdp-fix-pdf?bookName=${encodeURIComponent(bookName)}&fileName=${encodeURIComponent(outputName)}&t=${Date.now()}`;
+  if (pdfMeta) pdfMeta.innerHTML = `PDF：<a href="${href}" target="_blank" rel="noopener">${escapeHtml(outputName)}</a>`;
+  if (pdfPath) pdfPath.textContent = `PDF路径：${outputPath || "-"}`;
+  if (status) status.textContent = `已调用 kdp-png-to-pdf.ps1 生成 PDF：${outputName}`;
+}
+
+function renderKdpAcceptanceFileList(files = []) {
+  const panel = $("#kdp-acceptance-file-list");
+  if (!panel) return;
+  if (!files.length) {
+    panel.innerHTML = '<div class="cover-gallery-empty">KDP acceptance directory has no PDF/PNG files.</div>';
+    return;
+  }
+  panel.innerHTML = files.map((file) => {
+    const type = String(file.type || "").toUpperCase();
+    const label = file.role ? `${file.role} · ${file.modifiedAt || ""}` : (file.modifiedAt || "");
+    return `
+      <button class="kdp-acceptance-file-item" type="button" data-kdp-file="${escapeHtml(file.relativePath || file.name || "")}" data-kdp-type="${escapeHtml(file.type || "")}">
+        <span>${escapeHtml(type || "FILE")}</span>
+        <strong>${escapeHtml(file.relativePath || file.name || "")}</strong>
+        <em>${escapeHtml(label)}</em>
+      </button>
+    `;
+  }).join("");
+}
+
+async function refreshKdpAcceptanceFileList() {
+  const bookName = requireBookName();
+  const result = await api(`/api/kdp-acceptance-files?bookName=${encodeURIComponent(bookName)}`);
+  renderKdpAcceptanceFileList(result.files || []);
+  return result;
+}
+
+async function openKdpAcceptanceDirectoryAndList() {
+  const bookName = requireBookName();
+  setStatusBadge("打开中", "running");
+  setLog("Opening KDP acceptance directory with kdp-acceptance-files.ps1...");
+  await run("kdp-acceptance-files", {
+    bookName,
+    action: "OpenDirectory"
+  });
+  const result = await refreshKdpAcceptanceFileList();
+  setStatusBadge("已打开", "success");
+  appendLog(`KDP acceptance directory listed: ${(result.files || []).length} PDF/PNG files.`);
+}
+
+async function useKdpAcceptanceDirectoryFile(fileName, fileType) {
+  const bookName = requireBookName();
+  const type = String(fileType || "").toLowerCase();
+  const effectiveType = getKdpFileTypeLabel(fileName, type);
+  const fileUrl = `/api/kdp-acceptance-file?bookName=${encodeURIComponent(bookName)}&fileName=${encodeURIComponent(fileName)}&t=${Date.now()}`;
+  if (effectiveType === "PNG") {
+    const result = await api("/api/kdp-acceptance-existing-file", {
+      method: "POST",
+      body: JSON.stringify({ bookName, fileName })
+    });
+    const spec = getCurrentKdpGuideSpec();
+    setKdpSourceMetadata(result.currentSource || getKdpAcceptanceSourceMetadata(result.fileName || fileName, "PNG"));
+    await loadKdpImageViewer(result.fileUrl || fileUrl, spec, null);
+    renderKdpPngInspectionState({ fileName });
+    setStatusBadge("PNG已加载", "success");
+    setLog(`Loaded PNG from KDP acceptance directory: ${fileName}`);
+    return;
+  }
+
+  const result = await api("/api/kdp-acceptance-existing-file", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      fileName,
+      trimWidthIn: Number($("#kdp-trim-width")?.value || 6),
+      trimHeightIn: Number($("#kdp-trim-height")?.value || 9),
+      pageCount: Number($("#kdp-page-count")?.value || 120),
+      paperType: $("#kdp-paper-type")?.value || "bw-white",
+      bleedIn: Number($("#kdp-bleed")?.value || 0.125)
+    })
+  });
+  const selected = getSelectedWorkspaceItem();
+  const currentArtifacts = state.coverCache[bookName] || selected?.coverArtifacts || {};
+  setKdpSourceMetadata(result.currentSource || getKdpAcceptanceSourceMetadata(result.fileName || fileName, "PDF"));
+  renderKdpCurrentSourceMeta("PDF 已加载，当前走 KDP 技术验收。");
+  state.coverCache[bookName] = {
+    ...currentArtifacts,
+    kdpAcceptance: result.kdpAcceptance || null
+  };
+  renderKdpAcceptancePanel(selected || null, result.kdpAcceptance || null);
+  setStatusBadge("PDF已验收", "success");
+  setLog(`Loaded PDF from KDP acceptance directory: ${fileName}`);
+}
+
+async function prepareKdpFixWorkbench() {
+  if (!state.kdpPdf.page) {
+    throw new Error("请先提交并加载 PDF。");
+  }
+  if (!state.kdpPdf.textRegions?.length) {
+    throw new Error("请先识别文字区域，再准备修改文件。");
+  }
+  const bookName = requireBookName();
+  const promptField = $("#kdp-fix-command-prompt");
+  if (!promptField?.value || promptField.value === getKdpFixCommandPromptPlaceholder()) {
+    generateKdpFixCommandPrompt();
+  }
+  const prompt = ($("#kdp-fix-command-prompt")?.value || "").trim();
+  if (!prompt) {
+    throw new Error("请先生成修改命令提示词。");
+  }
+  const canvas = await renderKdpPageToPngCanvas(300);
+  const model = "gpt-image-1.5";
+  setStatusBadge("准备中", "running");
+  setLog([
+    "KDP 修改工作台：准备修改文件。",
+    `Source PNG: ${canvas.width} x ${canvas.height}px @ 300DPI`,
+    "Saving source PNG and edit prompt..."
+  ].join("\n"));
+  const result = await api("/api/kdp-fix-workbench/prepare", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      imageDataUrl: canvas.toDataURL("image/png"),
+      imageWidth: canvas.width,
+      imageHeight: canvas.height,
+      prompt,
+      model
+    })
+  });
+  if (result.currentSource) {
+    setKdpSourceMetadata(result.currentSource);
+    renderKdpCurrentSourceMeta("修图源文件已准备为当前工作对象。");
+  }
+  renderKdpFixWorkbench(result.fixWorkbench || {});
+  setStatusBadge("已准备", "success");
+  setLog([
+    "KDP 修改工作台准备完成。",
+    `Source: ${result.fixWorkbench?.sourceFileName || "-"}`,
+    `Prompt: ${result.fixWorkbench?.promptFileName || "-"}`
+  ].join("\n"));
+}
+
+async function runKdpFixWorkbench() {
+  const bookName = requireBookName();
+  let workbench = state.kdpFixWorkbench || {};
+  if (!workbench.sourceFileName) {
+    await prepareKdpFixWorkbench();
+    workbench = state.kdpFixWorkbench || {};
+  }
+  const prompt = ($("#kdp-fix-command-prompt")?.value || workbench.prompt || "").trim();
+  if (!prompt) {
+    throw new Error("缺少修改命令提示词。");
+  }
+  const model = workbench.model || "gpt-image-1.5";
+  setStatusBadge("修图中", "running");
+  setLog([
+    "KDP 修改工作台：启动独立 PowerShell 修图程序。",
+    "Program: kdp-fix-image-edit.ps1",
+    `Model: ${model}`,
+    `Source: ${workbench.sourceFileName}`,
+    `Prompt source: current editable textarea (${prompt.length} characters)`,
+    "PowerShell 输出会在这里持续显示，包括任务、程序、输入输出、usage/token。"
+  ].join("\n"));
+  const job = await run("kdp-fix-image-edit", {
+      bookName,
+      sourceFileName: workbench.sourceFileName,
+      promptFileName: workbench.promptFileName || "",
+      prompt,
+      imageModel: model,
+      force: true
+  });
+  if (job?.status !== "success") {
+    throw new Error("KDP 修改 PowerShell 程序执行失败。");
+  }
+  const refreshed = await api(`/api/kdp-acceptance?bookName=${encodeURIComponent(bookName)}`);
+  renderKdpFixWorkbench(refreshed.kdpAcceptance?.fixWorkbench || {});
+  setStatusBadge("已生成", "success");
+  appendLog("KDP 修改工作台：修改后文件已生成，并已刷新结果预览。");
+}
+
+async function runKdpImageMagickFixWorkbench() {
+  const bookName = requireBookName();
+  let workbench = state.kdpFixWorkbench || {};
+  const instructionField = $("#kdp-imagemagick-instructions");
+  const status = $("#kdp-img-black-status");
+  const placeholder = getKdpImageMagickInstructionPlaceholder();
+  if (instructionField && (!instructionField.value?.trim() || instructionField.value === placeholder)) {
+    generateKdpImageMagickInstructions();
+  }
+  const instructionJson = ($("#kdp-imagemagick-instructions")?.value || "").trim();
+  if (!instructionJson || instructionJson === placeholder) {
+    throw new Error("请先生成并确认 ImageMagick 指令集。");
+  }
+  try {
+    JSON.parse(instructionJson);
+  } catch (error) {
+    throw new Error(`ImageMagick 指令集不是有效 JSON：${error.message}`);
+  }
+  if (!workbench.sourceFileName) {
+    await prepareKdpFixWorkbench();
+    workbench = state.kdpFixWorkbench || {};
+  }
+  if (status) status.textContent = "ImageMagick 修图执行中。";
+  setStatusBadge("修图中", "running");
+  setLog([
+    "KDP ImageMagick 修图程序启动。",
+    "Program: kdp-imagemagick-fix.ps1",
+    `Source: ${workbench.sourceFileName}`,
+    `Candidate edit: ${workbench.outputFileName || "-"}`,
+    `Instruction source: current editable JSON textarea (${instructionJson.length} characters)`,
+    "说明：ImageMagick 会保护原始 300DPI 画布；候选修图尺寸不一致时不会作为整图替换。"
+  ].join("\n"));
+  const job = await run("kdp-imagemagick-fix", {
+    bookName,
+    sourceFileName: workbench.sourceFileName,
+    inputEditFileName: workbench.outputFileName || "",
+    instructionJson,
+    force: true
+  });
+  if (job?.status !== "success") {
+    throw new Error("KDP ImageMagick PowerShell 程序执行失败。");
+  }
+  const refreshed = await api(`/api/kdp-acceptance?bookName=${encodeURIComponent(bookName)}`);
+  renderKdpFixWorkbench(refreshed.kdpAcceptance?.fixWorkbench || {});
+  if (status) status.textContent = "ImageMagick 修图完成，结果已刷新。";
+  setStatusBadge("已生成", "success");
+  appendLog("KDP ImageMagick 修图完成，并已刷新结果预览。");
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片加载失败。"));
+    image.src = src;
+  });
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function concatUint8Arrays(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  parts.forEach((part) => {
+    output.set(part, offset);
+    offset += part.length;
+  });
+  return output;
+}
+
+function buildPdfDataUrlFromJpeg(jpegBytes, imageWidth, imageHeight, widthIn, heightIn) {
+  const encoder = new TextEncoder();
+  const widthPt = Number(widthIn) * 72;
+  const heightPt = Number(heightIn) * 72;
+  const objects = [];
+  const pushObject = (bodyParts) => {
+    objects.push(bodyParts);
+    return objects.length;
+  };
+  pushObject([encoder.encode("<< /Type /Catalog /Pages 2 0 R >>")]);
+  pushObject([encoder.encode("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")]);
+  pushObject([encoder.encode(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${widthPt.toFixed(3)} ${heightPt.toFixed(3)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`)]);
+  pushObject([
+    encoder.encode(`<< /Type /XObject /Subtype /Image /Width ${imageWidth} /Height ${imageHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`),
+    jpegBytes,
+    encoder.encode("\nendstream")
+  ]);
+  const content = encoder.encode(`q\n${widthPt.toFixed(3)} 0 0 ${heightPt.toFixed(3)} 0 0 cm\n/Im0 Do\nQ\n`);
+  pushObject([encoder.encode(`<< /Length ${content.length} >>\nstream\n`), content, encoder.encode("endstream")]);
+  const parts = [encoder.encode("%PDF-1.4\n%\xFF\xFF\xFF\xFF\n")];
+  const offsets = [0];
+  objects.forEach((bodyParts, index) => {
+    offsets.push(parts.reduce((sum, part) => sum + part.length, 0));
+    parts.push(encoder.encode(`${index + 1} 0 obj\n`), ...bodyParts, encoder.encode("\nendobj\n"));
+  });
+  const xrefOffset = parts.reduce((sum, part) => sum + part.length, 0);
+  const xrefLines = ["xref", `0 ${objects.length + 1}`, "0000000000 65535 f "];
+  for (let i = 1; i < offsets.length; i += 1) {
+    xrefLines.push(`${String(offsets[i]).padStart(10, "0")} 00000 n `);
+  }
+  xrefLines.push("trailer", `<< /Size ${objects.length + 1} /Root 1 0 R >>`, "startxref", String(xrefOffset), "%%EOF");
+  parts.push(encoder.encode(xrefLines.join("\n")));
+  return `data:application/pdf;base64,${bytesToBase64(concatUint8Arrays(parts))}`;
+}
+
+async function submitKdpFixedOutputForAcceptance() {
+  const bookName = requireBookName();
+  const workbench = state.kdpFixWorkbench || {};
+  if (!workbench.outputFileName) {
+    throw new Error("请先执行修改，生成修改后的 PNG。");
+  }
+  const sourceUrl = `/api/kdp-fix-image?bookName=${encodeURIComponent(bookName)}&kind=output&fileName=${encodeURIComponent(workbench.outputFileName)}&t=${Date.now()}`;
+  const image = await loadImageElement(sourceUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0);
+  const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.96);
+  const jpegBytes = Uint8Array.from(atob(jpegDataUrl.split(",")[1] || ""), (char) => char.charCodeAt(0));
+  const spec = state.kdpPdf.spec || getCurrentKdpGuideSpec();
+  const pdfDataUrl = buildPdfDataUrlFromJpeg(jpegBytes, canvas.width, canvas.height, spec.width, spec.height);
+  setStatusBadge("验收中", "running");
+  setLog([
+    "KDP 修改工作台：提交修改后文件验收。",
+    `Output PNG: ${workbench.outputFileName}`,
+    `Wrapped PDF size: ${spec.width} x ${spec.height} in`
+  ].join("\n"));
+  const result = await api("/api/kdp-acceptance", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      fileName: `kdp-fixed-${Date.now()}.pdf`,
+      dataUrl: pdfDataUrl,
+      trimWidthIn: Number($("#kdp-trim-width")?.value || 6),
+      trimHeightIn: Number($("#kdp-trim-height")?.value || 9),
+      pageCount: Number($("#kdp-page-count")?.value || 120),
+      paperType: $("#kdp-paper-type")?.value || "bw-white",
+      bleedIn: Number($("#kdp-bleed")?.value || 0.125)
+    })
+  });
+  const item = getSelectedWorkspaceItem();
+  if (item) {
+    renderKdpAcceptancePanel(item, result.kdpAcceptance);
+  }
+  setStatusBadge("已验收", "success");
+  setLog("修改后文件已包装成 PDF 并提交 KDP 验收。请查看新的验收结果，然后继续识别/报告/修改循环。");
+}
+
+async function generateKdpFixReport() {
+  const reportField = $("#kdp-fix-report");
+  if (!reportField) return;
+  if (!state.kdpPdf.textRegions?.length) {
+    reportField.value = "尚未识别文字区域。请先点击“LLM识别文字区域”，或等待上次识别结果恢复后再生成修改意见报告。";
+    return;
+  }
+  const bookName = requireBookName();
+  const reportText = buildKdpFixReport();
+  const spec = state.kdpPdf.spec || getCurrentKdpGuideSpec();
+  const isImageMode = state.kdpPdf.mode === "image";
+  const primaryLabel = isImageMode ? "PNG" : "PDF";
+  const primarySize = isImageMode ? getKdpPngActualSizePx() : getKdpPdfActualSizePx(300);
+  const pngSize = getKdpPngActualSizePx();
+  reportField.value = reportText;
+  setStatusBadge("保存中", "running");
+  setLog([
+    "KDP 修改意见报告程序启动。",
+    `任务：计算 ${primaryLabel} 的封底/书脊/封面中轴线，生成修图建议报告，并保存版本。`,
+    `${primaryLabel} 文件实际尺寸：${primarySize ? `${primarySize.width} x ${primarySize.height}px${isImageMode ? "" : " @ 300DPI"}` : "未加载"}`,
+    ...(!isImageMode ? [
+      `PNG 文件实际尺寸：${pngSize ? `${pngSize.width} x ${pngSize.height}px` : "未生成/未恢复"}`
+    ] : []),
+    "正在保存到 07_cover/kdp_acceptance/fix_reports ..."
+  ].join("\n"));
+  const result = await api("/api/kdp-fix-report", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      reportText,
+      spec,
+      source: state.kdpPdf.source || null,
+      textRegionCount: state.kdpPdf.textRegions.length
+    })
+  });
+  const savedText = result?.fixReport?.latest?.reportText || reportText;
+  reportField.value = savedText;
+  setStatusBadge("已保存", "success");
+  setLog([
+    "KDP 修改意见报告程序完成。",
+    `已保存当前版本：${result?.saved?.textFileName || "latest_kdp_fix_report.md"}`,
+    `latest 文件：${result?.saved?.latestTextFileName || "latest_kdp_fix_report.md"}`,
+    `back 备份目录：${result?.saved?.backupDir || "fix_reports/back"}`,
+    "旧 latest 已在覆盖前自动备份。"
+  ].join("\n"));
 }
 
 async function recognizeKdpTextRegions() {
@@ -2363,6 +3988,13 @@ async function renderKdpPageToPngCanvas(dpi = 300) {
   if (!state.kdpPdf.page) {
     throw new Error("请先提交并加载 PDF。");
   }
+  if (state.kdpPdf.mode === "image" && state.kdpPdf.image && state.kdpPdf.imageSize) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(state.kdpPdf.imageSize.width);
+    canvas.height = Math.ceil(state.kdpPdf.imageSize.height);
+    canvas.getContext("2d").drawImage(state.kdpPdf.image, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
   const scale = dpi / 72;
   const viewport = state.kdpPdf.page.getViewport({ scale });
   const canvas = document.createElement("canvas");
@@ -2390,7 +4022,6 @@ function normalizeLlmRegion(region, index, spec, dpi = 300) {
     height,
     right: x + width,
     bottom: y + height,
-    centerX: Math.round(Number(region.centerX ?? region.center_x ?? (x + (width / 2)))),
     orientation: String(region.orientation || "unknown"),
     notes: String(region.notes || ""),
     source: "llm_vision"
@@ -2409,8 +4040,7 @@ function normalizeLlmRegion(region, index, spec, dpi = 300) {
       width: roundForDisplay(box.width / dpi),
       height: roundForDisplay(box.height / dpi),
       right: roundForDisplay(box.right / dpi),
-      bottom: roundForDisplay(box.bottom / dpi),
-      centerX: roundForDisplay(box.centerX / dpi)
+      bottom: roundForDisplay(box.bottom / dpi)
     }
   };
 }
@@ -2428,34 +4058,64 @@ async function recognizeKdpTextRegionsWithLlm() {
     "KDP LLM text-region inspection started.",
     `BookName: ${bookName}`,
     `Model: ${model}`,
-    `Started: ${startedAt.toLocaleString()}`,
-    `Render target: ${dpi} DPI PNG`
+    `Started: ${startedAt.toLocaleString()}`
   ].join("\n"));
-  setKdpPdfViewerStatus("正在生成 300DPI PNG");
-  const canvas = await renderKdpPageToPngCanvas(dpi);
-  state.kdpPdf.ocrCanvasWidth = canvas.width;
-  state.kdpPdf.ocrCanvasHeight = canvas.height;
-  appendLog(`PNG rendered: ${canvas.width} x ${canvas.height}px @ ${dpi} DPI`);
+  const currentSource = state.kdpPdf.source || {};
+  const currentType = getKdpFileTypeLabel(currentSource.fileName || currentSource.relativePath, currentSource.type);
+  const currentSourcePath = currentType === "PNG" ? getKdpSourceAcceptanceRelativePath(currentSource) : "";
+  let requestBody = { bookName, model };
+  let imageWidth = 0;
+  let imageHeight = 0;
+  if (currentType === "PNG") {
+    if (!currentSourcePath || currentSource.origin === "local upload") {
+      throw new Error("当前 PNG 尚未保存到验收目录。请重新选择 PNG，让系统先保存为当前工作对象。");
+    }
+    const pngSize = getKdpPngActualSizePx() || state.kdpPdf.imageSize || null;
+    imageWidth = Math.round(Number(pngSize?.width || 0));
+    imageHeight = Math.round(Number(pngSize?.height || 0));
+    requestBody = {
+      ...requestBody,
+      sourceRelativePath: currentSourcePath,
+      imageWidth,
+      imageHeight
+    };
+    setKdpPdfViewerStatus("正在提交当前 PNG 给 LLM");
+    appendLog(`Using current PNG source without canvas re-export: ${currentSource.relativePath || currentSourcePath}`);
+  } else {
+    setKdpPdfViewerStatus("正在生成 300DPI PNG");
+    const canvas = await renderKdpPageToPngCanvas(dpi);
+    imageWidth = canvas.width;
+    imageHeight = canvas.height;
+    state.kdpPdf.ocrCanvasWidth = canvas.width;
+    state.kdpPdf.ocrCanvasHeight = canvas.height;
+    requestBody = {
+      ...requestBody,
+      imageDataUrl: canvas.toDataURL("image/png"),
+      imageWidth: canvas.width,
+      imageHeight: canvas.height
+    };
+    appendLog(`PNG rendered: ${canvas.width} x ${canvas.height}px @ ${dpi} DPI`);
+  }
 
   setKdpPdfViewerStatus("正在提交给 LLM 识别文字区域");
   appendLog("Submitting PNG to LLM vision endpoint...");
   const result = await api("/api/kdp-llm-text-regions", {
     method: "POST",
-    body: JSON.stringify({
-      bookName,
-      imageDataUrl: canvas.toDataURL("image/png"),
-      imageWidth: canvas.width,
-      imageHeight: canvas.height,
-      model
-    })
+    body: JSON.stringify(requestBody)
   });
+  imageWidth = Math.round(Number(result.image?.width || imageWidth || 0));
+  imageHeight = Math.round(Number(result.image?.height || imageHeight || 0));
+  if (imageWidth > 0 && imageHeight > 0) {
+    state.kdpPdf.ocrCanvasWidth = imageWidth;
+    state.kdpPdf.ocrCanvasHeight = imageHeight;
+  }
 
   const regions = (Array.isArray(result.regions) ? result.regions : [])
     .map((region, index) => normalizeLlmRegion(region, index, spec, dpi))
     .filter((region) => region.width > 0 && region.height > 0);
   state.kdpPdf.visionDebug = {
-    image: result.image || { width: canvas.width, height: canvas.height },
-    modelImage: result.modelImage || result.image || { width: canvas.width, height: canvas.height },
+    image: result.image || { width: imageWidth, height: imageHeight },
+    modelImage: result.modelImage || result.image || { width: imageWidth, height: imageHeight },
     coordinateScale: result.coordinateScale || { x: 1, y: 1 },
     saved: result.saved || null,
     usage: result.usage || null,
@@ -2475,8 +4135,8 @@ async function recognizeKdpTextRegionsWithLlm() {
     `Regions: ${regions.length}`,
     formatKdpLlmUsage(result.usage),
     `Coordinate scale: ${Number(result.coordinateScale?.x || 1).toFixed(4)} / ${Number(result.coordinateScale?.y || 1).toFixed(4)}`,
-    `Saved JSON: ${result.saved?.resultFileName || "-"}`,
-    `Saved PNG: ${result.saved?.imageFileName || "-"}`,
+    `Saved JSON: ${formatKdpLlmSavedPath(result.saved, "json")}`,
+    `Saved PNG: ${formatKdpLlmSavedPath(result.saved, "png")}`,
     `Finished: ${new Date().toLocaleString()}`
   ].join("\n"));
   button?.removeAttribute("disabled");
@@ -2680,25 +4340,53 @@ function renderKdpAcceptancePanel(item, acceptance) {
     summary.textContent = "选择一个 BookName 后，可以提交 KDP 封面 PDF 做验收。";
     checksPanel.innerHTML = "";
     reportField.value = "提交 PDF 后，这里会显示 KDP 验收报告。";
+    renderKdpSavedFixReport(null);
+    renderKdpFixWorkbench({});
+    renderKdpAcceptanceFileList([]);
     renderKdpPdfParameters(null);
     clearKdpPdfViewer();
-    if (meta) meta.textContent = "尚未选择 PDF。";
+    renderKdpCurrentFileMeta();
     return;
   }
 
-  if (state.kdpAcceptanceFile && meta) {
-    meta.textContent = `已选择：${state.kdpAcceptanceFile.name} · ${formatFileSize(state.kdpAcceptanceFile.size)}`;
-  } else if (meta) {
-    meta.textContent = "尚未选择 PDF。";
+  const currentSource = acceptance?.currentSource || null;
+  if (currentSource) {
+    setKdpSourceMetadata(currentSource);
+  }
+
+  if (state.kdpAcceptanceFile) {
+    const selectedType = getKdpFileTypeLabel(state.kdpAcceptanceFile.name, state.kdpAcceptanceFile.type === "image/png" ? "PNG" : "");
+    renderKdpCurrentFileMeta({
+      status: "已选择本地文件，等待提交/加载。",
+      type: selectedType || "PDF",
+      fileName: state.kdpAcceptanceFile.name,
+      path: "local upload",
+      detail: formatFileSize(state.kdpAcceptanceFile.size)
+    });
+  } else if (currentSource || meta) {
+    renderKdpCurrentSourceMeta();
   }
 
   const report = acceptance?.report || null;
+  renderKdpSavedFixReport(acceptance);
+  renderKdpFixWorkbench(acceptance?.fixWorkbench || {});
   if (!report) {
     summary.textContent = "当前项目还没有 KDP 验收报告。";
     checksPanel.innerHTML = "";
     reportField.value = acceptance?.reportText || "提交 PDF 后，这里会显示 KDP 验收报告。";
     renderKdpPdfParameters(null);
-    clearKdpPdfViewer();
+    if (currentSource && getKdpFileTypeLabel(currentSource.fileName || currentSource.relativePath, currentSource.type) === "PNG") {
+      const sourcePath = getKdpSourceAcceptanceRelativePath(currentSource);
+      if (sourcePath) {
+        loadKdpImageViewer(
+          `/api/kdp-acceptance-file?bookName=${encodeURIComponent(item.bookName)}&fileName=${encodeURIComponent(sourcePath)}&t=${Date.now()}`,
+          getCurrentKdpGuideSpec(),
+          acceptance?.llmTextRegions?.latest || null
+        );
+      }
+    } else {
+      clearKdpPdfViewer();
+    }
     return;
   }
 
@@ -2748,7 +4436,29 @@ function renderKdpAcceptancePanel(item, acceptance) {
 
   renderKdpPdfParameters(report);
   reportField.value = acceptance?.reportText || "";
-  if (report.pdfFileName) {
+  if (currentSource && getKdpFileTypeLabel(currentSource.fileName || currentSource.relativePath, currentSource.type) === "PNG") {
+    const sourcePath = getKdpSourceAcceptanceRelativePath(currentSource);
+    summary.dataset.verdict = "review";
+    summary.textContent = "当前工作对象是 PNG，PDF 技术验收结果仅作历史参考；后续识别/报告/修图会使用这个 PNG。";
+    checksPanel.innerHTML = `
+      <div class="kdp-check-item review">
+        <span>${escapeHtml(getKdpCheckText("review"))}</span>
+        <strong>Current source is PNG</strong>
+        <em>当前文件来自 ${escapeHtml(currentSource.relativePath || sourcePath || currentSource.fileName || "PNG")}。</em>
+      </div>
+    `;
+    if (sourcePath) {
+      loadKdpImageViewer(
+        `/api/kdp-acceptance-file?bookName=${encodeURIComponent(item.bookName)}&fileName=${encodeURIComponent(sourcePath)}&t=${Date.now()}`,
+        reportSpec,
+        acceptance?.llmTextRegions?.latest || null
+      );
+    }
+    return;
+  }
+  if (report.pdfFileName && (!currentSource || getKdpFileTypeLabel(currentSource.fileName || currentSource.relativePath, currentSource.type) === "PDF")) {
+    setKdpSourceMetadata(getKdpAcceptanceSourceMetadata(report.pdfFileName, "PDF"));
+    renderKdpCurrentSourceMeta("PDF 已加载，当前走 KDP 技术验收。");
     loadKdpPdfViewer(
       `/api/kdp-acceptance-pdf?bookName=${encodeURIComponent(item.bookName)}&fileName=${encodeURIComponent(report.pdfFileName)}&t=${Date.now()}`,
       reportSpec,
@@ -2757,14 +4467,64 @@ function renderKdpAcceptancePanel(item, acceptance) {
   }
 }
 
+function renderKdpPngInspectionState({ fileName = "", fileSize = "" } = {}) {
+  const summary = $("#kdp-acceptance-summary");
+  const checksPanel = $("#kdp-acceptance-checks");
+  const reportField = $("#kdp-acceptance-report");
+  const source = state.kdpPdf.source || {};
+  const displayFileName = source.fileName || fileName || source.originalFileName || "";
+  const displayType = getKdpFileTypeLabel(displayFileName || source.relativePath, source.type) || "PNG";
+  renderKdpCurrentFileMeta({
+    status: `${displayType} 已加载，当前走视觉检查/修图流程。`,
+    type: displayType,
+    fileName: displayFileName,
+    path: source.relativePath || source.directory || source.origin || "local upload",
+    detail: fileSize || (source.originalFileName && source.originalFileName !== source.fileName ? `原始上传文件名：${source.originalFileName}` : "")
+  });
+  if (summary) {
+    summary.dataset.verdict = "review";
+    summary.textContent = "PNG 检视模式：PDF MediaBox、加密、页数等技术验收项不适用于 PNG。请继续做文字区域识别和修图检查。";
+  }
+  if (checksPanel) {
+    checksPanel.innerHTML = `
+      <div class="kdp-check-item info">
+        <span>${escapeHtml(getKdpCheckText("info"))}</span>
+        <strong>PNG file loaded for visual inspection</strong>
+        <em>当前对象是 PNG，走自定义 KDP 检视器、LLM 文字区域识别、修改报告和修图流程。</em>
+      </div>
+      <div class="kdp-check-item review">
+        <span>${escapeHtml(getKdpCheckText("review"))}</span>
+        <strong>PDF technical checks skipped</strong>
+        <em>PDF 加密、页数、MediaBox、PDF 外尺寸检查只在提交 PDF 时有效；PNG 需要在修图后重新包装/导出为 PDF 再验收。</em>
+      </div>
+    `;
+  }
+  renderKdpPdfParameters(null);
+  if (reportField) {
+    reportField.value = [
+      "# KDP PNG inspection flow",
+      "",
+      fileName ? `- File: ${fileName}` : "- File: PNG image",
+      fileSize ? `- Size: ${fileSize}` : "",
+      "- Flow: PNG viewer -> LLM text-region detection -> fix report -> image edit -> submit fixed output.",
+      "- Note: PNG does not contain PDF MediaBox/page metadata, so PDF technical acceptance checks are skipped until it is wrapped/exported back to PDF."
+    ].filter(Boolean).join("\n");
+  }
+}
+
 async function submitKdpAcceptancePdf() {
   const bookName = requireBookName();
   const file = state.kdpAcceptanceFile || $("#kdp-pdf-file")?.files?.[0] || null;
   if (!file) {
-    throw new Error("请先选择一个 KDP 封面 PDF。");
+    throw new Error("请先选择一个 KDP 封面 PDF 或 PNG。");
   }
-  if (!/\.pdf$/i.test(file.name)) {
-    throw new Error("KDP 验收工具目前只接受 PDF。");
+  const fileType = getKdpFileTypeLabel(file.name, file.type === "image/png" ? "PNG" : "");
+  if (fileType === "PNG") {
+    await submitKdpAcceptancePng(file);
+    return;
+  }
+  if (fileType !== "PDF") {
+    throw new Error("KDP 验收工具目前只接受 PDF 或 PNG。");
   }
 
   const dataUrl = await readFileAsDataUrl(file);
@@ -2784,6 +4544,15 @@ async function submitKdpAcceptancePdf() {
 
   const selected = getSelectedWorkspaceItem();
   const currentArtifacts = state.coverCache[bookName] || selected?.coverArtifacts || {};
+  if (result.kdpAcceptance?.currentSource || result.kdpAcceptance?.report?.pdfFileName) {
+    setKdpSourceMetadata(result.kdpAcceptance?.currentSource || {
+      ...getKdpAcceptanceSourceMetadata(result.kdpAcceptance.report.pdfFileName, "PDF"),
+      originalFileName: file.name
+    });
+    renderKdpCurrentSourceMeta("PDF 已提交并保存到验收目录。");
+  }
+  state.kdpAcceptanceFile = null;
+  if ($("#kdp-pdf-file")) $("#kdp-pdf-file").value = "";
   state.coverCache[bookName] = {
     ...currentArtifacts,
     kdpAcceptance: result.kdpAcceptance || null
@@ -2791,6 +4560,39 @@ async function submitKdpAcceptancePdf() {
   renderCoverPanel(selected || null);
   setStatusBadge("验收完成", "success");
   setLog(`KDP 验收完成：${getKdpVerdictText(result.kdpAcceptance?.report?.verdict)}`);
+}
+
+async function submitKdpAcceptancePng(file) {
+  const bookName = requireBookName();
+  const dataUrl = await readFileAsDataUrl(file);
+  const spec = getCurrentKdpGuideSpec();
+  updateKdpGuidePreview(spec);
+  const result = await api("/api/kdp-acceptance-png", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      fileName: file.name,
+      dataUrl
+    })
+  });
+  setKdpSourceMetadata(result.currentSource || result.kdpAcceptance?.currentSource || {
+    ...getKdpAcceptanceSourceMetadata(result.fileName || file.name, "PNG"),
+    originalFileName: file.name
+  });
+  state.kdpAcceptanceFile = null;
+  if ($("#kdp-pdf-file")) $("#kdp-pdf-file").value = "";
+  await loadKdpImageViewer(result.fileUrl || dataUrl, spec, null);
+  const selected = getSelectedWorkspaceItem();
+  if (selected) {
+    const currentArtifacts = state.coverCache[bookName] || selected.coverArtifacts || {};
+    state.coverCache[bookName] = {
+      ...currentArtifacts,
+      kdpAcceptance: result.kdpAcceptance || currentArtifacts.kdpAcceptance || null
+    };
+  }
+  renderKdpPngInspectionState({ fileName: result.fileName || file.name, fileSize: formatFileSize(file.size) });
+  setStatusBadge("PNG已加载", "success");
+  setLog(`PNG 已保存并加载为当前工作对象：${result.fileName || file.name}`);
 }
 
 function getSelectedChapterFileName() {
@@ -4713,6 +6515,8 @@ async function submitCoverAiRequest() {
 }
 
 function setupForms() {
+  mountKdpFixModule();
+
   $("#project-picker-workbench-shell")?.addEventListener("toggle", (event) => {
     setWorkbenchOpen("#project-picker-workbench-shell", PROJECT_PICKER_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
   });
@@ -4782,6 +6586,20 @@ function setupForms() {
       return;
     }
     setWorkbenchOpen("#cover-kdp-review-shell", COVER_KDP_REVIEW_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#cover-kdp-fix-shell")?.addEventListener("toggle", (event) => {
+    if (state.suppressFlowSync) {
+      return;
+    }
+    setWorkbenchOpen("#cover-kdp-fix-shell", COVER_KDP_FIX_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
+  });
+
+  $("#cover-kdp-img-black-shell")?.addEventListener("toggle", (event) => {
+    if (state.suppressFlowSync) {
+      return;
+    }
+    setWorkbenchOpen("#cover-kdp-img-black-shell", COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY, Boolean(event.currentTarget?.open));
   });
 
   $("#build-workbench-shell")?.addEventListener("toggle", (event) => {
@@ -5669,9 +7487,37 @@ function setupForms() {
     $("#kdp-pdf-file")?.click();
   });
 
-  $("#kdp-pdf-file")?.addEventListener("change", (event) => {
+  $("#kdp-pdf-file")?.addEventListener("change", async (event) => {
     const file = event.currentTarget?.files?.[0] || null;
     state.kdpAcceptanceFile = file;
+    if (file) {
+      const selectedSource = getKdpLocalUploadSourceMetadata(file);
+      setKdpSourceMetadata(selectedSource);
+      const selectedType = selectedSource?.type || "PDF";
+      renderKdpCurrentFileMeta({
+        status: "已选择本地文件，等待提交/加载。",
+        type: selectedType,
+        fileName: selectedSource.fileName,
+        path: selectedSource.directory,
+        detail: formatFileSize(file.size)
+      });
+    } else {
+      setKdpSourceMetadata(null);
+      renderKdpCurrentFileMeta();
+    }
+    if (file && getKdpFileTypeLabel(file.name, file.type === "image/png" ? "PNG" : "") === "PNG") {
+      try {
+        setStatusBadge("保存中", "running");
+        await submitKdpAcceptancePng(file);
+      } catch (error) {
+        setStatusBadge("失败", "failed");
+        setLog(error.message);
+      }
+      return;
+    }
+    if (file) {
+      return;
+    }
     const selected = getSelectedWorkspaceItem();
     const acceptance = selected
       ? (state.coverCache[selected.bookName]?.kdpAcceptance || selected.coverArtifacts?.kdpAcceptance || null)
@@ -5751,6 +7597,194 @@ function setupForms() {
     }
   });
 
+  $("#kdp-generate-fix-report")?.addEventListener("click", async () => {
+    const button = $("#kdp-generate-fix-report");
+    try {
+      button?.setAttribute("disabled", "true");
+      await generateKdpFixReport();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-generate-fix-prompt")?.addEventListener("click", () => {
+    try {
+      generateKdpFixCommandPrompt();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#kdp-img-black-load-source")?.addEventListener("click", () => {
+    try {
+      loadKdpImgBlackSourceToWorkarea();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  [
+    "#kdp-img-black-crop-x",
+    "#kdp-img-black-crop-y",
+    "#kdp-img-black-crop-width",
+    "#kdp-img-black-crop-height",
+    "#kdp-img-black-resize-percent",
+    "#kdp-img-black-composite-x",
+    "#kdp-img-black-composite-y"
+  ].forEach((selector) => {
+    $(selector)?.addEventListener("input", () => persistKdpImgBlackUiState());
+  });
+
+  $("#kdp-img-black-crop-source")?.addEventListener("click", async () => {
+    const button = $("#kdp-img-black-crop-source");
+    try {
+      button?.setAttribute("disabled", "true");
+      await cropKdpImgBlackSourceRegion();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-img-black-resize-source")?.addEventListener("click", async () => {
+    const button = $("#kdp-img-black-resize-source");
+    try {
+      button?.setAttribute("disabled", "true");
+      await resizeKdpImgBlackCropImage();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-img-black-fill-preset")?.addEventListener("change", () => {
+    const preset = $("#kdp-img-black-fill-preset")?.value || "";
+    const colorField = $("#kdp-img-black-fill-color");
+    if (colorField && preset && preset !== "custom") {
+      colorField.value = preset;
+    }
+    persistKdpImgBlackUiState({ immediate: true });
+  });
+
+  $("#kdp-img-black-fill-mode")?.addEventListener("change", () => {
+    persistKdpImgBlackUiState({ immediate: true });
+  });
+
+  $("#kdp-img-black-fill-color")?.addEventListener("input", () => {
+    const preset = $("#kdp-img-black-fill-preset");
+    if (preset) preset.value = "custom";
+    persistKdpImgBlackUiState();
+  });
+
+  $("#kdp-img-black-fill-source")?.addEventListener("click", async () => {
+    const button = $("#kdp-img-black-fill-source");
+    try {
+      button?.setAttribute("disabled", "true");
+      await fillKdpImgBlackSourceRegion();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-img-black-composite-source")?.addEventListener("click", async () => {
+    const button = $("#kdp-img-black-composite-source");
+    try {
+      button?.setAttribute("disabled", "true");
+      await compositeKdpImgBlackImages();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-img-black-png-to-pdf")?.addEventListener("click", async () => {
+    const button = $("#kdp-img-black-png-to-pdf");
+    try {
+      button?.setAttribute("disabled", "true");
+      await convertKdpImgBlackCompositePngToPdf();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-generate-imagemagick-instructions")?.addEventListener("click", () => {
+    try {
+      generateKdpImageMagickInstructions();
+    } catch (error) {
+      setStatusBadge("å¤±è´¥", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#kdp-prepare-fix-workbench")?.addEventListener("click", async () => {
+    const button = $("#kdp-prepare-fix-workbench");
+    try {
+      button?.setAttribute("disabled", "true");
+      await prepareKdpFixWorkbench();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-run-fix-workbench")?.addEventListener("click", async () => {
+    const button = $("#kdp-run-fix-workbench");
+    try {
+      button?.setAttribute("disabled", "true");
+      await runKdpFixWorkbench();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-run-imagemagick-fix")?.addEventListener("click", async () => {
+    const button = $("#kdp-run-imagemagick-fix");
+    try {
+      button?.setAttribute("disabled", "true");
+      await runKdpImageMagickFixWorkbench();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  $("#kdp-submit-fixed-output")?.addEventListener("click", async () => {
+    const button = $("#kdp-submit-fixed-output");
+    try {
+      button?.setAttribute("disabled", "true");
+      await submitKdpFixedOutputForAcceptance();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
   $("#submit-kdp-pdf")?.addEventListener("click", async () => {
     try {
       await submitKdpAcceptancePdf();
@@ -5762,13 +7796,18 @@ function setupForms() {
 
   $("#open-kdp-acceptance-folder")?.addEventListener("click", async () => {
     try {
-      const bookName = requireBookName();
-      await api("/api/open-cover-folder", {
-        method: "POST",
-        body: JSON.stringify({ bookName, section: "kdp-acceptance" })
-      });
-      setStatusBadge("已打开", "success");
-      setLog("已打开 KDP 验收目录。");
+      await openKdpAcceptanceDirectoryAndList();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#kdp-acceptance-file-list")?.addEventListener("click", async (event) => {
+    const button = event.target?.closest?.("[data-kdp-file]");
+    if (!button) return;
+    try {
+      await useKdpAcceptanceDirectoryFile(button.dataset.kdpFile || "", button.dataset.kdpType || "");
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -5844,6 +7883,8 @@ initWorkbenchState("#cover-visual-shell", COVER_VISUAL_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#cover-operations-shell", COVER_OPERATIONS_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#cover-results-shell", COVER_RESULTS_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#cover-kdp-review-shell", COVER_KDP_REVIEW_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#cover-kdp-fix-shell", COVER_KDP_FIX_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#cover-kdp-img-black-shell", COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY);
 initCoverPanelState();
 initBuildWorkbenchState();
 initPublishPanelState();

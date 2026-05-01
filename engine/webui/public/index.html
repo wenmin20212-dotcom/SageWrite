@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=20260430-img-black-pdf">
   </head>
   <body>
     <div class="page-shell">
@@ -990,12 +990,13 @@
                           <input id="kdp-spine-width" type="text" value="0.270 in / 6.86 mm" readonly>
                         </label>
                       </div>
-                      <input id="kdp-pdf-file" type="file" accept="application/pdf,.pdf" hidden>
+                      <input id="kdp-pdf-file" type="file" accept="application/pdf,image/png,.pdf,.png" hidden>
                       <div class="cover-copy-actions">
-                        <button id="select-kdp-pdf" class="ghost-button" type="button">选择 PDF</button>
+                        <button id="select-kdp-pdf" class="ghost-button" type="button">选择 PDF/PNG</button>
                         <button id="submit-kdp-pdf" class="primary-button" type="button">提交验收</button>
                       </div>
                       <div id="kdp-pdf-meta" class="cover-base-import-meta">尚未选择 PDF。</div>
+                      <div id="kdp-acceptance-file-list" class="kdp-acceptance-file-list"></div>
                       <div id="kdp-acceptance-summary" class="cover-summary">上传 KDP 封面 PDF 后，这里会显示验收结论。</div>
                       <div id="kdp-size-rules" class="kdp-size-rules"></div>
                       <div id="kdp-pdf-parameters" class="kdp-pdf-parameters"></div>
@@ -1051,9 +1052,139 @@
                       <div id="kdp-text-region-report" class="kdp-text-region-report">
                         <div class="cover-gallery-empty">点击“识别文字区域”后，这里会按封底、书脊、封面列出 OCR 坐标。</div>
                       </div>
+                      <div class="kdp-fix-report-panel">
+                        <div class="kdp-fix-report-actions">
+                          <button id="kdp-generate-fix-report" class="ghost-button" type="button">生成修改意见报告</button>
+                          <button id="kdp-generate-fix-prompt" class="ghost-button" type="button">生成修改命令提示词</button>
+                          <span>程序根据文字区域、红线/白线和条码区生成，暂不调用 LLM。</span>
+                        </div>
+                        <textarea id="kdp-fix-report" class="cover-report kdp-fix-report" readonly spellcheck="false" wrap="soft">点击“生成修改意见报告”后，这里会按封底、书脊、封面输出程序生成的修改意见。</textarea>
+                        <textarea id="kdp-fix-command-prompt" class="cover-report kdp-fix-command-prompt" spellcheck="false" wrap="soft">点击“生成修改命令提示词”后，这里会输出给自动修图 LLM/图像模型使用的任务提示词。</textarea>
+                        <div class="kdp-edit-workbench">
+                          <div class="kdp-fix-report-actions">
+                            <button id="kdp-prepare-fix-workbench" class="ghost-button" type="button">准备修改文件</button>
+                            <button id="kdp-run-fix-workbench" class="primary-button" type="button">执行修改</button>
+                            <button id="kdp-submit-fixed-output" class="ghost-button" type="button">提交修改后文件验收</button>
+                            <span id="kdp-edit-workbench-status">尚未准备修改文件。</span>
+                          </div>
+                          <div class="kdp-edit-grid">
+                            <div class="kdp-edit-preview-card">
+                              <div class="cover-report-title">待修改 PNG</div>
+                              <div id="kdp-fix-source-preview" class="kdp-edit-preview"><span>准备后显示源文件</span></div>
+                              <div id="kdp-fix-source-meta" class="cover-base-import-meta">未准备。</div>
+                            </div>
+                            <div class="kdp-edit-preview-card">
+                              <div class="cover-report-title">修改后 PNG</div>
+                              <div id="kdp-fix-output-preview" class="kdp-edit-preview"><span>执行后显示结果</span></div>
+                              <div id="kdp-fix-output-meta" class="cover-base-import-meta">未生成。</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <textarea id="kdp-acceptance-report" class="cover-report" readonly spellcheck="false">提交 PDF 后，这里会显示 KDP 验收报告。</textarea>
+                  <textarea id="kdp-acceptance-report" class="cover-report" readonly spellcheck="false" wrap="soft">提交 PDF 后，这里会显示 KDP 验收报告。</textarea>
+                </div>
+              </div>
+            </details>
+
+            <details id="cover-kdp-fix-shell" class="workbench-shell">
+              <summary>
+                <div class="workbench-summary">
+                  <span class="workbench-kicker">KDP_FIX</span>
+                  <strong class="workbench-title">KDP 修图工作台</strong>
+                  <span class="workbench-meta">根据验收识别出的文字区域生成修改报告、修图提示词和 ImageMagick 指令，执行后再提交回 KDP 验收循环。</span>
+                </div>
+              </summary>
+              <div class="workbench-body">
+                <div class="cover-report-wrap kdp-fix-module-wrap">
+                  <div class="cover-browser-header">
+                    <div class="cover-report-title">KDP 修图</div>
+                  </div>
+                  <div id="kdp-fix-module-mount"></div>
+                </div>
+              </div>
+            </details>
+
+            <details id="cover-kdp-img-black-shell" class="workbench-shell">
+              <summary>
+                <div class="workbench-summary">
+                  <span class="workbench-kicker">KDP_IMG_BLACK</span>
+                  <strong class="workbench-title">imageMagcik 修图工作台</strong>
+                  <span class="workbench-meta">使用 imageMagcik 指令执行局部黑底修图，独立于 LLM 图像修图流程。</span>
+                </div>
+              </summary>
+              <div class="workbench-body">
+                <div class="cover-report-wrap kdp-fix-module-wrap">
+                  <div class="cover-browser-header">
+                    <div class="cover-report-title">ImageMagick 修图</div>
+                  </div>
+                  <div class="kdp-fix-report-actions">
+                    <button id="kdp-img-black-load-source" class="ghost-button" type="button">取待修改图</button>
+                    <button id="kdp-generate-imagemagick-instructions" class="ghost-button" type="button">生成ImageMagick指令集</button>
+                    <button id="kdp-run-imagemagick-fix" class="primary-button" type="button">ImageMagick修图</button>
+                    <span id="kdp-img-black-status">先生成书脊移动 JSON，可人工修改确认后再执行 ImageMagick。</span>
+                  </div>
+                  <textarea id="kdp-imagemagick-instructions" class="cover-report kdp-fix-command-prompt" spellcheck="false" wrap="soft">点击“生成ImageMagick指令集”后，这里会输出可编辑的书脊修图 JSON 指令。</textarea>
+                  <div class="kdp-img-black-grid">
+                    <section class="kdp-img-black-workarea">
+                      <div class="cover-report-title">图形工作区1</div>
+                      <div id="kdp-img-black-workarea-1-file" class="kdp-img-black-file-name">文件名：未加载</div>
+                      <div id="kdp-img-black-workarea-1" class="kdp-img-black-canvas"></div>
+                    </section>
+                    <section class="kdp-img-black-workarea">
+                      <div class="cover-report-title">图形工作区2</div>
+                      <div class="kdp-img-black-crop-controls">
+                        <label>相对X(px)<input id="kdp-img-black-crop-x" type="number" min="0" step="1" inputmode="numeric"></label>
+                        <label>相对Y(px)<input id="kdp-img-black-crop-y" type="number" min="0" step="1" inputmode="numeric"></label>
+                        <label>宽(px)<input id="kdp-img-black-crop-width" type="number" min="1" step="1" inputmode="numeric"></label>
+                        <label>长度(px)<input id="kdp-img-black-crop-height" type="number" min="1" step="1" inputmode="numeric"></label>
+                        <label>缩放比例(%)<input id="kdp-img-black-resize-percent" type="number" min="2" max="400" step="1" value="95" inputmode="numeric"></label>
+                        <button id="kdp-img-black-crop-source" class="ghost-button" type="button">取局部小图</button>
+                        <button id="kdp-img-black-resize-source" class="ghost-button" type="button">缩放图形</button>
+                      </div>
+                      <div id="kdp-img-black-workarea-2-meta" class="kdp-img-black-file-name">局部小图：未截取</div>
+                      <div id="kdp-img-black-workarea-2" class="kdp-img-black-canvas"></div>
+                    </section>
+                    <section class="kdp-img-black-workarea">
+                      <div class="cover-report-title">图形工作区3</div>
+                      <div class="kdp-img-black-crop-controls">
+                        <label>回填方式
+                          <select id="kdp-img-black-fill-mode">
+                            <option value="Auto">自动取样</option>
+                            <option value="Solid">纯色兜底</option>
+                          </select>
+                        </label>
+                        <label>背景色
+                          <select id="kdp-img-black-fill-preset">
+                            <option value="#07121b">深黑蓝 #07121b</option>
+                            <option value="#0b1822">暗蓝黑 #0b1822</option>
+                            <option value="#101820">深灰蓝 #101820</option>
+                            <option value="#000000">纯黑 #000000</option>
+                            <option value="custom">自定义</option>
+                          </select>
+                        </label>
+                        <label>颜色框<input id="kdp-img-black-fill-color" type="color" value="#07121b"></label>
+                        <button id="kdp-img-black-fill-source" class="ghost-button" type="button">回填原图</button>
+                      </div>
+                      <div id="kdp-img-black-workarea-3-meta" class="kdp-img-black-file-name">回填图：未生成</div>
+                      <div id="kdp-img-black-workarea-3" class="kdp-img-black-canvas"></div>
+                    </section>
+                    <section class="kdp-img-black-workarea">
+                      <div class="cover-report-title">图形工作区4</div>
+                      <div class="kdp-img-black-crop-controls">
+                        <label>贴回X(px)<input id="kdp-img-black-composite-x" type="number" min="0" step="1" inputmode="numeric"></label>
+                        <label>贴回Y(px)<input id="kdp-img-black-composite-y" type="number" min="0" step="1" inputmode="numeric"></label>
+                        <button id="kdp-img-black-composite-source" class="ghost-button" type="button">拼接图片</button>
+                        <button id="kdp-img-black-png-to-pdf" class="ghost-button" type="button">PNG转PDF</button>
+                      </div>
+                      <div id="kdp-img-black-workarea-4-meta" class="kdp-img-black-file-name">拼接图：未生成</div>
+                      <div id="kdp-img-black-workarea-4-path" class="kdp-img-black-file-name">路径：-</div>
+                      <div id="kdp-img-black-workarea-4-pdf" class="kdp-img-black-file-name">PDF：未生成</div>
+                      <div id="kdp-img-black-workarea-4-pdf-path" class="kdp-img-black-file-name">PDF路径：-</div>
+                      <div id="kdp-img-black-workarea-4" class="kdp-img-black-canvas"></div>
+                    </section>
+                  </div>
                 </div>
               </div>
             </details>
@@ -1370,6 +1501,6 @@
       </div>
     </div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260430-img-black-pdf"></script>
   </body>
 </html>

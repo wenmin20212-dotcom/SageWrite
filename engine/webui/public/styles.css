@@ -1881,6 +1881,7 @@ textarea {
 .cover-report-wrap {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .cover-base-import-dropzone {
@@ -1928,6 +1929,29 @@ textarea {
   line-height: 1.45;
 }
 
+.cover-base-import-meta.has-file {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(11, 110, 79, 0.18);
+  border-radius: 8px;
+  background: rgba(11, 110, 79, 0.06);
+  color: var(--ink);
+}
+
+.cover-base-import-meta.has-file strong {
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cover-base-import-meta.has-file span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .cover-copy-editor-wrap {
   display: grid;
   gap: 12px;
@@ -1970,6 +1994,9 @@ textarea {
 }
 
 .cover-report {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
   min-height: 220px;
   max-height: 320px;
   overflow: auto;
@@ -1979,6 +2006,7 @@ textarea {
   border: 1px solid rgba(29, 42, 34, 0.1);
   resize: vertical;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
   font-family: Consolas, "Courier New", monospace;
   line-height: 1.55;
@@ -1994,6 +2022,7 @@ textarea {
   grid-template-columns: minmax(320px, 0.9fr) minmax(360px, 1.1fr);
   gap: 14px;
   align-items: stretch;
+  min-width: 0;
 }
 
 .kdp-acceptance-controls {
@@ -2041,6 +2070,54 @@ textarea {
 
 .kdp-acceptance-controls .checkbox-field {
   margin-bottom: 0;
+}
+
+.kdp-acceptance-file-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  min-width: 0;
+}
+
+.kdp-acceptance-file-list:empty {
+  display: none;
+}
+
+.kdp-acceptance-file-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kdp-acceptance-file-item strong,
+.kdp-acceptance-file-item em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kdp-acceptance-file-item span {
+  min-width: 44px;
+  color: var(--accent);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.kdp-acceptance-file-item em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.82rem;
 }
 
 .kdp-acceptance-preview {
@@ -2397,9 +2474,194 @@ textarea {
 .kdp-text-region-report {
   display: grid;
   gap: 8px;
+  min-width: 0;
+}
+
+.kdp-fix-report-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+#kdp-fix-module-mount,
+.kdp-fix-module-wrap {
+  min-width: 0;
+}
+
+.kdp-fix-report-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.kdp-fix-report-actions span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.kdp-fix-report {
+  min-height: 260px;
+  max-height: 420px;
+  overflow-x: hidden;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.kdp-fix-command-prompt {
+  min-height: 220px;
+  max-height: 360px;
+  overflow-x: hidden;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.kdp-img-black-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  min-width: 0;
+}
+
+.kdp-img-black-workarea {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kdp-img-black-file-name {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.kdp-img-black-crop-controls {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.kdp-img-black-crop-controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.kdp-img-black-crop-controls input {
+  width: 108px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--ink);
+  font: inherit;
+}
+
+.kdp-img-black-crop-controls select {
+  min-width: 172px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--ink);
+  font: inherit;
+}
+
+.kdp-img-black-crop-controls input[type="color"] {
+  width: 72px;
+  padding: 4px;
+}
+
+.kdp-img-black-canvas {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 360px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 14px;
+  border-radius: 16px;
+  background: #fbf6ee;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+}
+
+.kdp-img-black-canvas img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.kdp-img-black-image-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.kdp-img-black-image-wrap img {
+  margin: 0;
+}
+
+.kdp-img-black-crop-marker {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid #ff4f3f;
+  background: rgba(255, 79, 63, 0.14);
+  pointer-events: none;
+}
+
+.kdp-edit-workbench {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.kdp-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.kdp-edit-preview-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.kdp-edit-preview {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  max-height: 360px;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  background: #14201a;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.kdp-edit-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .kdp-vision-debug {
+  min-width: 0;
   border: 1px solid rgba(11, 110, 79, 0.14);
   border-radius: 8px;
   background: rgba(11, 110, 79, 0.06);
@@ -2410,6 +2672,7 @@ textarea {
 }
 
 .kdp-text-region-group {
+  min-width: 0;
   border-radius: 12px;
   border: 1px solid rgba(29, 42, 34, 0.1);
   background: rgba(255, 255, 255, 0.72);
@@ -2424,6 +2687,7 @@ textarea {
 }
 
 .kdp-text-table-wrap {
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   padding: 0 10px 10px;
@@ -2497,6 +2761,7 @@ textarea {
 .kdp-param-card {
   display: grid;
   gap: 4px;
+  min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(29, 42, 34, 0.08);
@@ -2512,6 +2777,7 @@ textarea {
 .kdp-param-row {
   display: grid;
   gap: 3px;
+  min-width: 0;
   padding-top: 7px;
   border-top: 1px solid rgba(29, 42, 34, 0.07);
 }
@@ -2530,6 +2796,7 @@ textarea {
   color: var(--ink);
   font-size: 0.94rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -2539,6 +2806,8 @@ textarea {
   font-size: 0.84rem;
   font-style: normal;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .kdp-param-table-wrap {
