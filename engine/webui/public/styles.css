@@ -29,15 +29,15 @@ body {
 .page-shell {
   width: min(1360px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 32px 0 48px;
+  padding: 24px 0 48px;
 }
 
 .brand-masthead {
-  width: min(620px, 100%);
-  margin: 0 0 26px;
-  border-radius: 18px;
+  width: min(480px, 100%);
+  margin: 0;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: 0 18px 42px rgba(4, 9, 14, 0.2);
+  box-shadow: 0 16px 36px rgba(4, 9, 14, 0.18);
   background: #06101a;
 }
 
@@ -49,17 +49,28 @@ body {
 
 .hero {
   display: grid;
-  grid-template-columns: 1.8fr 1fr;
-  gap: 20px;
-  align-items: stretch;
-  margin-bottom: 24px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 420px);
+  gap: 28px;
+  align-items: end;
+  margin-bottom: 26px;
+}
+
+.hero-intro {
+  display: grid;
+  gap: 22px;
+  align-content: start;
+  min-width: 0;
+}
+
+.hero-copy-block {
+  min-width: 0;
 }
 
 .hero h1 {
   margin: 0 0 10px;
-  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-size: clamp(2.25rem, 4.6vw, 4.2rem);
   line-height: 1.02;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.02em;
 }
 
 .hero-copy,
@@ -98,6 +109,8 @@ body {
 .hero-status {
   display: grid;
   gap: 14px;
+  width: 100%;
+  justify-self: end;
 }
 
 .status-card,
@@ -170,6 +183,10 @@ body {
   top: 18px;
   display: grid;
   gap: 12px;
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -543,6 +560,8 @@ textarea {
 .write-notes-status {
   color: var(--muted);
   font-size: 0.9rem;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .checkbox-field input {
@@ -3224,6 +3243,14 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .hero {
+    gap: 20px;
+  }
+
+  .hero-status {
+    justify-self: stretch;
+  }
+
   .workspace-frame,
   .project-summary-panel,
   .project-summary-grid {
@@ -3234,6 +3261,10 @@ textarea {
     position: sticky;
     top: 0;
     z-index: 20;
+    max-height: none;
+    overflow-y: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
     margin-inline: -12px;
     border-radius: 0 0 18px 18px;
   }
@@ -3388,7 +3419,6 @@ textarea {
 
   .brand-masthead {
     width: 100%;
-    margin-bottom: 20px;
     border-radius: 14px;
   }
 }

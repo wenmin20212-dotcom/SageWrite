@@ -355,6 +355,25 @@ function initFlowNavigation() {
     });
   });
 
+  const flowNav = document.querySelector(".flow-nav");
+  flowNav?.addEventListener("wheel", (event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+      return;
+    }
+    const maxScroll = flowNav.scrollHeight - flowNav.clientHeight;
+    if (maxScroll <= 1) {
+      return;
+    }
+    const currentScroll = flowNav.scrollTop;
+    const nextScroll = Math.max(0, Math.min(maxScroll, currentScroll + event.deltaY));
+    if (nextScroll === currentScroll) {
+      return;
+    }
+    flowNav.scrollTop = nextScroll;
+    event.preventDefault();
+    event.stopPropagation();
+  }, { passive: false });
+
   FLOW_WORKBENCHES.forEach((workbench) => {
     if (!workbench.selector) {
       return;
@@ -5441,9 +5460,8 @@ async function saveAmazonDescription() {
   }
 
   updateAmazonDescriptionStatus("正在保存 Amazon Description...");
-  const result = await fetchJson("/api/amazon-description", {
+  const result = await api("/api/amazon-description", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       bookName: item.bookName,
       language: getPublishLanguage(),
@@ -5452,9 +5470,22 @@ async function saveAmazonDescription() {
   });
 
   await loadPublishArtifacts(item, getPublishLanguage());
-  updateAmazonDescriptionStatus(`已保存 TXT + HTML（${getPublishLanguage()}）`);
+  updateAmazonDescriptionStatus([
+    `已保存 TXT + HTML（${getPublishLanguage()}）`,
+    `TXT：${result.textPath || result.textFileName || "-"}`,
+    `HTML：${result.htmlPath || result.htmlFileName || "-"}`,
+    `源稿：${result.sourceMarkdownPath || result.sourceMarkdownFileName || "-"}`
+  ].join("\n"));
   setStatusBadge("成功", "success");
-  setLog(`Amazon Description 已保存。\nTXT: ${result.textPath}\nHTML: ${result.htmlPath}`);
+  setLog([
+    "Amazon Description 已保存。",
+    `TXT 文件名: ${result.textFileName || "amazon_description.txt"}`,
+    `TXT 路径: ${result.textFullPath || result.textPath || "-"}`,
+    `HTML 文件名: ${result.htmlFileName || "amazon_description.html"}`,
+    `HTML 路径: ${result.htmlFullPath || result.htmlPath || "-"}`,
+    `源稿文件名: ${result.sourceMarkdownFileName || "amazon_description.md"}`,
+    `源稿路径: ${result.sourceMarkdownFullPath || result.sourceMarkdownPath || "-"}`
+  ].join("\n"));
 }
 
 function formatRecommendedCategoriesHtml(recommended) {
@@ -7109,20 +7140,6 @@ function setupForms() {
       });
       setStatusBadge("已生成", "success");
       setLog("已生成并打开 Kobo 开户基本情况 MD。");
-    } catch (error) {
-      setStatusBadge("失败", "failed");
-      setLog(error.message);
-    }
-  });
-
-  $("#open-powershell-test").addEventListener("click", async () => {
-    try {
-      await api("/api/open-powershell-test", {
-        method: "POST",
-        body: JSON.stringify({})
-      });
-      setStatusBadge("已启动", "success");
-      setLog("已点击测试按钮，已交给独立测试启动器去打开新的 PowerShell 测试窗口。");
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);

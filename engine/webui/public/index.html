@@ -4,21 +4,22 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260430-img-black-pdf">
+    <link rel="stylesheet" href="/styles.css?v=20260504-header-layout">
   </head>
   <body>
     <div class="page-shell">
-      <div class="brand-masthead">
-        <img src="/sagewrite-press-mark.svg" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
-      </div>
-
       <header class="hero">
-        <div>
-        <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.04.25-flow-nav-build</span></p>
-          <h1>写作引擎 Web 控制台</h1>
-          <p class="hero-copy">
-            用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
-          </p>
+        <div class="hero-intro">
+          <div class="brand-masthead">
+            <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
+          </div>
+          <div class="hero-copy-block">
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.04.25-flow-nav-build</span></p>
+            <h1>写作引擎 Web 控制台</h1>
+            <p class="hero-copy">
+              用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
+            </p>
+          </div>
         </div>
         <div class="hero-status">
           <div class="status-card">
@@ -1233,7 +1234,6 @@
             <div class="publish-submit-actions">
               <button id="run-publish-package" class="primary-button" type="submit">运行 09-publish.ps1</button>
               <button id="run-publish-submit" class="ghost-button" type="submit">提交到当前平台</button>
-              <button id="open-powershell-test" class="ghost-button" type="button">测试按钮</button>
             </div>
           </form>
 
@@ -1501,6 +1501,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260430-img-black-pdf"></script>
+    <script src="/app.js?v=20260504-remove-test-button"></script>
   </body>
 </html>

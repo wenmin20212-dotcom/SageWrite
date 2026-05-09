@@ -2965,25 +2965,6 @@ function launchScriptInNewConsole(scriptName, params, meta, message = "") {
   return job;
 }
 
-function openPowerShellTestWindow() {
-  const launcherPath = path.join(__dirname, "powershell-test-launcher.vbs");
-  if (!fs.existsSync(launcherPath)) {
-    throw new Error("PowerShell test launcher not found.");
-  }
-
-  const child = spawn("wscript.exe", [
-    launcherPath
-  ], {
-    cwd: __dirname,
-    env: process.env,
-    detached: true,
-    stdio: "ignore",
-    windowsHide: false
-  });
-
-  child.unref();
-}
-
 async function handleRun(route, body, res) {
   try {
     const bookName = body.bookName;
@@ -3738,9 +3719,15 @@ const server = http.createServer(async (req, res) => {
         saved: true,
         bookName,
         language,
+        textFileName: path.basename(textPath),
         textPath: path.relative(paths.bookRoot, textPath),
+        textFullPath: textPath,
+        htmlFileName: path.basename(htmlPath),
         htmlPath: path.relative(paths.bookRoot, htmlPath),
+        htmlFullPath: htmlPath,
+        sourceMarkdownFileName: path.basename(sourceMarkdownPath),
         sourceMarkdownPath: path.relative(paths.bookRoot, sourceMarkdownPath),
+        sourceMarkdownFullPath: sourceMarkdownPath,
         publish: getPublishArtifacts(paths.bookRoot, language)
       });
     } catch (error) {
@@ -3775,17 +3762,6 @@ const server = http.createServer(async (req, res) => {
         language,
         platform
       });
-    } catch (error) {
-      sendJson(res, 400, { error: error.message });
-    }
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/open-powershell-test") {
-    try {
-      await readJsonBody(req);
-      openPowerShellTestWindow();
-      sendJson(res, 200, { opened: true });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
