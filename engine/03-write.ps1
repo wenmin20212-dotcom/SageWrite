@@ -13,6 +13,8 @@ param(
 
     [string]$AdditionalInstructions,
 
+    [switch]$ReferenceGlossary,
+
     [switch]$Force
 )
 
@@ -89,6 +91,7 @@ Set-SageCurrentStep -Context $Context -Step "write" -Data @{
     end_chapter = $EndChapter
     max_tokens = $MaxTokens
     has_additional_instructions = -not [string]::IsNullOrWhiteSpace($AdditionalInstructions)
+    reference_glossary = [bool]$ReferenceGlossary
     force = [bool]$Force
 }
 
@@ -96,6 +99,7 @@ $BookRoot = $Context.BookRoot
 $TocPath = Join-Path $BookRoot "01_outline\toc.md"
 $ChapterRoot = Join-Path $BookRoot "02_chapters"
 $ObjectivePath = Join-Path $BookRoot "00_brief\objective.md"
+$GlossaryPath = Join-Path $BookRoot "04_glossary\glossary.md"
 $RewriteNotesRoot = Join-Path $BookRoot "00_brief\rewrite_notes"
 
 if (!(Test-Path $TocPath)) {
@@ -107,6 +111,12 @@ if (!(Test-Path $TocPath)) {
 if (!(Test-Path $ObjectivePath)) {
     Fail-SageStep -Context $Context -Step "write" -Message "objective.md not found." -Data @{ objective = $ObjectivePath }
     Write-Output "ERROR: objective.md not found."
+    exit 1
+}
+
+if ($ReferenceGlossary -and !(Test-Path $GlossaryPath)) {
+    Fail-SageStep -Context $Context -Step "write" -Message "glossary.md not found." -Data @{ glossary = $GlossaryPath }
+    Write-Output "ERROR: glossary.md not found."
     exit 1
 }
 
@@ -126,6 +136,22 @@ if (!(Test-Path $RewriteNotesRoot)) {
 
 $TocContent = Get-Content $TocPath -Raw
 $ObjectiveContent = Get-Content $ObjectivePath -Raw
+$GlossaryContent = if ($ReferenceGlossary) {
+    Get-Content $GlossaryPath -Raw
+} else {
+    ""
+}
+$GlossaryBlock = if (-not [string]::IsNullOrWhiteSpace($GlossaryContent)) {
+@"
+
+Book glossary and term definitions:
+$GlossaryContent
+
+Use this glossary as the authoritative reference for terminology, concept boundaries, and consistent naming. Do not contradict these definitions.
+"@
+} else {
+    ""
+}
 $StyleFromFrontMatter = Get-FrontMatterValue -Content $ObjectiveContent -Key "style"
 $StyleGuideBody = Get-MarkdownSectionBody -Content $ObjectiveContent -Heading "风格指南"
 $ResolvedStyleGuidance = if (-not [string]::IsNullOrWhiteSpace($StyleGuideBody)) {
@@ -272,6 +298,7 @@ $ObjectiveContent
 
 Full book table of contents (TOC):
 $TocContent
+$GlossaryBlock
 $StyleInstructionsBlock
 $AdditionalInstructionsBlock
 
@@ -395,7 +422,12 @@ Complete-SageStep -Context $Context -Step "write" -State "success" -Message "Cha
     model = $Model
     has_objective_style_guidance = $HasObjectiveStyleGuidance
     has_additional_instructions = $HasAdditionalInstructions
+    reference_glossary = [bool]$ReferenceGlossary
+    glossary_path = if ($ReferenceGlossary) { $GlossaryPath } else { "" }
 }
 
 Write-Output "SUCCESS: $GeneratedCount chapter(s) generated."
 Write-Output "Model: $Model"
+if ($ReferenceGlossary) {
+    Write-Output "Reference glossary: $GlossaryPath"
+}

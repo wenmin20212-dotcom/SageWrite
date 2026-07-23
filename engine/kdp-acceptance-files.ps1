@@ -17,7 +17,8 @@ function Get-KdpAcceptanceRoots {
     $enginePath = $PSScriptRoot
     $sageRoot = Split-Path -Parent $enginePath
     $clawRoot = Split-Path -Parent $sageRoot
-    $workspaceRoot = Join-Path $clawRoot "workspace-$BookName"
+    $workspaceParentRoot = if (-not [string]::IsNullOrWhiteSpace($env:SAGEWRITE_WORKSPACE_ROOT)) { [System.IO.Path]::GetFullPath($env:SAGEWRITE_WORKSPACE_ROOT) } else { $clawRoot }
+    $workspaceRoot = Join-Path $workspaceParentRoot "workspace-$BookName"
     $bookRoot = Join-Path $workspaceRoot "sagewrite\book"
     $acceptanceRoot = Join-Path $bookRoot "07_cover\kdp_acceptance"
     return [ordered]@{
@@ -87,6 +88,10 @@ if ($Action -eq "OpenDirectory") {
     Write-Host "Program: kdp-acceptance-files.ps1"
     Write-Host "BookName: $BookName"
     Write-Host "Directory: $($Roots.acceptance)"
+    if ($env:SAGEWRITE_MODE -eq "cloud") {
+        Write-Host "Cloud mode: Explorer is not opened. Use the web file list/download controls."
+        return
+    }
     Start-Process -FilePath "explorer.exe" -ArgumentList @($Roots.acceptance) | Out-Null
     Write-Host "KDP acceptance directory opened."
     return

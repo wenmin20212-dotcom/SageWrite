@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260504-header-layout">
+    <link rel="stylesheet" href="/styles.css?v=20260723-health-check">
   </head>
   <body>
     <div class="page-shell">
@@ -36,6 +36,15 @@
           <div class="status-card">
             <span>工作区数量</span>
             <strong id="workspace-count">0</strong>
+          </div>
+          <div class="status-card system-health-card" id="system-health-card">
+            <div class="system-health-heading">
+              <span>环境自检</span>
+              <button id="refresh-health" class="mini-button" type="button">检查</button>
+            </div>
+            <strong id="system-health-summary">未检查</strong>
+            <small id="system-health-detail" class="status-card-hint">检查 PowerShell、ImageMagick、Pandoc、OpenAI Key 和工作区权限。</small>
+            <div id="system-health-list" class="system-health-list"></div>
           </div>
         </div>
       </header>
@@ -225,6 +234,15 @@
                   <div id="intake-action-hint" class="intake-action-hint">新项目会创建并生成 `objective.md`。</div>
                 </div>
               </form>
+              <div class="intake-objective-editor-wrap">
+                <div class="toc-preview-title">项目目标主稿（00_brief/objective.md）</div>
+                <div id="objective-md-path" class="intake-objective-path">选择一个 BookName 后，这里会显示 objective.md 路径。</div>
+                <textarea id="objective-md-editor" class="toc-preview toc-editor objective-md-editor" spellcheck="false">选择一个已有项目后，这里会显示 objective.md 内容。</textarea>
+                <div class="intake-objective-actions">
+                  <button id="save-objective-md" class="ghost-button" type="button">保存 objective.md</button>
+                  <span id="objective-md-status" class="write-notes-status">尚未加载 objective.md</span>
+                </div>
+              </div>
             </div>
           </details>
         </section>
@@ -351,6 +369,10 @@
                 <label class="checkbox-field">
                   <input name="force" type="checkbox">
                   <span>覆盖已存在章节</span>
+                </label>
+                <label class="checkbox-field">
+                  <input name="referenceGlossary" type="checkbox">
+                  <span>参考名词解释</span>
                 </label>
                 <div class="write-extra-actions">
                   <button id="open-write-notes" class="ghost-button" type="button">附加说明</button>
@@ -538,18 +560,12 @@
           </div>
         </div>
 
-        <section class="panel compact-panel" data-flow-section="check">
+        <section class="panel compact-panel check-panel" data-flow-section="check">
           <div class="panel-header">
             <h2>04 检查</h2>
+            <button id="toggle-check-panel" class="ghost-button" type="button" aria-expanded="false">展开</button>
           </div>
-          <details id="check-workbench-shell" class="workbench-shell" open>
-            <summary>
-              <div class="workbench-summary">
-                <span class="workbench-kicker">Review</span>
-                <strong class="workbench-title">检查工作台</strong>
-                <span class="workbench-meta">运行 04-edit.ps1，并在下方查看完整的 edit_report.txt 检查报告</span>
-              </div>
-            </summary>
+          <div id="check-panel-body" class="check-panel-body">
             <div class="workbench-body">
               <form id="edit-form">
                 <label class="checkbox-field">
@@ -563,7 +579,7 @@
                 <textarea id="preflight-report" class="preflight-report preflight-textarea" readonly spellcheck="false">运行 04-edit.ps1 后，这里会显示 edit_report.txt 的完整内容。</textarea>
               </div>
             </div>
-          </details>
+          </div>
         </section>
 
         <section class="panel compact-panel" data-flow-section="build">
@@ -1501,6 +1517,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260504-remove-test-button"></script>
+    <script src="/app.js?v=20260723-health-check"></script>
   </body>
 </html>

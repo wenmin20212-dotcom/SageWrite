@@ -24,7 +24,8 @@ function Get-KdpFixRoots {
     $enginePath = $PSScriptRoot
     $sageRoot = Split-Path -Parent $enginePath
     $clawRoot = Split-Path -Parent $sageRoot
-    $workspaceRoot = Join-Path $clawRoot "workspace-$BookName"
+    $workspaceParentRoot = if (-not [string]::IsNullOrWhiteSpace($env:SAGEWRITE_WORKSPACE_ROOT)) { [System.IO.Path]::GetFullPath($env:SAGEWRITE_WORKSPACE_ROOT) } else { $clawRoot }
+    $workspaceRoot = Join-Path $workspaceParentRoot "workspace-$BookName"
     $bookRoot = Join-Path $workspaceRoot "sagewrite\book"
     $acceptanceRoot = Join-Path $bookRoot "07_cover\kdp_acceptance"
     $workRoot = Join-Path $acceptanceRoot "fix_workbench"

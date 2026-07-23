@@ -161,7 +161,8 @@ $EnginePath     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SageRoot       = Split-Path -Parent $EnginePath
 $ClawRoot       = Split-Path -Parent $SageRoot
 
-$WorkspaceRoot  = Join-Path $ClawRoot "workspace-$BookName"
+$WorkspaceParentRoot = if (-not [string]::IsNullOrWhiteSpace($env:SAGEWRITE_WORKSPACE_ROOT)) { [System.IO.Path]::GetFullPath($env:SAGEWRITE_WORKSPACE_ROOT) } else { $ClawRoot }
+$WorkspaceRoot  = Join-Path $WorkspaceParentRoot "workspace-$BookName"
 $BookRoot       = Join-Path $WorkspaceRoot "sagewrite\book"
 $BriefRoot      = Join-Path $BookRoot "00_brief"
 $OutlineRoot    = Join-Path $BookRoot "01_outline"

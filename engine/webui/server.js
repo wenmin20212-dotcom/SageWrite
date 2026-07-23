@@ -4,18 +4,136 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
-const { randomUUID } = require("node:crypto");
+const { createHash, randomBytes, randomUUID, timingSafeEqual } = require("node:crypto");
 const { URL } = require("node:url");
 
-const PORT = Number(process.env.PORT || 3210);
+const PORT = Number(process.env.PORT || process.env.SAGEWRITE_PORT || 3210);
+const HOST = process.env.HOST || process.env.SAGEWRITE_HOST || "127.0.0.1";
+const APP_MODE = String(process.env.SAGEWRITE_MODE || (HOST === "0.0.0.0" ? "cloud" : "local")).toLowerCase() === "cloud"
+  ? "cloud"
+  : "local";
+const AUTH_MODE = String(process.env.SAGEWRITE_AUTH || "off").toLowerCase();
+const ADMIN_PASSWORD = process.env.SAGEWRITE_ADMIN_PASSWORD || "";
 const ENGINE_ROOT = path.resolve(__dirname, "..");
 const CLAW_ROOT = path.resolve(ENGINE_ROOT, "..", "..");
+const WORKSPACE_PARENT_ROOT = process.env.SAGEWRITE_WORKSPACE_ROOT
+  ? path.resolve(process.env.SAGEWRITE_WORKSPACE_ROOT)
+  : CLAW_ROOT;
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const jobs = new Map();
+const sessions = new Map();
+const SESSION_COOKIE = "sagewrite_session";
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
+function isAuthEnabled() {
+  return AUTH_MODE === "password";
+}
+
+function hashValue(value) {
+  return createHash("sha256").update(String(value)).digest("hex");
+}
+
+function safeEqualText(left, right) {
+  const leftHash = Buffer.from(hashValue(left));
+  const rightHash = Buffer.from(hashValue(right));
+  return leftHash.length === rightHash.length && timingSafeEqual(leftHash, rightHash);
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return Object.fromEntries(header.split(";").map((part) => {
+    const [name, ...rest] = part.trim().split("=");
+    return [name, decodeURIComponent(rest.join("=") || "")];
+  }).filter(([name]) => name));
+}
+
+function createSession() {
+  const token = randomBytes(32).toString("hex");
+  sessions.set(token, {
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+  return token;
+}
+
+function cleanupSessions() {
+  const now = Date.now();
+  for (const [token, session] of sessions.entries()) {
+    if (!session || session.expiresAt <= now) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function getValidSession(req) {
+  if (!isAuthEnabled()) {
+    return null;
+  }
+  cleanupSessions();
+  const token = parseCookies(req)[SESSION_COOKIE];
+  const session = token ? sessions.get(token) : null;
+  if (!session || session.expiresAt <= Date.now()) {
+    return null;
+  }
+  session.expiresAt = Date.now() + SESSION_TTL_MS;
+  return { token, session };
+}
+
+function isLoginRequest(method, pathname) {
+  return pathname === "/login.html" ||
+    pathname === "/api/auth/status" ||
+    (method === "POST" && pathname === "/api/auth/login");
+}
+
+function redirectToLogin(res) {
+  res.writeHead(302, {
+    "Location": "/login.html",
+    "Cache-Control": "no-store"
+  });
+  res.end();
+}
+
+function requireAuth(req, res, url) {
+  if (!isAuthEnabled()) {
+    return true;
+  }
+  if (isLoginRequest(req.method, url.pathname)) {
+    return true;
+  }
+  if (getValidSession(req)) {
+    return true;
+  }
+  if (url.pathname.startsWith("/api/")) {
+    sendJson(res, 401, { error: "Authentication required.", authRequired: true });
+  } else {
+    redirectToLogin(res);
+  }
+  return false;
+}
+
+function isCloudMode() {
+  return APP_MODE === "cloud";
+}
+
+function assertLocalOpenAllowed() {
+  if (isCloudMode()) {
+    throw new Error("Cloud mode cannot open server desktop files or folders. Use a download/preview endpoint instead.");
+  }
+}
+
+function getChildProcessEnv() {
+  return {
+    ...process.env,
+    SAGEWRITE_MODE: APP_MODE,
+    SAGEWRITE_HOST: HOST,
+    SAGEWRITE_PORT: String(PORT),
+    SAGEWRITE_WORKSPACE_ROOT: WORKSPACE_PARENT_ROOT
+  };
+}
 
 function getWorkspacePaths(bookName) {
-  const workspacePath = path.join(CLAW_ROOT, `workspace-${bookName}`);
+  const workspacePath = path.join(WORKSPACE_PARENT_ROOT, `workspace-${bookName}`);
   const bookRoot = path.join(workspacePath, "sagewrite", "book");
   const logRoot = path.join(bookRoot, "logs");
   const outputRoot = path.join(bookRoot, "04_output");
@@ -38,6 +156,7 @@ function getWorkspacePaths(bookName) {
   const copyrightPagePath = path.join(frontmatterRoot, "copyright_page.md");
   const webRunRoot = path.join(logRoot, "webui-runs");
   const webRunIndexPath = path.join(logRoot, "webui_runs.jsonl");
+  const webJobRoot = path.join(logRoot, "webui-jobs");
 
   return {
     workspacePath,
@@ -62,7 +181,8 @@ function getWorkspacePaths(bookName) {
     titlePagePath,
     copyrightPagePath,
     webRunRoot,
-    webRunIndexPath
+    webRunIndexPath,
+    webJobRoot
   };
 }
 
@@ -103,6 +223,53 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function isPathInside(rootPath, targetPath) {
+  const rootResolved = path.resolve(rootPath);
+  const targetResolved = path.resolve(targetPath);
+  const rootCompare = process.platform === "win32" ? rootResolved.toLowerCase() : rootResolved;
+  const targetCompare = process.platform === "win32" ? targetResolved.toLowerCase() : targetResolved;
+  if (targetCompare === rootCompare) {
+    return true;
+  }
+  const rootWithSep = rootCompare.endsWith(path.sep) ? rootCompare : `${rootCompare}${path.sep}`;
+  return targetCompare.startsWith(rootWithSep);
+}
+
+function resolveInside(rootPath, ...segments) {
+  const targetPath = path.resolve(rootPath, ...segments);
+  if (!isPathInside(rootPath, targetPath)) {
+    throw new Error("Resolved path is outside the allowed directory.");
+  }
+  return targetPath;
+}
+
+function assertFileNameOnly(fileName, label = "fileName") {
+  if (!fileName || typeof fileName !== "string") {
+    throw new Error(`${label} is required.`);
+  }
+  if (fileName.includes("\0") || fileName !== path.basename(fileName)) {
+    throw new Error(`Invalid ${label}.`);
+  }
+}
+
+function normalizeSafeRelativePath(value, label = "fileName") {
+  if (!value || typeof value !== "string") {
+    throw new Error(`${label} is required.`);
+  }
+  if (value.includes("\0")) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  const clean = value.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!clean || path.isAbsolute(clean)) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  const parts = clean.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  return parts.join("/");
+}
+
 function formatLocalTimestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
   return [
@@ -134,11 +301,7 @@ function formatCompactFileStamp(date = new Date()) {
 
 function getUniqueFileName(dirPath, preferredFileName, date = new Date()) {
   const safeFileName = path.basename(String(preferredFileName || "file"));
-  const preferredPath = path.resolve(dirPath, safeFileName);
-  const rootResolved = path.resolve(dirPath);
-  if (!preferredPath.startsWith(rootResolved + path.sep)) {
-    throw new Error("Invalid target file name.");
-  }
+  const preferredPath = resolveInside(dirPath, safeFileName);
   if (!fs.existsSync(preferredPath)) {
     return safeFileName;
   }
@@ -2106,7 +2269,7 @@ function runEngineScriptSync(scriptName, args = []) {
 
   const result = spawnSync("powershell.exe", psArgs, {
     cwd: ENGINE_ROOT,
-    env: process.env,
+    env: getChildProcessEnv(),
     encoding: "utf8"
   });
 
@@ -2119,6 +2282,147 @@ function runEngineScriptSync(scriptName, args = []) {
   }
 
   return result;
+}
+
+function makeHealthCheck(id, label, status, message, details = {}) {
+  return {
+    id,
+    label,
+    status,
+    message,
+    details
+  };
+}
+
+function runCommandHealthCheck({ id, label, command, args = [], required = true, parseVersion = null }) {
+  try {
+    const result = spawnSync(command, args, {
+      cwd: ENGINE_ROOT,
+      env: getChildProcessEnv(),
+      encoding: "utf8",
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    });
+
+    if (result.error) {
+      return makeHealthCheck(
+        id,
+        label,
+        required ? "fail" : "warn",
+        result.error.code === "ENOENT" ? `${label} 未安装或不在 PATH 中。` : `${label} 检查失败：${result.error.message}`,
+        { command }
+      );
+    }
+
+    const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+    if ((result.status ?? -1) !== 0) {
+      return makeHealthCheck(
+        id,
+        label,
+        required ? "fail" : "warn",
+        `${label} 命令返回非 0 状态：${result.status}`,
+        { command, exitCode: result.status, output: output.slice(0, 600) }
+      );
+    }
+
+    const version = parseVersion ? parseVersion(output) : output.split(/\r?\n/)[0] || "available";
+    return makeHealthCheck(id, label, "pass", `${label} 可用。`, { command, version });
+  } catch (error) {
+    return makeHealthCheck(id, label, required ? "fail" : "warn", `${label} 检查异常：${error.message}`, { command });
+  }
+}
+
+function checkWorkspaceRootHealth() {
+  const details = {
+    workspaceParentRoot: WORKSPACE_PARENT_ROOT
+  };
+  if (!fs.existsSync(WORKSPACE_PARENT_ROOT)) {
+    return makeHealthCheck("workspaceRoot", "工作区根目录", "fail", "工作区根目录不存在。", details);
+  }
+  if (!fs.statSync(WORKSPACE_PARENT_ROOT).isDirectory()) {
+    return makeHealthCheck("workspaceRoot", "工作区根目录", "fail", "工作区根目录不是文件夹。", details);
+  }
+
+  const probePath = path.join(WORKSPACE_PARENT_ROOT, `.sagewrite-health-${process.pid}-${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(probePath, "ok", "utf8");
+    fs.readFileSync(probePath, "utf8");
+    fs.unlinkSync(probePath);
+    return makeHealthCheck("workspaceRoot", "工作区根目录", "pass", "工作区根目录可读写。", details);
+  } catch (error) {
+    try {
+      if (fs.existsSync(probePath)) {
+        fs.unlinkSync(probePath);
+      }
+    } catch {
+      // ignore cleanup failure
+    }
+    return makeHealthCheck("workspaceRoot", "工作区根目录", "fail", `工作区根目录不可读写：${error.message}`, details);
+  }
+}
+
+function buildSystemHealthReport() {
+  const checks = [];
+  checks.push(makeHealthCheck("mode", "运行模式", "pass", `当前模式：${APP_MODE}`, {
+    host: HOST,
+    port: PORT,
+    appMode: APP_MODE
+  }));
+  checks.push(makeHealthCheck("node", "Node.js", "pass", "Node.js 可用。", {
+    version: process.version,
+    executable: process.execPath
+  }));
+  checks.push(runCommandHealthCheck({
+    id: "powershell",
+    label: "PowerShell",
+    command: "powershell.exe",
+    args: ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"]
+  }));
+  checks.push(runCommandHealthCheck({
+    id: "imagemagick",
+    label: "ImageMagick",
+    command: "magick.exe",
+    args: ["-version"],
+    parseVersion: (output) => output.split(/\r?\n/).find((line) => line.toLowerCase().startsWith("version:")) || output.split(/\r?\n/)[0] || "available"
+  }));
+  checks.push(runCommandHealthCheck({
+    id: "pandoc",
+    label: "Pandoc",
+    command: "pandoc.exe",
+    args: ["--version"],
+    parseVersion: (output) => output.split(/\r?\n/)[0] || "available"
+  }));
+  checks.push(makeHealthCheck(
+    "openaiKey",
+    "OPENAI_API_KEY",
+    process.env.OPENAI_API_KEY ? "pass" : "warn",
+    process.env.OPENAI_API_KEY ? "OPENAI_API_KEY 已配置。" : "OPENAI_API_KEY 未配置；LLM 写作、检查和图像识别步骤会失败。",
+    { configured: Boolean(process.env.OPENAI_API_KEY) }
+  ));
+  checks.push(makeHealthCheck(
+    "auth",
+    "登录保护",
+    APP_MODE === "cloud" && !isAuthEnabled() ? "warn" : "pass",
+    APP_MODE === "cloud" && !isAuthEnabled()
+      ? "当前是 cloud 模式但未启用密码登录；对外开放前必须配置 SAGEWRITE_AUTH=password。"
+      : isAuthEnabled() ? "密码登录已启用。" : "本地模式未启用登录保护。",
+    { authEnabled: isAuthEnabled(), authMode: AUTH_MODE }
+  ));
+  checks.push(checkWorkspaceRootHealth());
+
+  const failCount = checks.filter((item) => item.status === "fail").length;
+  const warnCount = checks.filter((item) => item.status === "warn").length;
+  const summary = failCount ? "fail" : warnCount ? "warn" : "pass";
+  return {
+    generatedAt: formatLocalTimestamp(),
+    appMode: APP_MODE,
+    summary,
+    failCount,
+    warnCount,
+    passCount: checks.filter((item) => item.status === "pass").length,
+    checks
+  };
 }
 
 function syncPublishMetadataFiles(bookRoot, languageCode, nextMetadata) {
@@ -2224,6 +2528,260 @@ function sendText(res, statusCode, text, type = "text/plain; charset=utf-8") {
   res.end(text);
 }
 
+function sanitizeJobNamePart(value, fallback = "run") {
+  const clean = String(value || fallback).replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return clean || fallback;
+}
+
+function serializeJob(job, { includeOutput = true } = {}) {
+  if (!job) {
+    return null;
+  }
+  const payload = {
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    timestamp: job.timestamp,
+    exitCode: job.exitCode,
+    childPid: job.childPid || null,
+    archived: Boolean(job.archived),
+    appMode: APP_MODE,
+    meta: job.meta || {}
+  };
+  if (includeOutput) {
+    payload.output = job.output || "";
+  }
+  return payload;
+}
+
+function persistJobState(job) {
+  const statePath = job?.meta?.statePath;
+  if (!statePath) {
+    return;
+  }
+  try {
+    const bookName = job.meta?.bookName;
+    if (bookName) {
+      const paths = getWorkspacePaths(bookName);
+      if (!isPathInside(paths.webJobRoot, statePath)) {
+        throw new Error("Job state path is outside webui-jobs.");
+      }
+    }
+    ensureDir(path.dirname(statePath));
+    fs.writeFileSync(statePath, `${JSON.stringify(serializeJob(job, { includeOutput: false }), null, 2)}\n`, "utf8");
+  } catch (error) {
+    job.output += `\n[webui-state-error] ${error.message}\n`;
+  }
+}
+
+function appendJobOutputFile(job, chunk) {
+  const outputPath = job?.meta?.outputPath;
+  if (!outputPath || !chunk) {
+    return;
+  }
+  try {
+    const bookName = job.meta?.bookName;
+    if (bookName) {
+      const paths = getWorkspacePaths(bookName);
+      if (!isPathInside(paths.webRunRoot, outputPath)) {
+        throw new Error("Job output path is outside webui-runs.");
+      }
+    }
+    ensureDir(path.dirname(outputPath));
+    fs.appendFileSync(outputPath, chunk, "utf8");
+  } catch (error) {
+    job.output += `\n[webui-log-error] ${error.message}\n`;
+  }
+}
+
+function initializeJobPersistence(job, createdDate = new Date()) {
+  const bookName = job.meta?.bookName;
+  if (!bookName) {
+    return;
+  }
+
+  try {
+    const paths = getWorkspacePaths(bookName);
+    ensureDir(paths.webRunRoot);
+    ensureDir(paths.webJobRoot);
+    const route = sanitizeJobNamePart(job.meta?.route);
+    const stamp = formatFileStamp(createdDate);
+    const outputFileName = `${stamp}-${route}-${job.id}.log`;
+    const stateFileName = `${stamp}-${route}-${job.id}.json`;
+    const outputPath = resolveInside(paths.webRunRoot, outputFileName);
+    const statePath = resolveInside(paths.webJobRoot, stateFileName);
+    fs.writeFileSync(outputPath, "", "utf8");
+    job.meta.outputFileName = outputFileName;
+    job.meta.outputPath = outputPath;
+    job.meta.stateFileName = stateFileName;
+    job.meta.statePath = statePath;
+    persistJobState(job);
+  } catch (error) {
+    job.output += `\n[webui-persistence-error] ${error.message}\n`;
+  }
+}
+
+function jobStateToRunEntry(jobState) {
+  const meta = jobState?.meta || {};
+  return {
+    source: "webui",
+    timestamp: jobState.timestamp || formatLocalTimestamp(new Date(jobState.createdAt || Date.now())),
+    step: meta.route || "webui",
+    state: jobState.status || "unknown",
+    message: jobState.status === "running"
+      ? `Web UI ${meta.route || "task"} running. Job ID: ${jobState.id}.`
+      : `Web UI ${meta.route || "task"} ${jobState.status || "unknown"}. Job ID: ${jobState.id}.`,
+    data: {
+      jobId: jobState.id,
+      childPid: jobState.childPid || null,
+      outputFileName: meta.outputFileName || "",
+      outputPath: meta.outputPath || "",
+      stateFileName: meta.stateFileName || "",
+      statePath: meta.statePath || ""
+    }
+  };
+}
+
+function readRunningWebJobs(webJobRoot) {
+  if (!fs.existsSync(webJobRoot)) {
+    return [];
+  }
+  return fs.readdirSync(webJobRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
+    .map((entry) => {
+      try {
+        return readJsonFile(path.join(webJobRoot, entry.name));
+      } catch {
+        return null;
+      }
+    })
+    .filter((jobState) => jobState?.status === "running" && jobs.has(jobState.id))
+    .map(jobStateToRunEntry);
+}
+
+function findRunningJob(bookName) {
+  const matches = Array.from(jobs.values())
+    .filter((job) => job.status === "running" && (!bookName || job.meta?.bookName === bookName))
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  return matches[matches.length - 1] || null;
+}
+
+function readPersistedJobById(jobId, bookName = "") {
+  if (!jobId) {
+    return null;
+  }
+  const workspaceNames = bookName
+    ? [`workspace-${bookName}`]
+    : fs.existsSync(WORKSPACE_PARENT_ROOT)
+      ? fs.readdirSync(WORKSPACE_PARENT_ROOT).filter((name) => name.startsWith("workspace-"))
+      : [];
+
+  for (const workspaceName of workspaceNames) {
+    const currentBookName = workspaceName.replace(/^workspace-/, "");
+    try {
+      const paths = getWorkspacePaths(currentBookName);
+      if (!fs.existsSync(paths.webJobRoot)) {
+        continue;
+      }
+      const match = fs.readdirSync(paths.webJobRoot)
+        .find((fileName) => fileName.endsWith(`${jobId}.json`) || fileName.includes(`-${jobId}.json`));
+      if (!match) {
+        continue;
+      }
+      const jobState = readJsonFile(path.join(paths.webJobRoot, match));
+      const outputPath = jobState?.meta?.outputPath || "";
+      const output = outputPath && isPathInside(paths.webRunRoot, outputPath) && fs.existsSync(outputPath)
+        ? fs.readFileSync(outputPath, "utf8")
+        : "";
+      if (jobState.status === "running" && !jobs.has(jobId)) {
+        return {
+          ...jobState,
+          status: "lost",
+          exitCode: -2,
+          output: `${output}\n[webui] This job was running, but the current server process is no longer tracking it. Check the archived log file and rerun if needed.\n`
+        };
+      }
+      return { ...jobState, output };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function getMimeTypeByPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".epub": "application/epub+zip",
+    ".html": "text/html; charset=utf-8",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".json": "application/json; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".txt": "text/plain; charset=utf-8",
+    ".webp": "image/webp"
+  }[ext] || "application/octet-stream";
+}
+
+function safeHeaderFileName(filePath) {
+  const baseName = path.basename(filePath).replace(/[\r\n]/g, "");
+  return baseName.replace(/["\\]/g, "_").replace(/[^\x20-\x7E]/g, "_") || "download";
+}
+
+function encodedHeaderFileName(filePath) {
+  return encodeURIComponent(path.basename(filePath).replace(/[\r\n]/g, ""));
+}
+
+function contentDispositionHeader(filePath, disposition = "attachment") {
+  return `${disposition}; filename="${safeHeaderFileName(filePath)}"; filename*=UTF-8''${encodedHeaderFileName(filePath)}`;
+}
+
+function sendDiskFile(res, filePath, disposition = "attachment") {
+  res.writeHead(200, {
+    "Content-Type": getMimeTypeByPath(filePath),
+    "Cache-Control": "no-store",
+    "Content-Disposition": contentDispositionHeader(filePath, disposition)
+  });
+  res.end(fs.readFileSync(filePath));
+}
+
+function withQuery(pathname, params) {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+  return `${pathname}?${search.toString()}`;
+}
+
+function cloudFilePayload(extra, targetPath, downloadUrl) {
+  return {
+    ...extra,
+    opened: false,
+    cloudMode: true,
+    mode: APP_MODE,
+    path: targetPath,
+    downloadUrl,
+    message: "云端模式不会打开服务器桌面；请使用浏览器下载/预览链接。"
+  };
+}
+
+function cloudFolderPayload(extra, targetFolder) {
+  return {
+    ...extra,
+    opened: false,
+    cloudMode: true,
+    mode: APP_MODE,
+    path: targetFolder,
+    message: "云端模式不会打开服务器资源管理器；请使用页面中的文件列表、下载或预览功能。"
+  };
+}
+
 function readJsonBody(req, maxBytes = 5_000_000) {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -2251,15 +2809,16 @@ function readJsonBody(req, maxBytes = 5_000_000) {
 }
 
 function listWorkspaces() {
-  if (!fs.existsSync(CLAW_ROOT)) {
+  if (!fs.existsSync(WORKSPACE_PARENT_ROOT)) {
     return [];
   }
 
-  return fs.readdirSync(CLAW_ROOT, { withFileTypes: true })
+  return fs.readdirSync(WORKSPACE_PARENT_ROOT, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("workspace-"))
     .map((entry) => {
       const bookName = entry.name.replace(/^workspace-/, "");
-      const bookRoot = path.join(CLAW_ROOT, entry.name, "sagewrite", "book");
+      const workspacePath = path.join(WORKSPACE_PARENT_ROOT, entry.name);
+      const bookRoot = path.join(workspacePath, "sagewrite", "book");
       const objectivePath = path.join(bookRoot, "00_brief", "objective.md");
       const tocPath = path.join(bookRoot, "01_outline", "toc.md");
       const toc2Path = path.join(bookRoot, "01_outline", "toc2.md");
@@ -2270,8 +2829,12 @@ function listWorkspaces() {
       const statusPath = path.join(logRoot, "status.json");
       const runLogPath = path.join(logRoot, "run_history.jsonl");
       const webRunIndexPath = path.join(logRoot, "webui_runs.jsonl");
+      const webJobRoot = path.join(logRoot, "webui-jobs");
       const editReportJsonPath = path.join(logRoot, "edit_report.json");
       const coverArtifacts = getCoverArtifacts(bookRoot);
+      const objectiveContent = fs.existsSync(objectivePath)
+        ? fs.readFileSync(objectivePath, "utf8").replace(/^\uFEFF/, "")
+        : "";
       const tocContent = fs.existsSync(tocPath)
         ? fs.readFileSync(tocPath, "utf8")
         : "";
@@ -2283,6 +2846,7 @@ function listWorkspaces() {
       let status = null;
       let recentRuns = [];
       let webRuns = [];
+      let runningWebJobs = [];
       let editReport = null;
       const objectiveData = parseFrontMatterMarkdown(objectivePath) || null;
 
@@ -2304,6 +2868,8 @@ function listWorkspaces() {
         webRuns = readJsonLines(webRunIndexPath);
       }
 
+      runningWebJobs = readRunningWebJobs(webJobRoot);
+
       if (fs.existsSync(editReportJsonPath)) {
         try {
           editReport = readJsonFile(editReportJsonPath);
@@ -2314,15 +2880,18 @@ function listWorkspaces() {
         }
       }
 
-      const mergedRuns = [...recentRuns, ...webRuns]
+      const mergedRuns = [...recentRuns, ...webRuns, ...runningWebJobs]
         .sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")))
         .slice(-8);
 
       return {
         bookName,
-        workspacePath: path.join(CLAW_ROOT, entry.name),
+        workspacePath,
         hasObjective: fs.existsSync(objectivePath),
         objectiveData,
+        objectiveContent,
+        objectiveRelativePath: "00_brief/objective.md",
+        objectivePath,
         hasToc: fs.existsSync(tocPath),
         hasExpandedToc: fs.existsSync(toc2Path),
         tocContent,
@@ -2344,7 +2913,7 @@ function serveStatic(reqPath, res) {
   const target = reqPath === "/" ? "/index.html" : reqPath;
   const filePath = path.normalize(path.join(PUBLIC_DIR, target));
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (!isPathInside(PUBLIC_DIR, filePath)) {
     sendText(res, 403, "Forbidden");
     return;
   }
@@ -2368,12 +2937,14 @@ function serveStatic(reqPath, res) {
 
 function createJob(meta) {
   const id = randomUUID();
+  const createdDate = new Date();
   const job = {
     id,
     status: "running",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    meta,
+    createdAt: createdDate.toISOString(),
+    updatedAt: createdDate.toISOString(),
+    timestamp: formatLocalTimestamp(createdDate),
+    meta: { ...(meta || {}) },
     output: "",
     archived: false
   };
@@ -2384,12 +2955,19 @@ function createJob(meta) {
     configurable: true
   });
   jobs.set(id, job);
+  initializeJobPersistence(job, createdDate);
   return job;
 }
 
 function appendJobOutput(job, chunk) {
-  job.output += chunk;
+  const text = String(chunk || "");
+  if (!text) {
+    return;
+  }
+  job.output += text;
   job.updatedAt = new Date().toISOString();
+  appendJobOutputFile(job, text);
+  persistJobState(job);
 }
 
 function appendJobLifecycleLine(job, message) {
@@ -2409,6 +2987,7 @@ function finishJob(job, exitCode) {
   job.childPid = null;
   appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: ${job.status}. Exit code: ${job.exitCode}.`);
   archiveJobOutput(job);
+  persistJobState(job);
 }
 
 function failJob(job, error) {
@@ -2420,11 +2999,12 @@ function failJob(job, error) {
   job.status = "failed";
   job.exitCode = -1;
   job.updatedAt = new Date().toISOString();
-  job.output += `\n[webui-error] ${error.message}\n`;
+  appendJobOutput(job, `\n[webui-error] ${error.message}\n`);
   job.child = null;
   job.childPid = null;
   appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: failed. Exit code: -1.`);
   archiveJobOutput(job);
+  persistJobState(job);
 }
 
 function cancelJob(job) {
@@ -2456,13 +3036,14 @@ function cancelJob(job) {
     throw new Error((result.stderr || result.stdout || "Failed to stop current job.").trim());
   }
 
-  appendJobLifecycleLine(job, `Run cancelled. Job ID: ${job.id}.`);
   job.status = "cancelled";
   job.exitCode = -999;
   job.updatedAt = new Date().toISOString();
   job.child = null;
   job.childPid = null;
+  appendJobLifecycleLine(job, `Run cancelled. Job ID: ${job.id}.`);
   archiveJobOutput(job);
+  persistJobState(job);
   return job;
 }
 
@@ -2481,8 +3062,12 @@ function archiveJobOutput(job) {
     const paths = getWorkspacePaths(bookName);
     ensureDir(paths.webRunRoot);
     const timestamp = formatLocalTimestamp();
-    const fileName = `${formatFileStamp()}-${job.meta.route}-${job.id}.log`;
-    const outputPath = path.join(paths.webRunRoot, fileName);
+    const route = sanitizeJobNamePart(job.meta.route);
+    const fileName = job.meta.outputFileName || `${formatFileStamp()}-${route}-${job.id}.log`;
+    validateWebRunOutputFileName(fileName);
+    const outputPath = job.meta.outputPath && isPathInside(paths.webRunRoot, job.meta.outputPath)
+      ? job.meta.outputPath
+      : resolveInside(paths.webRunRoot, fileName);
     fs.writeFileSync(outputPath, job.output || "", "utf8");
 
     const entry = {
@@ -2518,38 +3103,36 @@ function validateBookName(bookName) {
   }
 }
 
-function validateOutputFileName(fileName) {
-  if (!fileName || typeof fileName !== "string") {
-    throw new Error("fileName is required.");
-  }
-  const normalized = path.normalize(fileName);
-  if (path.isAbsolute(normalized) || normalized.startsWith("..") || normalized.includes("..\\")) {
-    throw new Error("Invalid fileName.");
-  }
-  if (!/\.(docx|epub|pdf)$/i.test(fileName)) {
+function normalizeOutputFileName(fileName) {
+  const normalized = normalizeSafeRelativePath(fileName);
+  if (!/\.(docx|epub|pdf)$/i.test(normalized)) {
     throw new Error("Only .docx, .epub, or .pdf output files are supported.");
   }
+  return normalized;
 }
 
 function resolveOutputDocumentPath(paths, fileName) {
-  validateOutputFileName(fileName);
-  const outputPath = path.resolve(paths.outputRoot, fileName);
-  const outputRootResolved = path.resolve(paths.outputRoot);
-  if (!outputPath.startsWith(outputRootResolved)) {
-    throw new Error("Invalid output file path.");
-  }
-  return outputPath;
+  return resolveInside(paths.outputRoot, normalizeOutputFileName(fileName));
 }
 
 function validateAssetFileName(fileName) {
-  if (!fileName || typeof fileName !== "string") {
-    throw new Error("fileName is required.");
-  }
-  if (fileName !== path.basename(fileName)) {
-    throw new Error("Invalid fileName.");
-  }
+  assertFileNameOnly(fileName);
   if (!/\.(png|jpg|jpeg|webp|pdf)$/i.test(fileName)) {
     throw new Error("Unsupported asset file type.");
+  }
+}
+
+function validateChapterFileName(fileName) {
+  assertFileNameOnly(fileName);
+  if (!/\.md$/i.test(fileName)) {
+    throw new Error("Only Markdown chapter files are supported.");
+  }
+}
+
+function validateWebRunOutputFileName(fileName) {
+  assertFileNameOnly(fileName);
+  if (!/\.log$/i.test(fileName)) {
+    throw new Error("Only archived Web UI log files are supported.");
   }
 }
 
@@ -2594,21 +3177,12 @@ function resolveKdpAcceptanceFilePath(bookName, relativePath, allowedExtensions 
   validateBookName(bookName);
   const paths = getWorkspacePaths(bookName);
   const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
-  const cleanRelative = String(relativePath || "")
-    .replace(/^[/\\]+/, "")
-    .replace(/\\/g, "/");
-  if (!cleanRelative || cleanRelative.includes("..") || path.isAbsolute(cleanRelative)) {
-    throw new Error("Invalid KDP acceptance file path.");
-  }
+  const cleanRelative = normalizeSafeRelativePath(relativePath, "KDP acceptance file path");
   const ext = path.extname(cleanRelative).toLowerCase();
   if (!allowedExtensions.includes(ext)) {
     throw new Error("Unsupported KDP acceptance file type.");
   }
-  const rootResolved = path.resolve(acceptanceRoot);
-  const targetPath = path.resolve(acceptanceRoot, cleanRelative);
-  if (!targetPath.startsWith(rootResolved + path.sep) && targetPath !== rootResolved) {
-    throw new Error("KDP acceptance file is outside the acceptance directory.");
-  }
+  const targetPath = resolveInside(acceptanceRoot, cleanRelative);
   if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
     throw new Error("KDP acceptance file not found.");
   }
@@ -2673,12 +3247,7 @@ function validatePublishPlatform(platform) {
 }
 
 function validatePublishFileName(fileName) {
-  if (!fileName || typeof fileName !== "string") {
-    throw new Error("fileName is required.");
-  }
-  if (fileName !== path.basename(fileName)) {
-    throw new Error("Invalid fileName.");
-  }
+  assertFileNameOnly(fileName);
   if (!/\.(json|md|txt|png|jpg|jpeg|webp|pdf|epub|docx)$/i.test(fileName)) {
     throw new Error("Unsupported publish file type.");
   }
@@ -2698,6 +3267,9 @@ function validateAbsoluteFolderPath(folderPath) {
   }
   if (!fs.statSync(resolved).isDirectory()) {
     throw new Error("folderPath must point to a directory.");
+  }
+  if (isCloudMode() && !isPathInside(WORKSPACE_PARENT_ROOT, resolved)) {
+    throw new Error("Cloud mode only allows opening folders inside SAGEWRITE_WORKSPACE_ROOT.");
   }
 
   return resolved;
@@ -2741,6 +3313,7 @@ function resolvePublishSectionRoot(paths, languageCode, platform) {
 }
 
 function openFileWithDefaultApp(filePath) {
+  assertLocalOpenAllowed();
   const launcherPath = path.join(__dirname, "open-target.vbs");
   if (!fs.existsSync(launcherPath)) {
     throw new Error("Open target launcher not found.");
@@ -2759,6 +3332,7 @@ function openFileWithDefaultApp(filePath) {
 }
 
 function openFolder(folderPath) {
+  assertLocalOpenAllowed();
   const launcherPath = path.join(__dirname, "open-target.vbs");
   if (!fs.existsSync(launcherPath)) {
     throw new Error("Open target launcher not found.");
@@ -2777,6 +3351,7 @@ function openFolder(folderPath) {
 }
 
 function revealFileInExplorer(filePath) {
+  assertLocalOpenAllowed();
   openFileWithDefaultApp(filePath);
 }
 
@@ -2816,11 +3391,12 @@ function runScript(scriptName, params, meta) {
 
   const child = spawn("powershell.exe", args, {
     cwd: ENGINE_ROOT,
-    env: process.env
+    env: getChildProcessEnv()
   });
 
   job.child = child;
   job.childPid = child.pid;
+  persistJobState(job);
 
   child.stdout.on("data", (chunk) => appendJobOutput(job, chunk.toString("utf8")));
   child.stderr.on("data", (chunk) => appendJobOutput(job, chunk.toString("utf8")));
@@ -2851,7 +3427,7 @@ function runPowerShellJson(scriptName, params = []) {
   });
   const result = spawnSync("powershell.exe", args, {
     cwd: ENGINE_ROOT,
-    env: process.env,
+    env: getChildProcessEnv(),
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024
   });
@@ -2895,7 +3471,7 @@ function runDetachedScript(scriptName, params, meta, message = "") {
 
   const child = spawn("powershell.exe", args, {
     cwd: ENGINE_ROOT,
-    env: process.env,
+    env: getChildProcessEnv(),
     detached: true,
     stdio: "ignore"
   });
@@ -2911,6 +3487,10 @@ function toPowerShellSingleQuoted(value) {
 }
 
 function launchScriptInNewConsole(scriptName, params, meta, message = "") {
+  if (isCloudMode()) {
+    return runScript(scriptName, params, meta);
+  }
+
   const scriptPath = path.join(ENGINE_ROOT, scriptName);
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`Script not found: ${scriptName}`);
@@ -2953,7 +3533,7 @@ function launchScriptInNewConsole(scriptName, params, meta, message = "") {
     windowTitle
   ], {
     cwd: __dirname,
-    env: process.env,
+    env: getChildProcessEnv(),
     detached: true,
     stdio: "ignore",
     windowsHide: false
@@ -3046,6 +3626,7 @@ async function handleRun(route, body, res) {
           { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
           { flag: "-MaxTokens", value: body.maxTokens || 6000 },
           { flag: "-AdditionalInstructions", value: body.additionalInstructions || undefined },
+          { flag: "-ReferenceGlossary", type: "switch", enabled: Boolean(body.referenceGlossary) },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
         ], { route, bookName });
         break;
@@ -3382,13 +3963,132 @@ async function handleRun(route, body, res) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  if (req.method === "GET" && url.pathname === "/api/auth/status") {
+    sendJson(res, 200, {
+      authEnabled: isAuthEnabled(),
+      authenticated: !isAuthEnabled() || Boolean(getValidSession(req))
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/login") {
+    try {
+      if (!isAuthEnabled()) {
+        sendJson(res, 200, { authenticated: true, authEnabled: false });
+        return;
+      }
+      if (!ADMIN_PASSWORD) {
+        sendJson(res, 500, { error: "SAGEWRITE_ADMIN_PASSWORD is not set." });
+        return;
+      }
+      const body = await readJsonBody(req, 50_000);
+      const password = typeof body.password === "string" ? body.password : "";
+      if (!safeEqualText(password, ADMIN_PASSWORD)) {
+        sendJson(res, 401, { error: "Invalid password.", authRequired: true });
+        return;
+      }
+      const token = createSession();
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Set-Cookie": `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+      });
+      res.end(JSON.stringify({ authenticated: true, authEnabled: true }));
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    const token = parseCookies(req)[SESSION_COOKIE];
+    if (token) {
+      sessions.delete(token);
+    }
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Set-Cookie": `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
+    });
+    res.end(JSON.stringify({ authenticated: false }));
+    return;
+  }
+
+  if (!requireAuth(req, res, url)) {
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/status") {
     sendJson(res, 200, {
       engineRoot: ENGINE_ROOT,
       clawRoot: CLAW_ROOT,
+      workspaceParentRoot: WORKSPACE_PARENT_ROOT,
+      appMode: APP_MODE,
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
       workspaces: listWorkspaces()
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/health") {
+    try {
+      sendJson(res, 200, buildSystemHealthReport());
+    } catch (error) {
+      sendJson(res, 500, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/objective-md") {
+    try {
+      const body = await readJsonBody(req);
+      const bookName = body.bookName;
+      const objectiveMarkdown = typeof body.objectiveMarkdown === "string" ? body.objectiveMarkdown : null;
+
+      validateBookName(bookName);
+      if (objectiveMarkdown === null) {
+        throw new Error("objectiveMarkdown is required.");
+      }
+
+      const paths = getWorkspacePaths(bookName);
+      const briefRoot = path.join(paths.bookRoot, "00_brief");
+      const objectivePath = path.join(briefRoot, "objective.md");
+
+      ensureDir(briefRoot);
+      fs.writeFileSync(objectivePath, objectiveMarkdown, "utf8");
+
+      sendJson(res, 200, {
+        saved: true,
+        bookName,
+        objectiveContent: objectiveMarkdown,
+        objectiveData: parseFrontMatterMarkdown(objectivePath) || {},
+        objectiveRelativePath: "00_brief/objective.md",
+        objectivePath
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/output-file") {
+    const bookName = url.searchParams.get("bookName");
+    const fileName = url.searchParams.get("fileName");
+
+    try {
+      validateBookName(bookName);
+      const paths = getWorkspacePaths(bookName);
+      const outputPath = resolveOutputDocumentPath(paths, fileName);
+
+      if (!fs.existsSync(outputPath)) {
+        sendJson(res, 404, { error: "Output document not found." });
+        return;
+      }
+
+      sendDiskFile(res, outputPath, path.extname(outputPath).toLowerCase() === ".pdf" ? "inline" : "attachment");
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
     return;
   }
 
@@ -3407,11 +4107,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFilePayload({
+          bookName,
+          fileName
+        }, outputPath, withQuery("/api/output-file", { bookName, fileName })));
+        return;
+      }
+
       openFileWithDefaultApp(outputPath);
       sendJson(res, 200, {
         opened: true,
+        cloudMode: false,
+        mode: APP_MODE,
         bookName,
-        fileName
+        fileName,
+        path: outputPath
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3437,11 +4148,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFolderPayload({
+          bookName,
+          fileName: fileName || ""
+        }, targetFolder));
+        return;
+      }
+
       openFolder(targetFolder);
       sendJson(res, 200, {
         opened: true,
+        cloudMode: false,
+        mode: APP_MODE,
         bookName,
-        fileName: fileName || ""
+        fileName: fileName || "",
+        path: targetFolder
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3464,11 +4186,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFilePayload({
+          bookName,
+          fileName
+        }, outputPath, withQuery("/api/output-file", { bookName, fileName })));
+        return;
+      }
+
       revealFileInExplorer(outputPath);
       sendJson(res, 200, {
         opened: true,
+        cloudMode: false,
+        mode: APP_MODE,
         bookName,
-        fileName
+        fileName,
+        path: outputPath
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3755,12 +4488,24 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFolderPayload({
+          bookName,
+          language,
+          platform
+        }, targetFolder));
+        return;
+      }
+
       openFolder(targetFolder);
       sendJson(res, 200, {
         opened: true,
+        cloudMode: false,
+        mode: APP_MODE,
         bookName,
         language,
-        platform
+        platform,
+        path: targetFolder
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3772,8 +4517,40 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const folderPath = validateAbsoluteFolderPath(body.folderPath);
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFolderPayload({ folderPath }, folderPath));
+        return;
+      }
       openFolder(folderPath);
-      sendJson(res, 200, { opened: true, folderPath });
+      sendJson(res, 200, { opened: true, cloudMode: false, mode: APP_MODE, folderPath, path: folderPath });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/publish-file") {
+    const bookName = url.searchParams.get("bookName");
+    const language = url.searchParams.get("language") || "zh";
+    const platform = url.searchParams.get("platform") || "";
+    const fileName = url.searchParams.get("fileName");
+
+    try {
+      validateBookName(bookName);
+      validateLanguageCode(language);
+      validatePublishPlatform(platform);
+      validatePublishFileName(fileName);
+
+      const paths = getWorkspacePaths(bookName);
+      const targetRoot = resolvePublishSectionRoot(paths, language, platform || "");
+      const targetPath = resolveInside(targetRoot, fileName);
+
+      if (!fs.existsSync(targetPath)) {
+        sendJson(res, 404, { error: "Publish file not found." });
+        return;
+      }
+
+      sendDiskFile(res, targetPath, path.extname(targetPath).toLowerCase() === ".pdf" ? "inline" : "attachment");
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
@@ -3795,25 +4572,33 @@ const server = http.createServer(async (req, res) => {
 
       const paths = getWorkspacePaths(bookName);
       const targetRoot = resolvePublishSectionRoot(paths, language, platform || "");
-      const targetPath = path.join(targetRoot, path.basename(fileName));
-
-      if (!targetPath.startsWith(targetRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const targetPath = resolveInside(targetRoot, fileName);
 
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "Publish file not found." });
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFilePayload({
+          bookName,
+          language,
+          platform,
+          fileName
+        }, targetPath, withQuery("/api/publish-file", { bookName, language, platform, fileName })));
+        return;
+      }
+
       revealFileInExplorer(targetPath);
       sendJson(res, 200, {
         opened: true,
+        cloudMode: false,
+        mode: APP_MODE,
         bookName,
         language,
         platform,
-        fileName
+        fileName,
+        path: targetPath
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3836,25 +4621,33 @@ const server = http.createServer(async (req, res) => {
 
       const paths = getWorkspacePaths(bookName);
       const targetRoot = resolvePublishSectionRoot(paths, language, platform || "");
-      const targetPath = path.join(targetRoot, path.basename(fileName));
-
-      if (!targetPath.startsWith(targetRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const targetPath = resolveInside(targetRoot, fileName);
 
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "Publish file not found." });
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFilePayload({
+          bookName,
+          language,
+          platform,
+          fileName
+        }, targetPath, withQuery("/api/publish-file", { bookName, language, platform, fileName })));
+        return;
+      }
+
       openFileWithDefaultApp(targetPath);
       sendJson(res, 200, {
         opened: true,
+        cloudMode: false,
+        mode: APP_MODE,
         bookName,
         language,
         platform,
-        fileName
+        fileName,
+        path: targetPath
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3891,14 +4684,31 @@ const server = http.createServer(async (req, res) => {
       });
 
       fs.writeFileSync(outputPath, markdown, "utf8");
-      openFileWithDefaultApp(outputPath);
+
+      const downloadUrl = withQuery("/api/publish-file", {
+        bookName,
+        language,
+        platform: "kobo",
+        fileName: "kobo_account_basic_info.md"
+      });
+      if (!isCloudMode()) {
+        openFileWithDefaultApp(outputPath);
+      }
 
       sendJson(res, 200, {
         generated: true,
+        opened: !isCloudMode(),
+        cloudMode: isCloudMode(),
+        mode: APP_MODE,
         bookName,
         language,
         fileName: "kobo_account_basic_info.md",
-        relativePath: path.relative(paths.bookRoot, outputPath)
+        relativePath: path.relative(paths.bookRoot, outputPath),
+        path: outputPath,
+        downloadUrl,
+        message: isCloudMode()
+          ? "云端模式不会打开服务器桌面；请使用浏览器下载/预览链接。"
+          : "Kobo basic info file opened."
       });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -3923,14 +4733,38 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/jobs/active") {
+    const bookName = url.searchParams.get("bookName") || "";
+    try {
+      if (bookName) {
+        validateBookName(bookName);
+      }
+      const job = findRunningJob(bookName);
+      sendJson(res, 200, {
+        job: job ? serializeJob(job) : null
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname.startsWith("/api/jobs/")) {
     const jobId = url.pathname.split("/").pop();
-    const job = jobs.get(jobId);
-    if (!job) {
-      sendJson(res, 404, { error: "Job not found." });
-      return;
+    const bookName = url.searchParams.get("bookName") || "";
+    try {
+      if (bookName) {
+        validateBookName(bookName);
+      }
+      const job = jobs.get(jobId) || readPersistedJobById(jobId, bookName);
+      if (!job) {
+        sendJson(res, 404, { error: "Job not found." });
+        return;
+      }
+      sendJson(res, 200, jobs.has(jobId) ? serializeJob(job) : job);
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
     }
-    sendJson(res, 200, job);
     return;
   }
 
@@ -4032,13 +4866,9 @@ const server = http.createServer(async (req, res) => {
       validateBookName(bookName);
       const paths = getWorkspacePaths(bookName);
       const chapterRoot = path.join(paths.bookRoot, "02_chapters");
-      const safeFileName = path.basename(fileName);
-      const targetPath = path.join(chapterRoot, safeFileName);
-
-      if (!targetPath.startsWith(chapterRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      validateChapterFileName(fileName);
+      const safeFileName = fileName;
+      const targetPath = resolveInside(chapterRoot, safeFileName);
 
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "Chapter file not found." });
@@ -4076,13 +4906,9 @@ const server = http.createServer(async (req, res) => {
       validateBookName(bookName);
       const paths = getWorkspacePaths(bookName);
       const chapterRoot = path.join(paths.bookRoot, "02_chapters");
-      const safeFileName = path.basename(fileName);
-      const targetPath = path.join(chapterRoot, safeFileName);
-
-      if (!targetPath.startsWith(chapterRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      validateChapterFileName(fileName);
+      const safeFileName = fileName;
+      const targetPath = resolveInside(chapterRoot, safeFileName);
 
       ensureDir(chapterRoot);
       fs.writeFileSync(targetPath, content, "utf8");
@@ -4110,14 +4936,10 @@ const server = http.createServer(async (req, res) => {
 
     try {
       validateBookName(bookName);
-      const safeFileName = path.basename(fileName);
+      validateWebRunOutputFileName(fileName);
+      const safeFileName = fileName;
       const paths = getWorkspacePaths(bookName);
-      const targetPath = path.join(paths.webRunRoot, safeFileName);
-
-      if (!targetPath.startsWith(paths.webRunRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const targetPath = resolveInside(paths.webRunRoot, safeFileName);
 
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "Run output not found." });
@@ -4240,7 +5062,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "Content-Type": resolved.ext === ".pdf" ? "application/pdf" : "image/png",
         "Cache-Control": "no-store",
-        "Content-Disposition": `inline; filename="${path.basename(resolved.targetPath).replace(/"/g, "")}"`
+        "Content-Disposition": contentDispositionHeader(resolved.targetPath, "inline")
       });
       res.end(fs.readFileSync(resolved.targetPath));
     } catch (error) {
@@ -4267,7 +5089,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "Content-Type": "application/pdf",
         "Cache-Control": "no-store",
-        "Content-Disposition": `inline; filename="${path.basename(resolved.targetPath).replace(/"/g, "")}"`
+        "Content-Disposition": contentDispositionHeader(resolved.targetPath, "inline")
       });
       res.end(fs.readFileSync(resolved.targetPath));
     } catch (error) {
@@ -4367,11 +5189,7 @@ const server = http.createServer(async (req, res) => {
 
       const safeOriginalName = sanitizeImportedPdfFileName(originalName);
       const fileName = getUniqueFileName(acceptanceRoot, safeOriginalName);
-      const targetPath = path.resolve(acceptanceRoot, fileName);
-      const rootResolved = path.resolve(acceptanceRoot);
-      if (!targetPath.startsWith(rootResolved + path.sep)) {
-        throw new Error("Invalid PDF target path.");
-      }
+      const targetPath = resolveInside(acceptanceRoot, fileName);
 
       fs.writeFileSync(targetPath, buffer);
       const spec = buildKdpPaperbackCoverSpec({
@@ -4439,11 +5257,7 @@ const server = http.createServer(async (req, res) => {
       ensureDir(acceptanceRoot);
       const safeOriginalName = sanitizeImportedImageFileName(originalName, ".png");
       const fileName = getUniqueFileName(acceptanceRoot, safeOriginalName);
-      const targetPath = path.resolve(acceptanceRoot, fileName);
-      const rootResolved = path.resolve(acceptanceRoot);
-      if (!targetPath.startsWith(rootResolved + path.sep)) {
-        throw new Error("Invalid PNG target path.");
-      }
+      const targetPath = resolveInside(acceptanceRoot, fileName);
       fs.writeFileSync(targetPath, buffer);
       const currentSource = writeKdpCurrentSource(acceptanceRoot, buildKdpCurrentSource({
         type: "PNG",
@@ -5080,12 +5894,7 @@ const server = http.createServer(async (req, res) => {
       const paths = getWorkspacePaths(bookName);
       const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
       const targetRoot = path.join(getKdpFixWorkbenchRoot(acceptanceRoot), "pdfs");
-      const targetPath = path.resolve(targetRoot, safeFileName);
-      const rootResolved = path.resolve(targetRoot);
-      if (!targetPath.startsWith(rootResolved + path.sep)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const targetPath = resolveInside(targetRoot, safeFileName);
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "KDP fix PDF not found." });
         return;
@@ -5093,7 +5902,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "Content-Type": "application/pdf",
         "Cache-Control": "no-store",
-        "Content-Disposition": `inline; filename="${path.basename(targetPath).replace(/"/g, "")}"`
+        "Content-Disposition": contentDispositionHeader(targetPath, "inline")
       });
       res.end(fs.readFileSync(targetPath));
     } catch (error) {
@@ -5116,19 +5925,15 @@ const server = http.createServer(async (req, res) => {
       const acceptanceRoot = getKdpAcceptanceRoot(paths.bookRoot);
       const kindFolder = kind === "crop" ? "crops" : kind === "fill" ? "fills" : kind === "composite" ? "composites" : kind;
       const targetRoot = path.join(getKdpFixWorkbenchRoot(acceptanceRoot), kindFolder);
-      const targetPath = path.resolve(targetRoot, safeFileName);
-      const rootResolved = path.resolve(targetRoot);
-      if (!targetPath.startsWith(rootResolved + path.sep)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const targetPath = resolveInside(targetRoot, safeFileName);
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "KDP fix image not found." });
         return;
       }
       res.writeHead(200, {
         "Content-Type": getImageMimeTypeByPath(targetPath),
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store",
+        "Content-Disposition": contentDispositionHeader(targetPath, "inline")
       });
       res.end(fs.readFileSync(targetPath));
     } catch (error) {
@@ -5285,8 +6090,8 @@ const server = http.createServer(async (req, res) => {
         if (!/\.(png|jpg|jpeg|webp)$/i.test(selectedImportFile)) {
           throw new Error("Selected import must be an image file.");
         }
-        const selectedPath = path.join(importRoot, selectedImportFile);
-        if (!selectedPath.startsWith(importRoot) || !fs.existsSync(selectedPath)) {
+        const selectedPath = resolveInside(importRoot, selectedImportFile);
+        if (!fs.existsSync(selectedPath)) {
           throw new Error("Selected import image not found.");
         }
         nextState.selected_import_file = selectedImportFile;
@@ -5393,17 +6198,14 @@ const server = http.createServer(async (req, res) => {
       const importRoot = path.join(paths.bookRoot, "07_cover", "next", edition, "imports");
       ensureDir(importRoot);
       let fileName = `imported-base-${stamp}-${safeOriginalName}`;
-      let targetPath = path.resolve(importRoot, fileName);
+      let targetPath = resolveInside(importRoot, fileName);
       let suffix = 2;
       while (fs.existsSync(targetPath)) {
         const ext = path.extname(fileName);
         const stem = path.basename(fileName, ext);
         fileName = `${stem}-${suffix}${ext}`;
-        targetPath = path.resolve(importRoot, fileName);
+        targetPath = resolveInside(importRoot, fileName);
         suffix += 1;
-      }
-      if (!targetPath.startsWith(path.resolve(importRoot) + path.sep)) {
-        throw new Error("Invalid image target path.");
       }
 
       fs.writeFileSync(targetPath, buffer);
@@ -5621,13 +6423,8 @@ const server = http.createServer(async (req, res) => {
       validateAssetFileName(fileName);
       const paths = getWorkspacePaths(bookName);
       const sectionRoot = resolveCoverSectionRoot(paths, section);
-      const safeFileName = path.basename(fileName);
-      const targetPath = path.join(sectionRoot, safeFileName);
-
-      if (!targetPath.startsWith(sectionRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const safeFileName = fileName;
+      const targetPath = resolveInside(sectionRoot, safeFileName);
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "Cover asset not found." });
         return;
@@ -5644,7 +6441,8 @@ const server = http.createServer(async (req, res) => {
 
       res.writeHead(200, {
         "Content-Type": mime,
-        "Cache-Control": "no-store"
+        "Cache-Control": "no-store",
+        "Content-Disposition": contentDispositionHeader(targetPath, "inline")
       });
       res.end(fs.readFileSync(targetPath));
     } catch (error) {
@@ -5667,8 +6465,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFolderPayload({ bookName, section }, sectionRoot));
+        return;
+      }
+
       openFolder(sectionRoot);
-      sendJson(res, 200, { opened: true, bookName, section });
+      sendJson(res, 200, { opened: true, cloudMode: false, mode: APP_MODE, bookName, section, path: sectionRoot });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
@@ -5686,19 +6489,23 @@ const server = http.createServer(async (req, res) => {
       validateAssetFileName(fileName);
       const paths = getWorkspacePaths(bookName);
       const sectionRoot = resolveCoverSectionRoot(paths, section);
-      const targetPath = path.join(sectionRoot, path.basename(fileName));
-
-      if (!targetPath.startsWith(sectionRoot)) {
-        sendJson(res, 403, { error: "Forbidden." });
-        return;
-      }
+      const targetPath = resolveInside(sectionRoot, fileName);
       if (!fs.existsSync(targetPath)) {
         sendJson(res, 404, { error: "Cover file not found." });
         return;
       }
 
+      if (isCloudMode()) {
+        sendJson(res, 200, cloudFilePayload({
+          bookName,
+          section,
+          fileName
+        }, targetPath, withQuery("/api/cover-image", { bookName, section, fileName })));
+        return;
+      }
+
       revealFileInExplorer(targetPath);
-      sendJson(res, 200, { opened: true, bookName, section, fileName });
+      sendJson(res, 200, { opened: true, cloudMode: false, mode: APP_MODE, bookName, section, fileName, path: targetPath });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
@@ -5724,6 +6531,6 @@ const server = http.createServer(async (req, res) => {
   sendJson(res, 405, { error: "Method not allowed." });
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`SageWrite Web UI running at http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`SageWrite Web UI running at http://${HOST}:${PORT}`);
 });

@@ -52,7 +52,10 @@ const state = {
   },
   kdpFixWorkbench: {},
   activeFlowTarget: "project",
-  suppressFlowSync: false
+  suppressFlowSync: false,
+  appMode: "local",
+  currentJobBookName: "",
+  health: null
 };
 
 const PDFJS_MODULE_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
@@ -68,6 +71,7 @@ const WRITE_WORKBENCH_STORAGE_KEY = "sagewrite-write-workbench-open";
 const TRANSLATE_WORKBENCH_STORAGE_KEY = "sagewrite-translate-workbench-open";
 const REFINE_WORKBENCH_STORAGE_KEY = "sagewrite-refine-workbench-open";
 const CHECK_WORKBENCH_STORAGE_KEY = "sagewrite-check-workbench-open";
+const CHECK_PANEL_STORAGE_KEY = "sagewrite-check-panel-expanded";
 const COVER_METADATA_WORKBENCH_STORAGE_KEY = "sagewrite-cover-metadata-workbench-open";
 const COVER_VISUAL_WORKBENCH_STORAGE_KEY = "sagewrite-cover-visual-workbench-open";
 const COVER_OPERATIONS_WORKBENCH_STORAGE_KEY = "sagewrite-cover-operations-workbench-open";
@@ -78,6 +82,7 @@ const COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-img-black
 const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
 const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
 const SELECTED_BOOKNAME_STORAGE_KEY = "sagewrite-selected-bookname";
+const CURRENT_JOB_STORAGE_KEY = "sagewrite-current-job";
 const DEFAULT_MODEL_STORAGE_KEY = "sagewrite-default-model-name";
 const PUBLISH_PANEL_STORAGE_KEY = "sagewrite-publish-panel-expanded";
 const PUBLISH_PREVIEW_COLUMN_STORAGE_KEY = "sagewrite-publish-preview-column-expanded";
@@ -94,7 +99,7 @@ const FLOW_WORKBENCHES = [
   { id: "write", selector: "#write-workbench-shell", section: '[data-flow-section="write"]' },
   { id: "translate", selector: "#translate-workbench-shell", section: '[data-flow-section="translate"]' },
   { id: "refine", selector: "#refine-workbench-shell", section: '[data-flow-section="refine"]' },
-  { id: "check", selector: "#check-workbench-shell", section: '[data-flow-section="check"]' },
+  { id: "check", selector: null, section: '[data-flow-section="check"]', panel: "check" },
   { id: "build", selector: "#build-workbench-shell", section: '[data-flow-section="build"]' },
   { id: "cover", selector: "#cover-metadata-shell", section: '[data-flow-section="cover"]', panel: "cover" },
   { id: "publish", selector: null, section: '[data-flow-section="publish"]', panel: "publish" }
@@ -189,6 +194,38 @@ function getRememberedBookName() {
   return String(localStorage.getItem(SELECTED_BOOKNAME_STORAGE_KEY) || "").trim();
 }
 
+function rememberCurrentJob(jobId, bookName = "") {
+  const value = {
+    jobId: String(jobId || "").trim(),
+    bookName: String(bookName || "").trim(),
+    savedAt: new Date().toISOString()
+  };
+  if (!value.jobId) {
+    localStorage.removeItem(CURRENT_JOB_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(CURRENT_JOB_STORAGE_KEY, JSON.stringify(value));
+}
+
+function getRememberedCurrentJob() {
+  try {
+    const value = JSON.parse(localStorage.getItem(CURRENT_JOB_STORAGE_KEY) || "null");
+    return {
+      jobId: String(value?.jobId || "").trim(),
+      bookName: String(value?.bookName || "").trim()
+    };
+  } catch {
+    return { jobId: "", bookName: "" };
+  }
+}
+
+function clearRememberedCurrentJob(jobId = "") {
+  const remembered = getRememberedCurrentJob();
+  if (!jobId || !remembered.jobId || remembered.jobId === jobId) {
+    localStorage.removeItem(CURRENT_JOB_STORAGE_KEY);
+  }
+}
+
 function getStoredDefaultModelName() {
   return String(localStorage.getItem(DEFAULT_MODEL_STORAGE_KEY) || "gpt-5.2").trim() || "gpt-5.2";
 }
@@ -234,6 +271,24 @@ function setCoverPanelExpanded(expanded) {
   toggle.textContent = expanded ? "收起" : "展开";
   toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
   localStorage.setItem(COVER_PANEL_STORAGE_KEY, expanded ? "1" : "0");
+}
+
+function setCheckPanelExpanded(expanded) {
+  const panel = document.querySelector(".check-panel");
+  const toggle = $("#toggle-check-panel");
+  if (!panel || !toggle) {
+    return;
+  }
+
+  panel.classList.toggle("collapsed", !expanded);
+  toggle.textContent = expanded ? "收起" : "展开";
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  localStorage.setItem(CHECK_PANEL_STORAGE_KEY, expanded ? "1" : "0");
+}
+
+function initCheckPanelState() {
+  const stored = localStorage.getItem(CHECK_PANEL_STORAGE_KEY);
+  setCheckPanelExpanded(stored === "1");
 }
 
 function initCoverPanelState() {
@@ -327,6 +382,7 @@ function activateFlowWorkbench(targetId = "project", options = {}) {
     setFlowDetailsOpen(target, true);
   }
 
+  setCheckPanelExpanded(target.panel === "check");
   setCoverPanelExpanded(target.panel === "cover");
   setPublishPanelExpanded(target.panel === "publish");
 
@@ -931,9 +987,126 @@ async function api(path, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401 && data.authRequired) {
+      window.location.href = "/login.html";
+      return null;
+    }
     throw new Error(data.error || "请求失败。");
   }
   return data;
+}
+
+function handleOpenTargetResult(result, localMessage) {
+  if (!result) {
+    return;
+  }
+  if (result.cloudMode) {
+    let downloadUrl = result.downloadUrl || "";
+    if (downloadUrl) {
+      downloadUrl = new URL(downloadUrl, window.location.href).href;
+      window.open(downloadUrl, "_blank", "noopener");
+    }
+    const lines = [
+      result.message || "云端模式不会打开服务器桌面。"
+    ];
+    if (result.path) {
+      lines.push(`路径：${result.path}`);
+    }
+    if (downloadUrl) {
+      lines.push(`下载/预览：${downloadUrl}`);
+    }
+    setStatusBadge(downloadUrl ? "已生成链接" : "已定位", "success");
+    setLog(lines.join("\n"));
+    return;
+  }
+  setStatusBadge("已打开", "success");
+  setLog(localMessage);
+}
+
+function isCloudAppMode() {
+  return state.appMode === "cloud";
+}
+
+function getHealthSummaryText(summary) {
+  if (summary === "pass") return "通过";
+  if (summary === "warn") return "有警告";
+  if (summary === "fail") return "有失败";
+  return "未检查";
+}
+
+function getHealthStatusText(status) {
+  if (status === "pass") return "通过";
+  if (status === "warn") return "警告";
+  if (status === "fail") return "失败";
+  return "未知";
+}
+
+function renderSystemHealth(health) {
+  const card = $("#system-health-card");
+  const summary = $("#system-health-summary");
+  const detail = $("#system-health-detail");
+  const list = $("#system-health-list");
+  if (!card || !summary || !detail || !list) {
+    return;
+  }
+
+  if (!health) {
+    card.dataset.health = "idle";
+    summary.textContent = "未检查";
+    detail.textContent = "检查 PowerShell、ImageMagick、Pandoc、OpenAI Key 和工作区权限。";
+    list.innerHTML = "";
+    return;
+  }
+
+  card.dataset.health = health.summary || "idle";
+  summary.textContent = getHealthSummaryText(health.summary);
+  detail.textContent = `通过 ${health.passCount || 0} 项，警告 ${health.warnCount || 0} 项，失败 ${health.failCount || 0} 项 · ${health.generatedAt || ""}`;
+  const visibleChecks = (health.checks || []).filter((item) => item.status !== "pass");
+  const checks = visibleChecks.length ? visibleChecks : (health.checks || []).slice(0, 4);
+  list.innerHTML = checks.map((item) => `
+    <div class="system-health-item is-${escapeHtml(item.status || "unknown")}">
+      <b>${escapeHtml(getHealthStatusText(item.status))}</b>
+      <span>${escapeHtml(item.label || item.id || "-")}：${escapeHtml(item.message || "")}</span>
+    </div>
+  `).join("");
+}
+
+async function refreshSystemHealth() {
+  const button = $("#refresh-health");
+  const summary = $("#system-health-summary");
+  if (button) {
+    button.disabled = true;
+  }
+  if (summary) {
+    summary.textContent = "检查中";
+  }
+  try {
+    const health = await api("/api/health");
+    state.health = health;
+    renderSystemHealth(health);
+    return health;
+  } catch (error) {
+    const failedHealth = {
+      summary: "fail",
+      passCount: 0,
+      warnCount: 0,
+      failCount: 1,
+      generatedAt: "",
+      checks: [{
+        id: "healthEndpoint",
+        label: "健康检查接口",
+        status: "fail",
+        message: error.message
+      }]
+    };
+    state.health = failedHealth;
+    renderSystemHealth(failedHealth);
+    throw error;
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
 }
 
 function renderTocPreview(item) {
@@ -1054,6 +1227,71 @@ function renderIntakePreview(item) {
   setFormValue('#intake-form [name="scope"]', objective.scope || "");
   setFormValue('#intake-form [name="style"]', objective.style || "");
   updateIntakeActionState(item);
+  renderObjectiveMarkdownEditor(item);
+}
+
+function renderObjectiveMarkdownEditor(item) {
+  const editor = $("#objective-md-editor");
+  const pathLabel = $("#objective-md-path");
+  const saveButton = $("#save-objective-md");
+  const status = $("#objective-md-status");
+
+  if (!editor || !pathLabel || !saveButton || !status) {
+    return;
+  }
+
+  if (!item) {
+    editor.value = "选择一个已有项目后，这里会显示 objective.md 内容。";
+    editor.disabled = true;
+    saveButton.disabled = true;
+    pathLabel.textContent = "选择一个 BookName 后，这里会显示 objective.md 路径。";
+    status.textContent = "尚未加载 objective.md";
+    return;
+  }
+
+  editor.disabled = false;
+  saveButton.disabled = false;
+  editor.value = item.objectiveContent || "";
+  pathLabel.textContent = `文件：${item.objectiveRelativePath || "00_brief/objective.md"}`;
+  status.textContent = item.hasObjective ? "已加载 objective.md，可直接编辑后保存。" : "当前项目还没有 objective.md，保存后会创建。";
+}
+
+async function saveObjectiveMarkdown() {
+  const bookName = requireBookName();
+  const editor = $("#objective-md-editor");
+  const status = $("#objective-md-status");
+
+  if (!editor || editor.disabled) {
+    throw new Error("当前没有可保存的 objective.md。");
+  }
+
+  if (status) {
+    status.textContent = "正在保存 objective.md...";
+  }
+
+  const result = await api("/api/objective-md", {
+    method: "POST",
+    body: JSON.stringify({
+      bookName,
+      objectiveMarkdown: editor.value || ""
+    })
+  });
+
+  const selected = state.workspaces.find((item) => item.bookName === bookName);
+  if (selected) {
+    selected.hasObjective = true;
+    selected.objectiveContent = result.objectiveContent || editor.value || "";
+    selected.objectiveData = result.objectiveData || selected.objectiveData || {};
+    selected.objectiveRelativePath = result.objectiveRelativePath || "00_brief/objective.md";
+    renderWorkspaceSelection(selected);
+  }
+
+  await refreshStatus();
+  setStatusBadge("已保存", "success");
+  setLog(`objective.md 已保存：${result.objectiveRelativePath || "00_brief/objective.md"}`);
+  if (status) {
+    status.textContent = `已保存：${result.objectiveRelativePath || "00_brief/objective.md"}`;
+  }
 }
 
 function renderPreflightReport(item) {
@@ -1146,7 +1384,7 @@ function renderCoverGallerySection(targetId, bookName, section, files) {
     button.addEventListener("click", async () => {
       try {
         const currentBookName = requireBookName();
-        await api("/api/reveal-cover-file", {
+        const result = await api("/api/reveal-cover-file", {
           method: "POST",
           body: JSON.stringify({
             bookName: currentBookName,
@@ -1154,8 +1392,7 @@ function renderCoverGallerySection(targetId, bookName, section, files) {
             fileName: button.dataset.coverFile
           })
         });
-        setStatusBadge("已打开", "success");
-        setLog(`已打开封面文件：${button.dataset.coverFile}`);
+        handleOpenTargetResult(result, `已打开封面文件：${button.dataset.coverFile}`);
       } catch (error) {
         setStatusBadge("失败", "failed");
         setLog(error.message);
@@ -3612,8 +3849,20 @@ async function refreshKdpAcceptanceFileList() {
 
 async function openKdpAcceptanceDirectoryAndList() {
   const bookName = requireBookName();
-  setStatusBadge("打开中", "running");
-  setLog("Opening KDP acceptance directory with kdp-acceptance-files.ps1...");
+  setStatusBadge(isCloudAppMode() ? "定位中" : "打开中", "running");
+  setLog(isCloudAppMode()
+    ? "云端模式不会打开服务器资源管理器，正在刷新 KDP 验收目录列表..."
+    : "Opening KDP acceptance directory with kdp-acceptance-files.ps1...");
+  if (isCloudAppMode()) {
+    const result = await refreshKdpAcceptanceFileList();
+    setStatusBadge("已定位", "success");
+    setLog([
+      "云端模式不会打开服务器资源管理器；已刷新 KDP 验收目录列表。",
+      `路径：${result.acceptanceRoot || ""}`,
+      `文件数：${(result.files || []).length}`
+    ].join("\n"));
+    return;
+  }
   await run("kdp-acceptance-files", {
     bookName,
     action: "OpenDirectory"
@@ -5313,19 +5562,18 @@ function renderPublishOpenPaths(item, publish, language = getPublishLanguage(), 
 }
 
 async function openPublishRootFolder() {
-  await api("/api/open-publish-folder", {
+  const result = await api("/api/open-publish-folder", {
     method: "POST",
     body: JSON.stringify({
       bookName: requireBookName(),
       language: getPublishLanguage()
     })
   });
-  setStatusBadge("已打开", "success");
-  setLog(`已打开 09_publish/${getPublishLanguage()} 目录。`);
+  handleOpenTargetResult(result, `已打开 09_publish/${getPublishLanguage()} 目录。`);
 }
 
 async function openPublishPlatformFolder() {
-  await api("/api/open-publish-folder", {
+  const result = await api("/api/open-publish-folder", {
     method: "POST",
     body: JSON.stringify({
       bookName: requireBookName(),
@@ -5333,12 +5581,11 @@ async function openPublishPlatformFolder() {
       platform: getPublishPreviewPlatform()
     })
   });
-  setStatusBadge("已打开", "success");
-  setLog(`已打开 ${getPublishPreviewPlatform()} 平台目录。`);
+  handleOpenTargetResult(result, `已打开 ${getPublishPreviewPlatform()} 平台目录。`);
 }
 
 async function openPublishPlatformFolderFor(platformName) {
-  await api("/api/open-publish-folder", {
+  const result = await api("/api/open-publish-folder", {
     method: "POST",
     body: JSON.stringify({
       bookName: requireBookName(),
@@ -5346,8 +5593,7 @@ async function openPublishPlatformFolderFor(platformName) {
       platform: platformName
     })
   });
-  setStatusBadge("已打开", "success");
-  setLog(`已打开 ${getPublishPlatformLabel(platformName)} 平台目录。`);
+  handleOpenTargetResult(result, `已打开 ${getPublishPlatformLabel(platformName)} 平台目录。`);
 }
 
 function findPublishPlatformFile(platformData, predicate) {
@@ -5430,7 +5676,7 @@ async function openPublishAsset(platformName, action) {
     return;
   }
 
-  await api("/api/open-publish-file", {
+  const result = await api("/api/open-publish-file", {
     method: "POST",
     body: JSON.stringify({
       bookName: requireBookName(),
@@ -5439,8 +5685,7 @@ async function openPublishAsset(platformName, action) {
       fileName: target.fileName
     })
   });
-  setStatusBadge("已打开", "success");
-  setLog(`已打开 ${target.label}。`);
+  handleOpenTargetResult(result, `已打开 ${target.label}。`);
 }
 
 async function saveAmazonDescription() {
@@ -6091,19 +6336,81 @@ function renderWorkspaces(workspaces) {
 
 async function refreshStatus() {
   const status = await api("/api/status");
+  state.appMode = status.appMode || "local";
   $("#workspace-count").textContent = String(status.workspaces.length);
   setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
 }
 
-async function pollJob(jobId) {
+async function restoreActiveJob() {
+  if (state.currentJobId) {
+    return;
+  }
+
+  const remembered = getRememberedCurrentJob();
+  if (remembered.jobId) {
+    try {
+      const query = remembered.bookName ? `?bookName=${encodeURIComponent(remembered.bookName)}` : "";
+      const job = await api(`/api/jobs/${remembered.jobId}${query}`);
+      if (job?.status === "running") {
+        state.currentJobId = job.id;
+        state.currentJobBookName = job.meta?.bookName || remembered.bookName || "";
+        setStatusBadge("运行中", "running");
+        setLog(job.output || "已恢复正在运行的任务。");
+        updateCancelJobButton(true);
+        pollJob(job.id, state.currentJobBookName).catch((error) => {
+          setStatusBadge("失败", "failed");
+          setLog(error.message);
+          clearRememberedCurrentJob(job.id);
+          updateCancelJobButton(false);
+        });
+        return;
+      }
+      clearRememberedCurrentJob(remembered.jobId);
+    } catch {
+      clearRememberedCurrentJob(remembered.jobId);
+    }
+  }
+
+  const bookName = getBookName();
+  if (!bookName) {
+    return;
+  }
+
+  try {
+    const result = await api(`/api/jobs/active?bookName=${encodeURIComponent(bookName)}`);
+    const job = result?.job;
+    if (!job?.id || job.status !== "running") {
+      return;
+    }
+    state.currentJobId = job.id;
+    state.currentJobBookName = job.meta?.bookName || bookName;
+    rememberCurrentJob(job.id, state.currentJobBookName);
+    setStatusBadge("运行中", "running");
+    setLog(job.output || "已恢复正在运行的任务。");
+    updateCancelJobButton(true);
+    pollJob(job.id, state.currentJobBookName).catch((error) => {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+      clearRememberedCurrentJob(job.id);
+      updateCancelJobButton(false);
+    });
+  } catch {
+    // Active-job recovery is best-effort; the normal status view still works without it.
+  }
+}
+
+async function pollJob(jobId, bookName = "") {
   if (state.pollTimer) {
     clearTimeout(state.pollTimer);
     state.pollTimer = null;
   }
 
-  const job = await api(`/api/jobs/${jobId}`);
+  const query = bookName ? `?bookName=${encodeURIComponent(bookName)}` : "";
+  const job = await api(`/api/jobs/${jobId}${query}`);
   state.currentJobId = job.id;
+  state.currentJobBookName = job.meta?.bookName || bookName || "";
+  rememberCurrentJob(job.id, state.currentJobBookName);
   setLog(job.output);
 
   if (job.status === "running") {
@@ -6112,12 +6419,15 @@ async function pollJob(jobId) {
     await new Promise((resolve) => {
       state.pollTimer = setTimeout(resolve, 1200);
     });
-    return pollJob(jobId);
+    return pollJob(jobId, state.currentJobBookName);
   }
 
   updateCancelJobButton(false);
+  clearRememberedCurrentJob(job.id);
+  state.currentJobId = null;
+  state.currentJobBookName = "";
   setStatusBadge(
-    job.status === "success" ? "成功" : job.status === "cancelled" ? "已停止" : "失败",
+    job.status === "success" ? "成功" : job.status === "cancelled" ? "已停止" : job.status === "lost" ? "任务丢失" : "失败",
     job.status === "success" ? "success" : job.status === "cancelled" ? "idle" : "failed"
   );
   if (job.meta?.route === "edit" && job.meta?.bookName) {
@@ -6169,8 +6479,10 @@ async function run(route, payload) {
     body: JSON.stringify(payload)
   });
   state.currentJobId = result.jobId;
+  state.currentJobBookName = payload?.bookName || getBookName();
+  rememberCurrentJob(result.jobId, state.currentJobBookName);
   updateCancelJobButton(true);
-  return await pollJob(result.jobId);
+  return await pollJob(result.jobId, state.currentJobBookName);
 }
 
 async function cancelCurrentJob() {
@@ -6195,6 +6507,9 @@ async function cancelCurrentJob() {
   state.currentJobId = result.job?.id || jobId;
   setLog(result.job?.output || "当前任务已停止。");
   setStatusBadge("已停止", "idle");
+  clearRememberedCurrentJob(jobId);
+  state.currentJobId = null;
+  state.currentJobBookName = "";
   await refreshStatus();
 }
 
@@ -6664,6 +6979,26 @@ function setupForms() {
     updateIntakeActionState();
   });
 
+  $("#objective-md-editor")?.addEventListener("input", () => {
+    const status = $("#objective-md-status");
+    if (status && !$("#objective-md-editor")?.disabled) {
+      status.textContent = "objective.md 已修改，尚未保存。";
+    }
+  });
+
+  $("#save-objective-md")?.addEventListener("click", async () => {
+    try {
+      await saveObjectiveMarkdown();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+      const status = $("#objective-md-status");
+      if (status) {
+        status.textContent = `保存失败：${error.message}`;
+      }
+    }
+  });
+
   $("#structure-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -6894,15 +7229,14 @@ function setupForms() {
     }
 
     try {
-      await api("/api/open-output-folder", {
+      const result = await api("/api/open-output-folder", {
         method: "POST",
         body: JSON.stringify({
           bookName: requireBookName(),
           fileName: button.dataset.outputFolderFile || ""
         })
       });
-      setStatusBadge("已打开", "success");
-      setLog(`已打开生成文件夹：${button.dataset.outputFolderFile || ""}`);
+      handleOpenTargetResult(result, `已打开生成文件夹：${button.dataset.outputFolderFile || ""}`);
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -7043,15 +7377,7 @@ function setupForms() {
 
   $("#open-publish-root").addEventListener("click", async () => {
     try {
-      await api("/api/open-publish-folder", {
-        method: "POST",
-        body: JSON.stringify({
-          bookName: requireBookName(),
-          language: getPublishLanguage()
-        })
-      });
-      setStatusBadge("已打开", "success");
-      setLog(`已打开 09_publish/${getPublishLanguage()} 目录。`);
+      await openPublishRootFolder();
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -7060,16 +7386,7 @@ function setupForms() {
 
   $("#open-publish-platform").addEventListener("click", async () => {
     try {
-      await api("/api/open-publish-folder", {
-        method: "POST",
-        body: JSON.stringify({
-          bookName: requireBookName(),
-          language: getPublishLanguage(),
-          platform: getPublishPreviewPlatform()
-        })
-      });
-      setStatusBadge("已打开", "success");
-      setLog(`已打开 ${getPublishPreviewPlatform()} 平台目录。`);
+      await openPublishPlatformFolder();
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -7131,15 +7448,14 @@ function setupForms() {
 
   $("#generate-kobo-account-md")?.addEventListener("click", async () => {
     try {
-      await api("/api/generate-kobo-account-md", {
+      const result = await api("/api/generate-kobo-account-md", {
         method: "POST",
         body: JSON.stringify({
           bookName: requireBookName(),
           language: getPublishLanguage()
         })
       });
-      setStatusBadge("已生成", "success");
-      setLog("已生成并打开 Kobo 开户基本情况 MD。");
+      handleOpenTargetResult(result, "已生成并打开 Kobo 开户基本情况 MD。");
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -7209,6 +7525,21 @@ function setupForms() {
     const panel = document.querySelector(".cover-panel");
     const currentlyExpanded = panel ? !panel.classList.contains("collapsed") : false;
     setCoverPanelExpanded(!currentlyExpanded);
+  });
+
+  $("#toggle-check-panel")?.addEventListener("click", () => {
+    const panel = document.querySelector(".check-panel");
+    const currentlyExpanded = panel ? !panel.classList.contains("collapsed") : false;
+    setCheckPanelExpanded(!currentlyExpanded);
+  });
+
+  $(".check-panel .panel-header")?.addEventListener("click", (event) => {
+    if (event.target?.closest?.("button")) {
+      return;
+    }
+    const panel = document.querySelector(".check-panel");
+    const currentlyExpanded = panel ? !panel.classList.contains("collapsed") : false;
+    setCheckPanelExpanded(!currentlyExpanded);
   });
 
   $("#toggle-publish-panel").addEventListener("click", () => {
@@ -7383,6 +7714,17 @@ function setupForms() {
   $("#refresh-status").addEventListener("click", async () => {
     try {
       await refreshStatus();
+    } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#refresh-health")?.addEventListener("click", async () => {
+    try {
+      const health = await refreshSystemHealth();
+      setStatusBadge(health.summary === "fail" ? "自检失败" : health.summary === "warn" ? "自检警告" : "自检通过", health.summary === "fail" ? "failed" : "success");
+      setLog((health.checks || []).map((item) => `${getHealthStatusText(item.status)} ${item.label}: ${item.message}`).join("\n"));
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -7844,12 +8186,11 @@ function setupForms() {
     button.addEventListener("click", async () => {
       try {
         const bookName = requireBookName();
-        await api("/api/open-cover-folder", {
+        const result = await api("/api/open-cover-folder", {
           method: "POST",
           body: JSON.stringify({ bookName, section })
         });
-        setStatusBadge("已打开", "success");
-        setLog(`已打开封面目录：${section}`);
+        handleOpenTargetResult(result, `已打开封面目录：${section}`);
       } catch (error) {
         setStatusBadge("失败", "failed");
         setLog(error.message);
@@ -7871,14 +8212,13 @@ function setupForms() {
     button.addEventListener("click", async () => {
       try {
         const bookName = requireBookName();
-        await api("/api/open-cover-folder", {
+        const result = await api("/api/open-cover-folder", {
           method: "POST",
           body: JSON.stringify({ bookName, section })
         });
-        setStatusBadge("å·²æ‰“å¼€", "success");
-        setLog(`Opened next cover folder: ${section}`);
+        handleOpenTargetResult(result, `已打开封面目录：${section}`);
       } catch (error) {
-        setStatusBadge("å¤±è´¥", "failed");
+        setStatusBadge("失败", "failed");
         setLog(error.message);
       }
     });
@@ -7902,6 +8242,7 @@ initWorkbenchState("#cover-results-shell", COVER_RESULTS_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#cover-kdp-review-shell", COVER_KDP_REVIEW_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#cover-kdp-fix-shell", COVER_KDP_FIX_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#cover-kdp-img-black-shell", COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY);
+initCheckPanelState();
 initCoverPanelState();
 initBuildWorkbenchState();
 initPublishPanelState();
@@ -7914,6 +8255,12 @@ updateCancelJobButton(false);
   setWriteNotesStatus();
   try {
     await refreshStatus();
+    try {
+      await refreshSystemHealth();
+    } catch {
+      // Health failures are rendered in the health card; they should not block the workbench.
+    }
+    await restoreActiveJob();
   } catch (error) {
     setStatusBadge("失败", "failed");
     setLog(error.message);

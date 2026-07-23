@@ -47,8 +47,14 @@ function Get-SageContext {
     $EnginePath = Split-Path -Parent $ScriptPath
     $SageRoot   = Split-Path -Parent $EnginePath
     $ClawRoot   = Split-Path -Parent $SageRoot
+    $WorkspaceParentRoot = if (-not [string]::IsNullOrWhiteSpace($env:SAGEWRITE_WORKSPACE_ROOT)) {
+        [System.IO.Path]::GetFullPath($env:SAGEWRITE_WORKSPACE_ROOT)
+    }
+    else {
+        $ClawRoot
+    }
 
-    $WorkspaceRoot = Join-Path $ClawRoot "workspace-$BookName"
+    $WorkspaceRoot = Join-Path $WorkspaceParentRoot "workspace-$BookName"
     $BookRoot      = Join-Path $WorkspaceRoot "sagewrite\book"
     $LogRoot       = Join-Path $BookRoot "logs"
     $RunLogPath    = Join-Path $LogRoot "run_history.jsonl"
@@ -58,6 +64,7 @@ function Get-SageContext {
         EnginePath    = $EnginePath
         SageRoot      = $SageRoot
         ClawRoot      = $ClawRoot
+        WorkspaceParentRoot = $WorkspaceParentRoot
         WorkspaceRoot = $WorkspaceRoot
         BookRoot      = $BookRoot
         LogRoot       = $LogRoot
