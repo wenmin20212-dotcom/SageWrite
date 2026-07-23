@@ -357,12 +357,12 @@ function changeOwnPassword(userId, currentPassword, newPassword) {
   return getUserPublic(user);
 }
 
-function getBillingConfigPublic() {
+function getBillingConfigPublic({ includePrivatePaths = canCurrentUserSeeServerPaths() } = {}) {
   return {
     enabled: isUserAuthEnabled(),
     defaultInitialCredits: DEFAULT_INITIAL_CREDITS,
     tokensPerCredit: TOKENS_PER_CREDIT,
-    ledgerPath: isUserAuthEnabled() ? USER_BILLING_LEDGER_PATH : ""
+    ledgerPath: isUserAuthEnabled() && includePrivatePaths ? USER_BILLING_LEDGER_PATH : ""
   };
 }
 
@@ -615,6 +615,26 @@ function getAuthDetails() {
     userWorkspaceRoot: isUserAuthEnabled() ? USER_WORKSPACE_ROOT : "",
     billing: getBillingConfigPublic()
   };
+}
+
+function getPublicAuthDetails() {
+  return {
+    authMode: AUTH_MODE,
+    authEnabled: isAuthEnabled(),
+    userAuthEnabled: isUserAuthEnabled(),
+    billing: {
+      enabled: isUserAuthEnabled(),
+      defaultInitialCredits: DEFAULT_INITIAL_CREDITS,
+      tokensPerCredit: TOKENS_PER_CREDIT
+    }
+  };
+}
+
+function canCurrentUserSeeServerPaths() {
+  if (!isUserAuthEnabled()) {
+    return true;
+  }
+  return getCurrentUserContext()?.role === "admin";
 }
 
 function assertCurrentUserIsAdmin() {
@@ -2964,11 +2984,14 @@ function runCommandHealthCheck({ id, label, command, args = [], required = true,
 
 function checkWorkspaceRootHealth() {
   const workspaceParentRoot = getWorkspaceParentRoot();
+  const showServerPaths = canCurrentUserSeeServerPaths();
   const details = {
     workspaceParentRoot,
-    globalWorkspaceParentRoot: WORKSPACE_PARENT_ROOT,
     currentUser: getUserPublic(getCurrentUserContext())
   };
+  if (showServerPaths) {
+    details.globalWorkspaceParentRoot = WORKSPACE_PARENT_ROOT;
+  }
   if (!fs.existsSync(workspaceParentRoot)) {
     return makeHealthCheck("workspaceRoot", "工作区根目录", "fail", "工作区根目录不存在。", details);
   }
@@ -2995,6 +3018,7 @@ function checkWorkspaceRootHealth() {
 }
 
 function buildSystemHealthReport() {
+  const showServerPaths = canCurrentUserSeeServerPaths();
   const checks = [];
   checks.push(makeHealthCheck("mode", "运行模式", "pass", `当前模式：${APP_MODE}`, {
     host: HOST,
@@ -3039,7 +3063,7 @@ function buildSystemHealthReport() {
     APP_MODE === "cloud" && !isAuthEnabled()
       ? "当前是 cloud 模式但未启用登录保护；对外开放前必须配置 SAGEWRITE_AUTH=password 或 SAGEWRITE_AUTH=users。"
       : isUserAuthEnabled() ? "多用户账号登录已启用。" : isAuthEnabled() ? "密码登录已启用。" : "本地模式未启用登录保护。",
-    getAuthDetails()
+    showServerPaths ? getAuthDetails() : getPublicAuthDetails()
   ));
   if (isUserAuthEnabled()) {
     const store = ensureUserStore();
@@ -3050,7 +3074,9 @@ function buildSystemHealthReport() {
       store && store.users.length
         ? `用户库可用，当前有 ${store.users.length} 个用户。`
         : "用户库不存在或没有用户；设置 SAGEWRITE_ADMIN_PASSWORD 后重启可自动创建 admin 用户。",
-      { userStorePath: USER_STORE_PATH, userCount: store?.users?.length || 0 }
+      showServerPaths
+        ? { userStorePath: USER_STORE_PATH, userCount: store?.users?.length || 0 }
+        : { userCount: store?.users?.length || 0 }
     ));
   }
   checks.push(checkWorkspaceRootHealth());
@@ -3923,28 +3949,6 @@ function validatePublishFileName(fileName) {
   }
 }
 
-function validateAbsoluteFolderPath(folderPath) {
-  if (!folderPath || typeof folderPath !== "string") {
-    throw new Error("folderPath is required.");
-  }
-
-  const resolved = path.resolve(folderPath);
-  if (!path.isAbsolute(resolved)) {
-    throw new Error("folderPath must be an absolute path.");
-  }
-  if (!fs.existsSync(resolved)) {
-    throw new Error("folderPath does not exist.");
-  }
-  if (!fs.statSync(resolved).isDirectory()) {
-    throw new Error("folderPath must point to a directory.");
-  }
-  if (isCloudMode() && !isPathInside(getWorkspaceParentRoot(), resolved)) {
-    throw new Error("Cloud mode only allows opening folders inside SAGEWRITE_WORKSPACE_ROOT.");
-  }
-
-  return resolved;
-}
-
 function resolveCoverSectionRoot(paths, section) {
   const nextRoot = path.join(paths.bookRoot, "07_cover", "next", "ebook");
   const nextPrintRoot = path.join(paths.bookRoot, "07_cover", "next", "print");
@@ -4639,8 +4643,7 @@ const server = http.createServer(async (req, res) => {
       ? getUserPublic(getLegacyUserContext("local"))
       : authenticatedUser || null;
     sendJson(res, 200, {
-      ...getAuthDetails(),
-      authEnabled: isAuthEnabled(),
+      ...getPublicAuthDetails(),
       authenticated: !isAuthEnabled() || Boolean(authenticatedUser),
       currentUser
     });
@@ -4726,11 +4729,12 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/status") {
     const currentUser = getCurrentUserContext();
+    const showServerPaths = canCurrentUserSeeServerPaths();
     sendJson(res, 200, {
-      engineRoot: ENGINE_ROOT,
-      clawRoot: CLAW_ROOT,
+      engineRoot: showServerPaths ? ENGINE_ROOT : "",
+      clawRoot: showServerPaths ? CLAW_ROOT : "",
       workspaceParentRoot: getWorkspaceParentRoot(),
-      globalWorkspaceParentRoot: WORKSPACE_PARENT_ROOT,
+      globalWorkspaceParentRoot: showServerPaths ? WORKSPACE_PARENT_ROOT : "",
       appMode: APP_MODE,
       authMode: AUTH_MODE,
       billing: getBillingConfigPublic(),
@@ -5352,22 +5356,6 @@ const server = http.createServer(async (req, res) => {
         platform,
         path: targetFolder
       });
-    } catch (error) {
-      sendJson(res, 400, { error: error.message });
-    }
-    return;
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/open-folder-test") {
-    try {
-      const body = await readJsonBody(req);
-      const folderPath = validateAbsoluteFolderPath(body.folderPath);
-      if (isCloudMode()) {
-        sendJson(res, 200, cloudFolderPayload({ folderPath }, folderPath));
-        return;
-      }
-      openFolder(folderPath);
-      sendJson(res, 200, { opened: true, cloudMode: false, mode: APP_MODE, folderPath, path: folderPath });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
