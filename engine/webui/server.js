@@ -335,6 +335,28 @@ function resetUserPassword(userId, password) {
   return getUserPublic(user);
 }
 
+function changeOwnPassword(userId, currentPassword, newPassword) {
+  if (!newPassword || String(newPassword).length < 8) {
+    throw new Error("new password must be at least 8 characters.");
+  }
+  const store = ensureUserStore();
+  if (!store) {
+    throw new Error("User store is not initialized.");
+  }
+  const user = findUserById(userId, store);
+  if (!user || user.disabled) {
+    throw new Error("User not found.");
+  }
+  if (!verifyPassword(currentPassword || "", user.password)) {
+    throw new Error("Current password is incorrect.");
+  }
+  user.password = hashPassword(newPassword);
+  user.passwordUpdatedAt = new Date().toISOString();
+  user.updatedAt = user.passwordUpdatedAt;
+  writeUserStore(store);
+  return getUserPublic(user);
+}
+
 function getBillingConfigPublic() {
   return {
     enabled: isUserAuthEnabled(),
@@ -497,6 +519,35 @@ function recordUserTokenUsage(userId, details = {}) {
     event,
     billing: getUserBillingPublic(user)
   };
+}
+
+function getUserBillingEvents(userId, limit = 20) {
+  if (!isUserAuthEnabled() || !userId) {
+    return [];
+  }
+  const safeLimit = Math.min(100, Math.max(1, Math.round(Number(limit) || 20)));
+  return readJsonLines(USER_BILLING_LEDGER_PATH)
+    .filter((event) => event?.userId === userId)
+    .slice(-safeLimit)
+    .reverse()
+    .map((event) => ({
+      id: event.id || "",
+      createdAt: event.createdAt || "",
+      source: event.source || "",
+      route: event.route || "",
+      jobId: event.jobId || "",
+      bookName: event.bookName || "",
+      model: event.model || "",
+      usage: normalizeUsageObject(event.usage) || {
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        cached_tokens: 0
+      },
+      chargedCredits: roundBillingNumber(event.chargedCredits),
+      balanceCredits: roundBillingNumber(event.balanceCredits),
+      tokensPerCredit: normalizeBillingNumber(event.tokensPerCredit, TOKENS_PER_CREDIT)
+    }));
 }
 
 function recordJobTokenUsage(job) {
@@ -4687,6 +4738,51 @@ const server = http.createServer(async (req, res) => {
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
       workspaces: listWorkspaces()
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/account") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      const currentUser = getCurrentUserContext();
+      const user = findUserById(currentUser.id);
+      if (!user || user.disabled) {
+        sendJson(res, 404, { error: "User not found." });
+        return;
+      }
+      const limit = Number(url.searchParams.get("limit") || 20);
+      sendJson(res, 200, {
+        user: getUserPublic(user),
+        billing: getUserBillingPublic(user),
+        billingConfig: getBillingConfigPublic(),
+        events: getUserBillingEvents(user.id, limit)
+      });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/account/password") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      const body = await readJsonBody(req, 100_000);
+      if (body.newPassword !== body.confirmPassword) {
+        throw new Error("New password confirmation does not match.");
+      }
+      const currentToken = parseCookies(req)[SESSION_COOKIE];
+      const user = changeOwnPassword(getCurrentUserContext().id, body.currentPassword, body.newPassword);
+      deleteSessionsForUser(user.id, currentToken);
+      sendJson(res, 200, { user });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
     return;
   }
 

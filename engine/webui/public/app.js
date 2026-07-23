@@ -28,6 +28,9 @@ const state = {
   users: [],
   userAdminError: "",
   billingConfig: null,
+  account: null,
+  accountEvents: [],
+  accountError: "",
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -87,6 +90,7 @@ const COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-img-black
 const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
 const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
 const USER_ADMIN_WORKBENCH_STORAGE_KEY = "sagewrite-user-admin-workbench-open";
+const ACCOUNT_WORKBENCH_STORAGE_KEY = "sagewrite-account-workbench-open";
 const SELECTED_BOOKNAME_STORAGE_KEY = "sagewrite-selected-bookname";
 const CURRENT_JOB_STORAGE_KEY = "sagewrite-current-job";
 const DEFAULT_MODEL_STORAGE_KEY = "sagewrite-default-model-name";
@@ -99,6 +103,7 @@ const PUBLISH_RAW_TOGGLE_STORAGE_KEY = "sagewrite-publish-raw-toggle-open";
 const FLOW_ACTIVE_STORAGE_KEY = "sagewrite-active-flow-target";
 const FLOW_WORKBENCHES = [
   { id: "project", selector: "#project-picker-workbench-shell", section: '[data-flow-section="project"]' },
+  { id: "account", selector: "#account-workbench-shell", section: '[data-flow-section="account"]' },
   { id: "intake", selector: "#intake-workbench-shell", section: '[data-flow-section="intake"]' },
   { id: "structure", selector: "#structure-workbench-shell", section: '[data-flow-section="structure"]' },
   { id: "expand", selector: "#expand-workbench-shell", section: '[data-flow-section="expand"]' },
@@ -6361,6 +6366,90 @@ function setUserAdminFeedback(message = "", kind = "") {
   feedback.dataset.kind = kind;
 }
 
+function setAccountFeedback(message = "", kind = "") {
+  const feedback = $("#account-feedback");
+  if (!feedback) {
+    return;
+  }
+  feedback.textContent = message;
+  feedback.dataset.kind = kind;
+}
+
+function renderAccountPanel() {
+  const panel = $("#account-panel");
+  if (!panel) {
+    return;
+  }
+
+  const isUserMode = state.authMode === "users";
+  panel.hidden = !isUserMode;
+  const navItem = document.querySelector('[data-flow-target="account"]');
+  if (navItem) {
+    navItem.hidden = !isUserMode;
+  }
+  if (!isUserMode) {
+    return;
+  }
+
+  const accountUser = state.account?.user || state.currentUser || {};
+  const billing = state.account?.billing || accountUser.billing || {};
+  const summary = $("#account-summary");
+  const note = $("#account-note");
+  const cards = $("#account-billing-cards");
+  const list = $("#account-event-list");
+
+  if (summary) {
+    summary.textContent = `${accountUser.username || accountUser.displayName || "当前用户"} · ${getRoleLabel(accountUser.role)}`;
+  }
+  if (note) {
+    note.textContent = state.accountError || `每 ${formatTokenCount(billing.tokensPerCredit || state.billingConfig?.tokensPerCredit || 1000)} token 记 1 分，积分可为负。`;
+  }
+  if (cards) {
+    cards.innerHTML = [
+      ["积分余额", `${formatBillingCredits(billing.balanceCredits)} 分`],
+      ["已用积分", `${formatBillingCredits(billing.usedCredits)} 分`],
+      ["已用 token", formatTokenCount(billing.usedTokens)],
+      ["初始积分", `${formatBillingCredits(billing.initialCredits)} 分`]
+    ].map(([label, value]) => `
+      <div class="account-billing-card">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+    `).join("");
+  }
+  if (!list) {
+    return;
+  }
+  if (state.accountError) {
+    list.innerHTML = `<div class="workspace-item muted">${escapeHtml(state.accountError)}</div>`;
+    return;
+  }
+  if (!state.accountEvents.length) {
+    list.innerHTML = '<div class="workspace-item muted">还没有 token 花费记录</div>';
+    return;
+  }
+  list.innerHTML = state.accountEvents.map((event) => {
+    const usage = event.usage || {};
+    const label = event.route || event.source || "LLM 使用";
+    const detail = [
+      event.bookName ? `BookName：${event.bookName}` : "",
+      event.model ? `模型：${event.model}` : "",
+      event.jobId ? `Job：${event.jobId}` : ""
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="account-event-item">
+        <div class="account-event-head">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(formatUserDate(event.createdAt))}</span>
+        </div>
+        <span>token：input ${escapeHtml(formatTokenCount(usage.input_tokens))} · output ${escapeHtml(formatTokenCount(usage.output_tokens))} · total ${escapeHtml(formatTokenCount(usage.total_tokens))}</span>
+        <span>扣分：${escapeHtml(formatBillingCredits(event.chargedCredits))} 分 · 当时余额：${escapeHtml(formatBillingCredits(event.balanceCredits))} 分</span>
+        ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
 function renderUserAdminPanel() {
   const panel = $("#user-admin-panel");
   if (!panel) {
@@ -6486,6 +6575,56 @@ async function refreshUsers({ quiet = false } = {}) {
   }
 }
 
+async function refreshAccount({ quiet = false } = {}) {
+  if (state.authMode !== "users") {
+    state.account = null;
+    state.accountEvents = [];
+    state.accountError = "";
+    renderAccountPanel();
+    return;
+  }
+
+  try {
+    const result = await api("/api/account?limit=20");
+    state.account = result || null;
+    state.accountEvents = result?.events || [];
+    state.accountError = "";
+    if (result?.user) {
+      state.currentUser = result.user;
+    }
+    renderAccountPanel();
+    if (!quiet) {
+      setAccountFeedback("个人信息已刷新。", "success");
+    }
+  } catch (error) {
+    state.account = null;
+    state.accountEvents = [];
+    state.accountError = error.message || "个人信息读取失败。";
+    renderAccountPanel();
+    if (!quiet) {
+      setAccountFeedback(state.accountError, "error");
+    }
+  }
+}
+
+async function changeOwnPasswordFromForm(form) {
+  const data = formToObject(form);
+  const payload = {
+    currentPassword: String(data.currentPassword || ""),
+    newPassword: String(data.newPassword || ""),
+    confirmPassword: String(data.confirmPassword || "")
+  };
+  if (payload.newPassword !== payload.confirmPassword) {
+    throw new Error("两次输入的新密码不一致。");
+  }
+  await api("/api/account/password", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  form.reset();
+  setAccountFeedback("密码已修改。当前登录会保留，其它旧登录会失效。", "success");
+}
+
 async function createUserFromForm(form) {
   const data = formToObject(form);
   const payload = {
@@ -6607,6 +6746,10 @@ async function refreshStatus() {
   if (initialCreditsField && state.billingConfig?.defaultInitialCredits !== undefined && !initialCreditsField.dataset.touched) {
     initialCreditsField.value = String(state.billingConfig.defaultInitialCredits);
   }
+  if (!state.account?.user || state.account.user.id !== status.currentUser?.id) {
+    state.account = status.currentUser ? { user: status.currentUser, billing: status.currentUser.billing || null } : null;
+  }
+  renderAccountPanel();
   renderUserAdminPanel();
   setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
@@ -7984,8 +8127,32 @@ function setupForms() {
   $("#refresh-status").addEventListener("click", async () => {
     try {
       await refreshStatus();
+      await refreshAccount({ quiet: true });
       await refreshUsers({ quiet: true });
     } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#refresh-account")?.addEventListener("click", async () => {
+    try {
+      await refreshAccount();
+    } catch (error) {
+      setAccountFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#change-password-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await changeOwnPasswordFromForm(event.currentTarget);
+      setStatusBadge("密码已修改", "success");
+      await refreshAccount({ quiet: true });
+    } catch (error) {
+      setAccountFeedback(error.message, "error");
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
@@ -8569,6 +8736,7 @@ function setupForms() {
 async function init() {
 initWorkbenchState("#project-picker-workbench-shell", PROJECT_PICKER_WORKBENCH_STORAGE_KEY, true);
 initWorkbenchState("#project-status-workbench-shell", PROJECT_STATUS_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#account-workbench-shell", ACCOUNT_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#user-admin-workbench-shell", USER_ADMIN_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#intake-workbench-shell", INTAKE_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#structure-workbench-shell", STRUCTURE_WORKBENCH_STORAGE_KEY);
@@ -8597,6 +8765,7 @@ updateCancelJobButton(false);
   setWriteNotesStatus();
   try {
     await refreshStatus();
+    await refreshAccount({ quiet: true });
     await refreshUsers({ quiet: true });
     try {
       await refreshSystemHealth();

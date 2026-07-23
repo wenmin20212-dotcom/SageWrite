@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260723-user-billing">
+    <link rel="stylesheet" href="/styles.css?v=20260723-account-center">
   </head>
   <body>
     <div class="page-shell">
@@ -14,7 +14,7 @@
             <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
           </div>
           <div class="hero-copy-block">
-            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-user-billing</span></p>
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-account-center</span></p>
             <h1>写作引擎 Web 控制台</h1>
             <p class="hero-copy">
               用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -68,6 +68,10 @@
             <button class="flow-nav-item active" type="button" data-flow-target="project">
               <span>项目</span>
               <strong>选择与状态</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="account">
+              <span>账户</span>
+              <strong>个人管理</strong>
             </button>
             <button class="flow-nav-item" type="button" data-flow-target="intake">
               <span>01</span>
@@ -164,6 +168,50 @@
               <div class="workspace-list-wrap">
                 <div class="workspace-list-title">已有工作区</div>
                 <div id="workspace-list" class="workspace-list"></div>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section id="account-panel" class="panel account-panel" data-flow-section="account" hidden>
+          <div class="panel-header">
+            <h2>个人管理</h2>
+          </div>
+          <details id="account-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Account</span>
+                <strong class="workbench-title">个人管理工作台</strong>
+                <span id="account-summary" class="workbench-meta">当前账号信息加载中</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <div class="account-toolbar">
+                <div id="account-note" class="account-note">正在读取个人积分和 token 花费。</div>
+                <button id="refresh-account" class="ghost-button" type="button">刷新个人信息</button>
+              </div>
+              <div id="account-billing-cards" class="account-billing-cards"></div>
+              <div class="account-layout">
+                <div class="account-events-wrap">
+                  <div class="workspace-list-title">最近 token 花费</div>
+                  <div id="account-event-list" class="account-event-list"></div>
+                </div>
+                <form id="change-password-form" class="form-grid account-password-form">
+                  <label class="field">
+                    <span>当前密码</span>
+                    <input name="currentPassword" type="password" autocomplete="current-password" required>
+                  </label>
+                  <label class="field">
+                    <span>新密码</span>
+                    <input name="newPassword" type="password" autocomplete="new-password" minlength="8" required>
+                  </label>
+                  <label class="field">
+                    <span>确认新密码</span>
+                    <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required>
+                  </label>
+                  <button class="primary-button" type="submit">修改自己的密码</button>
+                  <div id="account-feedback" class="account-feedback" aria-live="polite"></div>
+                </form>
               </div>
             </div>
           </details>
@@ -1581,6 +1629,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260723-user-billing"></script>
+    <script src="/app.js?v=20260723-account-center"></script>
   </body>
 </html>

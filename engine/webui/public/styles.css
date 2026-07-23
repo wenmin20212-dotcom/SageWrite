@@ -728,10 +728,13 @@ textarea {
   min-height: 0;
 }
 
+.account-panel[hidden],
 .user-admin-panel[hidden] {
   display: none;
 }
 
+.account-note,
+.account-feedback,
 .user-admin-note,
 .user-admin-feedback {
   color: var(--muted);
@@ -739,14 +742,17 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.account-feedback[data-kind="success"],
 .user-admin-feedback[data-kind="success"] {
   color: var(--accent-strong);
 }
 
+.account-feedback[data-kind="error"],
 .user-admin-feedback[data-kind="error"] {
   color: var(--danger);
 }
 
+.account-layout,
 .user-admin-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
@@ -754,9 +760,79 @@ textarea {
   align-items: start;
 }
 
+.account-events-wrap,
+.account-password-form,
 .user-list-wrap,
 .user-create-form {
   min-width: 0;
+}
+
+.account-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.account-billing-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.account-billing-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  border-radius: 14px;
+  background: rgba(251, 246, 238, 0.86);
+}
+
+.account-billing-card span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.account-billing-card strong {
+  font-size: 1.22rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.account-event-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.account-event-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  border-radius: 14px;
+  background: rgba(251, 246, 238, 0.86);
+}
+
+.account-event-item span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.account-event-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-event-head strong {
+  overflow-wrap: anywhere;
 }
 
 .user-list-toolbar {
@@ -3526,6 +3602,8 @@ textarea {
 
   .workspace-frame,
   .project-summary-panel,
+  .account-layout,
+  .account-billing-cards,
   .user-admin-layout,
   .user-actions,
   .user-reset-password-form,
