@@ -374,8 +374,8 @@ function getChildProcessEnv() {
   };
 }
 
-function getWorkspacePaths(bookName) {
-  const workspacePath = path.join(getWorkspaceParentRoot(), `workspace-${bookName}`);
+function getWorkspacePaths(bookName, workspaceParentRoot = getWorkspaceParentRoot()) {
+  const workspacePath = path.join(workspaceParentRoot, `workspace-${bookName}`);
   const bookRoot = path.join(workspacePath, "sagewrite", "book");
   const logRoot = path.join(bookRoot, "logs");
   const outputRoot = path.join(bookRoot, "04_output");
@@ -2820,7 +2820,7 @@ function persistJobState(job) {
   try {
     const bookName = job.meta?.bookName;
     if (bookName) {
-      const paths = getWorkspacePaths(bookName);
+      const paths = getWorkspacePaths(bookName, job.meta?.workspaceParentRoot || getWorkspaceParentRoot());
       if (!isPathInside(paths.webJobRoot, statePath)) {
         throw new Error("Job state path is outside webui-jobs.");
       }
@@ -2840,7 +2840,7 @@ function appendJobOutputFile(job, chunk) {
   try {
     const bookName = job.meta?.bookName;
     if (bookName) {
-      const paths = getWorkspacePaths(bookName);
+      const paths = getWorkspacePaths(bookName, job.meta?.workspaceParentRoot || getWorkspaceParentRoot());
       if (!isPathInside(paths.webRunRoot, outputPath)) {
         throw new Error("Job output path is outside webui-runs.");
       }
@@ -2859,7 +2859,7 @@ function initializeJobPersistence(job, createdDate = new Date()) {
   }
 
   try {
-    const paths = getWorkspacePaths(bookName);
+    const paths = getWorkspacePaths(bookName, job.meta?.workspaceParentRoot || getWorkspaceParentRoot());
     ensureDir(paths.webRunRoot);
     ensureDir(paths.webJobRoot);
     const route = sanitizeJobNamePart(job.meta?.route);

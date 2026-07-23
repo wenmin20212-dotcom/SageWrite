@@ -728,6 +728,89 @@ textarea {
   min-height: 0;
 }
 
+.user-admin-panel[hidden] {
+  display: none;
+}
+
+.user-admin-note,
+.user-admin-feedback {
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.user-admin-feedback[data-kind="success"] {
+  color: var(--accent-strong);
+}
+
+.user-admin-feedback[data-kind="error"] {
+  color: var(--danger);
+}
+
+.user-admin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.user-list-wrap,
+.user-create-form {
+  min-width: 0;
+}
+
+.user-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.user-list {
+  display: grid;
+  gap: 10px;
+}
+
+.user-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  border-radius: 14px;
+  background: rgba(251, 246, 238, 0.86);
+}
+
+.user-item strong {
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.user-item span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.user-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.user-role-badge {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(11, 110, 79, 0.22);
+  background: rgba(11, 110, 79, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 .toc-preview-wrap {
   margin-top: 16px;
   display: grid;
@@ -3396,6 +3479,7 @@ textarea {
 
   .workspace-frame,
   .project-summary-panel,
+  .user-admin-layout,
   .project-summary-grid {
     grid-template-columns: 1fr;
   }

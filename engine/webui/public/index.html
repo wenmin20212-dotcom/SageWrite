@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260723-single-user-standalone">
+    <link rel="stylesheet" href="/styles.css?v=20260723-user-admin-workbench">
   </head>
   <body>
     <div class="page-shell">
@@ -14,7 +14,7 @@
             <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
           </div>
           <div class="hero-copy-block">
-            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-multi-user-foundation</span></p>
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-user-admin-workbench</span></p>
             <h1>写作引擎 Web 控制台</h1>
             <p class="hero-copy">
               用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -163,6 +163,57 @@
               <div class="workspace-list-wrap">
                 <div class="workspace-list-title">已有工作区</div>
                 <div id="workspace-list" class="workspace-list"></div>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section id="user-admin-panel" class="panel user-admin-panel" data-flow-section="users" hidden>
+          <div class="panel-header">
+            <h2>用户管理</h2>
+          </div>
+          <details id="user-admin-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Users</span>
+                <strong class="workbench-title">用户管理工作台</strong>
+                <span id="user-admin-summary" class="workbench-meta">当前账号状态加载中</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <div id="user-admin-note" class="user-admin-note">正在读取用户信息。</div>
+              <div class="user-admin-layout">
+                <div class="user-list-wrap">
+                  <div class="user-list-toolbar">
+                    <div class="workspace-list-title">已有用户</div>
+                    <button id="refresh-users" class="ghost-button" type="button">刷新用户</button>
+                  </div>
+                  <div id="user-list" class="user-list"></div>
+                </div>
+
+                <form id="create-user-form" class="form-grid user-create-form">
+                  <label class="field">
+                    <span>用户名</span>
+                    <input name="username" autocomplete="off" placeholder="例如 editor01" required>
+                  </label>
+                  <label class="field">
+                    <span>显示名称</span>
+                    <input name="displayName" autocomplete="off" placeholder="例如 编辑一号">
+                  </label>
+                  <label class="field">
+                    <span>角色</span>
+                    <select name="role">
+                      <option value="user">普通用户</option>
+                      <option value="admin">管理员</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>初始密码</span>
+                    <input name="password" type="password" autocomplete="new-password" minlength="8" required>
+                  </label>
+                  <button class="primary-button" type="submit">创建用户</button>
+                  <div id="user-admin-feedback" class="user-admin-feedback" aria-live="polite"></div>
+                </form>
               </div>
             </div>
           </details>
@@ -1525,6 +1576,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260723-health-check"></script>
+    <script src="/app.js?v=20260723-user-admin-workbench"></script>
   </body>
 </html>

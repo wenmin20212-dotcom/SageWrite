@@ -25,6 +25,8 @@ const state = {
   publishSaveInFlight: false,
   publishLastSavedAt: "",
   publishSelectedCategories: {},
+  users: [],
+  userAdminError: "",
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -83,6 +85,7 @@ const COVER_KDP_FIX_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-fix-workbench-o
 const COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-img-black-workbench-open";
 const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
 const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
+const USER_ADMIN_WORKBENCH_STORAGE_KEY = "sagewrite-user-admin-workbench-open";
 const SELECTED_BOOKNAME_STORAGE_KEY = "sagewrite-selected-bookname";
 const CURRENT_JOB_STORAGE_KEY = "sagewrite-current-job";
 const DEFAULT_MODEL_STORAGE_KEY = "sagewrite-default-model-name";
@@ -6288,6 +6291,133 @@ function renderWorkspaceSelection(item) {
   renderFrontmatterEditor(item);
 }
 
+function getRoleLabel(role) {
+  return role === "admin" ? "管理员" : "普通用户";
+}
+
+function setUserAdminFeedback(message = "", kind = "") {
+  const feedback = $("#user-admin-feedback");
+  if (!feedback) {
+    return;
+  }
+  feedback.textContent = message;
+  feedback.dataset.kind = kind;
+}
+
+function renderUserAdminPanel() {
+  const panel = $("#user-admin-panel");
+  if (!panel) {
+    return;
+  }
+
+  const isUserMode = state.authMode === "users";
+  panel.hidden = !isUserMode;
+  if (!isUserMode) {
+    return;
+  }
+
+  const currentUser = state.currentUser || {};
+  const isAdmin = currentUser.role === "admin";
+  const summary = $("#user-admin-summary");
+  const note = $("#user-admin-note");
+  const list = $("#user-list");
+  const form = $("#create-user-form");
+  const refreshButton = $("#refresh-users");
+
+  if (summary) {
+    summary.textContent = isAdmin
+      ? `当前管理员：${currentUser.username || currentUser.displayName || ""}`
+      : `当前用户：${currentUser.username || currentUser.displayName || ""}`;
+  }
+  if (form) {
+    form.hidden = !isAdmin;
+  }
+  if (refreshButton) {
+    refreshButton.disabled = !isAdmin;
+  }
+
+  if (!isAdmin) {
+    if (note) {
+      note.textContent = "当前账号不是管理员，不能管理用户。";
+    }
+    if (list) {
+      list.innerHTML = "";
+    }
+    setUserAdminFeedback("");
+    return;
+  }
+
+  if (note) {
+    note.textContent = state.userAdminError || `用户库已加载：${state.users.length} 个用户。`;
+  }
+  if (!list) {
+    return;
+  }
+  if (state.userAdminError) {
+    list.innerHTML = `<div class="workspace-item muted">${escapeHtml(state.userAdminError)}</div>`;
+    return;
+  }
+  if (!state.users.length) {
+    list.innerHTML = '<div class="workspace-item muted">还没有用户</div>';
+    return;
+  }
+
+  list.innerHTML = state.users.map((user) => `
+    <div class="user-item">
+      <div class="user-item-head">
+        <strong>${escapeHtml(user.displayName || user.username || "")}</strong>
+        <span class="user-role-badge">${escapeHtml(getRoleLabel(user.role))}</span>
+      </div>
+      <span>用户名：${escapeHtml(user.username || "")}</span>
+      <span>用户 ID：${escapeHtml(user.id || "")}</span>
+      <span>工作区：${escapeHtml(user.workspaceRoot || "")}</span>
+    </div>
+  `).join("");
+}
+
+async function refreshUsers({ quiet = false } = {}) {
+  if (state.authMode !== "users") {
+    state.users = [];
+    state.userAdminError = "";
+    renderUserAdminPanel();
+    return;
+  }
+
+  try {
+    const result = await api("/api/users");
+    state.users = result?.users || [];
+    state.userAdminError = "";
+    renderUserAdminPanel();
+    if (!quiet) {
+      setUserAdminFeedback(`已刷新用户列表：${state.users.length} 个用户。`, "success");
+    }
+  } catch (error) {
+    state.users = [];
+    state.userAdminError = error.message || "用户列表读取失败。";
+    renderUserAdminPanel();
+    if (!quiet) {
+      setUserAdminFeedback(state.userAdminError, "error");
+    }
+  }
+}
+
+async function createUserFromForm(form) {
+  const data = formToObject(form);
+  const payload = {
+    username: String(data.username || "").trim(),
+    displayName: String(data.displayName || "").trim(),
+    role: String(data.role || "user"),
+    password: String(data.password || "")
+  };
+  const result = await api("/api/users", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  form.reset();
+  setUserAdminFeedback(`已创建用户：${result?.user?.username || payload.username}`, "success");
+  await refreshUsers({ quiet: true });
+}
+
 function renderWorkspaces(workspaces) {
   state.workspaces = workspaces;
   const wrap = $("#workspace-list");
@@ -6350,6 +6480,7 @@ async function refreshStatus() {
   if (currentUserWorkspace) {
     currentUserWorkspace.textContent = status.workspaceParentRoot || "工作区路径未加载";
   }
+  renderUserAdminPanel();
   setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
 }
@@ -7726,7 +7857,30 @@ function setupForms() {
   $("#refresh-status").addEventListener("click", async () => {
     try {
       await refreshStatus();
+      await refreshUsers({ quiet: true });
     } catch (error) {
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#refresh-users")?.addEventListener("click", async () => {
+    try {
+      await refreshUsers();
+    } catch (error) {
+      setUserAdminFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#create-user-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await createUserFromForm(event.currentTarget);
+      setStatusBadge("用户已创建", "success");
+    } catch (error) {
+      setUserAdminFeedback(error.message, "error");
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
@@ -8240,6 +8394,7 @@ function setupForms() {
 async function init() {
 initWorkbenchState("#project-picker-workbench-shell", PROJECT_PICKER_WORKBENCH_STORAGE_KEY, true);
 initWorkbenchState("#project-status-workbench-shell", PROJECT_STATUS_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#user-admin-workbench-shell", USER_ADMIN_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#intake-workbench-shell", INTAKE_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#structure-workbench-shell", STRUCTURE_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#expand-workbench-shell", EXPAND_WORKBENCH_STORAGE_KEY);
@@ -8267,6 +8422,7 @@ updateCancelJobButton(false);
   setWriteNotesStatus();
   try {
     await refreshStatus();
+    await refreshUsers({ quiet: true });
     try {
       await refreshSystemHealth();
     } catch {
