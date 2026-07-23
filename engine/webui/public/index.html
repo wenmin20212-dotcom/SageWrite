@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260723-account-center">
+    <link rel="stylesheet" href="/styles.css?v=20260723-admin-audit">
   </head>
   <body>
     <div class="page-shell">
@@ -14,7 +14,7 @@
             <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
           </div>
           <div class="hero-copy-block">
-            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-account-center</span></p>
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-admin-audit</span></p>
             <h1>写作引擎 Web 控制台</h1>
             <p class="hero-copy">
               用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -72,6 +72,10 @@
             <button class="flow-nav-item" type="button" data-flow-target="account">
               <span>账户</span>
               <strong>个人管理</strong>
+            </button>
+            <button class="flow-nav-item" type="button" data-flow-target="users" hidden>
+              <span>管理</span>
+              <strong>用户/审计</strong>
             </button>
             <button class="flow-nav-item" type="button" data-flow-target="intake">
               <span>01</span>
@@ -271,6 +275,39 @@
                   <button class="primary-button" type="submit">创建用户</button>
                   <div id="user-admin-feedback" class="user-admin-feedback" aria-live="polite"></div>
                 </form>
+              </div>
+              <div id="admin-audit-section" class="admin-audit-section" hidden>
+                <form id="audit-filter-form" class="audit-filter-form">
+                  <div class="workspace-list-title">审计日志</div>
+                  <label class="field audit-filter-field">
+                    <span>动作</span>
+                    <select name="action">
+                      <option value="">全部动作</option>
+                      <option value="auth.login.success">登录成功</option>
+                      <option value="auth.login.failed">登录失败</option>
+                      <option value="auth.logout">退出登录</option>
+                      <option value="user.create">创建用户</option>
+                      <option value="user.update">修改用户</option>
+                      <option value="user.password.reset">重置密码</option>
+                      <option value="account.password.change">自改密码</option>
+                      <option value="billing.adjust">积分调整</option>
+                      <option value="job.start">任务开始</option>
+                      <option value="job.finish">任务结束</option>
+                      <option value="job.cancel">任务取消</option>
+                    </select>
+                  </label>
+                  <label class="field audit-filter-field">
+                    <span>用户/项目/任务</span>
+                    <input name="user" autocomplete="off" placeholder="用户名、BookName 或 Job ID">
+                  </label>
+                  <label class="field audit-filter-field audit-limit-field">
+                    <span>条数</span>
+                    <input name="limit" type="number" min="1" max="300" value="100">
+                  </label>
+                  <button id="refresh-audit" class="ghost-button" type="submit">刷新审计</button>
+                </form>
+                <div id="audit-note" class="audit-note">正在读取审计日志。</div>
+                <div id="audit-list" class="audit-list"></div>
               </div>
             </div>
           </details>
@@ -1633,6 +1670,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260723-account-center"></script>
+    <script src="/app.js?v=20260723-admin-audit"></script>
   </body>
 </html>

@@ -729,14 +729,16 @@ textarea {
 }
 
 .account-panel[hidden],
-.user-admin-panel[hidden] {
+.user-admin-panel[hidden],
+.admin-audit-section[hidden] {
   display: none;
 }
 
 .account-note,
 .account-feedback,
 .user-admin-note,
-.user-admin-feedback {
+.user-admin-feedback,
+.audit-note {
   color: var(--muted);
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -972,6 +974,79 @@ textarea {
 .user-billing-events .account-event-item {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.48);
+}
+
+.admin-audit-section {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(29, 42, 34, 0.1);
+}
+
+.audit-filter-form {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 0.9fr) minmax(220px, 1.2fr) minmax(90px, 0.35fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.audit-filter-form .workspace-list-title {
+  align-self: center;
+  padding-bottom: 10px;
+}
+
+.audit-filter-field {
+  margin: 0;
+}
+
+.audit-limit-field input {
+  min-width: 84px;
+}
+
+.audit-list {
+  display: grid;
+  gap: 10px;
+}
+
+.audit-event-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  border-radius: 14px;
+  background: rgba(251, 246, 238, 0.86);
+}
+
+.audit-event-item[data-status="failed"] {
+  border-color: rgba(177, 67, 54, 0.22);
+  background: rgba(177, 67, 54, 0.06);
+}
+
+.audit-event-item span,
+.audit-event-item code {
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.audit-event-item code {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.58);
+  white-space: pre-wrap;
+}
+
+.audit-event-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.audit-event-head strong {
+  overflow-wrap: anywhere;
 }
 
 .toc-preview-wrap {
@@ -3648,6 +3723,7 @@ textarea {
   .user-actions,
   .user-reset-password-form,
   .user-billing-adjust-form,
+  .audit-filter-form,
   .project-summary-grid {
     grid-template-columns: 1fr;
   }

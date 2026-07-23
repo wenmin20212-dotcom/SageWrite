@@ -29,6 +29,10 @@ const state = {
   userBillingEvents: {},
   userFilterNegative: false,
   userAdminError: "",
+  auditEvents: [],
+  auditError: "",
+  auditLoading: false,
+  auditPath: "",
   billingConfig: null,
   account: null,
   accountEvents: [],
@@ -106,6 +110,7 @@ const FLOW_ACTIVE_STORAGE_KEY = "sagewrite-active-flow-target";
 const FLOW_WORKBENCHES = [
   { id: "project", selector: "#project-picker-workbench-shell", section: '[data-flow-section="project"]' },
   { id: "account", selector: "#account-workbench-shell", section: '[data-flow-section="account"]' },
+  { id: "users", selector: "#user-admin-workbench-shell", section: '[data-flow-section="users"]' },
   { id: "intake", selector: "#intake-workbench-shell", section: '[data-flow-section="intake"]' },
   { id: "structure", selector: "#structure-workbench-shell", section: '[data-flow-section="structure"]' },
   { id: "expand", selector: "#expand-workbench-shell", section: '[data-flow-section="expand"]' },
@@ -6307,6 +6312,32 @@ function getUserStatusLabel(user) {
   return user?.disabled ? "已禁用" : "可使用";
 }
 
+function getAuditActionLabel(action) {
+  return {
+    "auth.login.success": "登录成功",
+    "auth.login.failed": "登录失败",
+    "auth.login.disabled": "禁用账号登录",
+    "auth.logout": "退出登录",
+    "user.create": "创建用户",
+    "user.update": "修改用户",
+    "user.password.reset": "重置密码",
+    "account.password.change": "自改密码",
+    "billing.adjust": "积分调整",
+    "job.start": "任务开始",
+    "job.finish": "任务结束",
+    "job.cancel": "任务取消"
+  }[action] || action || "未知动作";
+}
+
+function getAuditStatusLabel(status) {
+  return {
+    success: "成功",
+    failed: "失败",
+    running: "运行中",
+    cancelled: "已取消"
+  }[status] || status || "-";
+}
+
 function formatBillingCredits(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -6495,6 +6526,71 @@ function renderAdminUserBillingEvents(userId) {
   `;
 }
 
+function renderAdminAuditPanel() {
+  const section = $("#admin-audit-section");
+  if (!section) {
+    return;
+  }
+  const isUserMode = state.authMode === "users";
+  const isAdmin = (state.currentUser || {}).role === "admin";
+  section.hidden = !isUserMode || !isAdmin;
+  if (section.hidden) {
+    return;
+  }
+
+  const note = $("#audit-note");
+  const list = $("#audit-list");
+  if (note) {
+    if (state.auditLoading) {
+      note.textContent = "正在读取审计日志。";
+    } else if (state.auditError) {
+      note.textContent = state.auditError;
+    } else {
+      note.textContent = `已加载 ${state.auditEvents.length} 条审计记录${state.auditPath ? ` · ${state.auditPath}` : ""}`;
+    }
+  }
+  if (!list) {
+    return;
+  }
+  if (state.auditError) {
+    list.innerHTML = `<div class="workspace-item muted">${escapeHtml(state.auditError)}</div>`;
+    return;
+  }
+  if (state.auditLoading) {
+    list.innerHTML = '<div class="workspace-item muted">正在读取审计日志...</div>';
+    return;
+  }
+  if (!state.auditEvents.length) {
+    list.innerHTML = '<div class="workspace-item muted">还没有审计记录</div>';
+    return;
+  }
+  list.innerHTML = state.auditEvents.map((event) => {
+    const detail = [
+      event.actorUsername ? `操作者：${event.actorUsername}` : "操作者：系统/未登录",
+      event.targetUsername ? `目标用户：${event.targetUsername}` : "",
+      event.bookName ? `BookName：${event.bookName}` : "",
+      event.route ? `流程：${event.route}` : "",
+      event.jobId ? `Job：${event.jobId}` : "",
+      event.ip ? `IP：${event.ip}` : ""
+    ].filter(Boolean).join(" · ");
+    const data = event.data && Object.keys(event.data).length
+      ? JSON.stringify(event.data)
+      : "";
+    return `
+      <div class="audit-event-item" data-status="${escapeHtml(event.status || "")}">
+        <div class="audit-event-head">
+          <strong>${escapeHtml(getAuditActionLabel(event.action))}</strong>
+          <span>${escapeHtml(formatUserDate(event.createdAt))}</span>
+        </div>
+        <span>状态：${escapeHtml(getAuditStatusLabel(event.status))}</span>
+        ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
+        ${event.message ? `<span>${escapeHtml(event.message)}</span>` : ""}
+        ${data ? `<code>${escapeHtml(data)}</code>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
 function renderUserAdminPanel() {
   const panel = $("#user-admin-panel");
   if (!panel) {
@@ -6502,8 +6598,13 @@ function renderUserAdminPanel() {
   }
 
   const isUserMode = state.authMode === "users";
+  const navItem = document.querySelector('[data-flow-target="users"]');
+  if (navItem) {
+    navItem.hidden = !isUserMode;
+  }
   panel.hidden = !isUserMode;
   if (!isUserMode) {
+    renderAdminAuditPanel();
     return;
   }
 
@@ -6540,6 +6641,7 @@ function renderUserAdminPanel() {
       list.innerHTML = "";
     }
     setUserAdminFeedback("");
+    renderAdminAuditPanel();
     return;
   }
 
@@ -6549,19 +6651,23 @@ function renderUserAdminPanel() {
     note.textContent = state.userAdminError || `用户库已加载：${state.users.length} 个用户，负余额 ${negativeUsers.length} 个。`;
   }
   if (!list) {
+    renderAdminAuditPanel();
     return;
   }
   if (state.userAdminError) {
     list.innerHTML = `<div class="workspace-item muted">${escapeHtml(state.userAdminError)}</div>`;
+    renderAdminAuditPanel();
     return;
   }
   if (!state.users.length) {
     list.innerHTML = '<div class="workspace-item muted">还没有用户</div>';
+    renderAdminAuditPanel();
     return;
   }
 
   if (!visibleUsers.length) {
     list.innerHTML = '<div class="workspace-item muted">当前筛选下没有用户</div>';
+    renderAdminAuditPanel();
     return;
   }
 
@@ -6617,6 +6723,7 @@ function renderUserAdminPanel() {
     </div>
   `;
   }).join("");
+  renderAdminAuditPanel();
 }
 
 async function refreshUsers({ quiet = false } = {}) {
@@ -6642,6 +6749,51 @@ async function refreshUsers({ quiet = false } = {}) {
     if (!quiet) {
       setUserAdminFeedback(state.userAdminError, "error");
     }
+  }
+}
+
+async function refreshAudit({ quiet = false } = {}) {
+  const isAdmin = state.authMode === "users" && (state.currentUser || {}).role === "admin";
+  if (!isAdmin) {
+    state.auditEvents = [];
+    state.auditError = "";
+    state.auditPath = "";
+    renderAdminAuditPanel();
+    return;
+  }
+
+  const form = $("#audit-filter-form");
+  const data = form ? formToObject(form) : {};
+  const params = new URLSearchParams();
+  params.set("limit", String(data.limit || 100));
+  if (data.action) {
+    params.set("action", String(data.action));
+  }
+  if (data.user) {
+    params.set("user", String(data.user).trim());
+  }
+
+  state.auditLoading = true;
+  state.auditError = "";
+  renderAdminAuditPanel();
+  try {
+    const result = await api(`/api/admin/audit?${params.toString()}`);
+    state.auditEvents = result?.events || [];
+    state.auditPath = result?.path || "";
+    state.auditError = "";
+    if (!quiet) {
+      setUserAdminFeedback(`已刷新审计日志：${state.auditEvents.length} 条。`, "success");
+    }
+  } catch (error) {
+    state.auditEvents = [];
+    state.auditPath = "";
+    state.auditError = error.message || "审计日志读取失败。";
+    if (!quiet) {
+      setUserAdminFeedback(state.auditError, "error");
+    }
+  } finally {
+    state.auditLoading = false;
+    renderAdminAuditPanel();
   }
 }
 
@@ -6716,6 +6868,7 @@ async function createUserFromForm(form) {
   }
   setUserAdminFeedback(`已创建用户：${result?.user?.username || payload.username}`, "success");
   await refreshUsers({ quiet: true });
+  await refreshAudit({ quiet: true });
 }
 
 async function updateUserFromPanel(userId, updates, successMessage) {
@@ -6727,6 +6880,7 @@ async function updateUserFromPanel(userId, updates, successMessage) {
   renderUserAdminPanel();
   setUserAdminFeedback(successMessage, "success");
   await refreshUsers({ quiet: true });
+  await refreshAudit({ quiet: true });
 }
 
 async function resetUserPasswordFromForm(form) {
@@ -6741,6 +6895,7 @@ async function resetUserPasswordFromForm(form) {
   form.reset();
   renderUserAdminPanel();
   setUserAdminFeedback(`已重置密码：${result?.user?.username || userId}`, "success");
+  await refreshAudit({ quiet: true });
 }
 
 async function refreshUserBillingEvents(userId, { quiet = false } = {}) {
@@ -6802,6 +6957,7 @@ async function adjustUserCreditsFromForm(form) {
     `已调整积分：${result?.user?.username || userId} ${formatSignedBillingCredits(creditDelta)} 分，余额 ${formatBillingCredits(result?.billing?.balanceCredits)} 分。`,
     "success"
   );
+  await refreshAudit({ quiet: true });
 }
 
 function renderWorkspaces(workspaces) {
@@ -8260,6 +8416,7 @@ function setupForms() {
       await refreshStatus();
       await refreshAccount({ quiet: true });
       await refreshUsers({ quiet: true });
+      await refreshAudit({ quiet: true });
     } catch (error) {
       setStatusBadge("失败", "failed");
       setLog(error.message);
@@ -8282,6 +8439,7 @@ function setupForms() {
       await changeOwnPasswordFromForm(event.currentTarget);
       setStatusBadge("密码已修改", "success");
       await refreshAccount({ quiet: true });
+      await refreshAudit({ quiet: true });
     } catch (error) {
       setAccountFeedback(error.message, "error");
       setStatusBadge("失败", "failed");
@@ -8292,6 +8450,19 @@ function setupForms() {
   $("#refresh-users")?.addEventListener("click", async () => {
     try {
       await refreshUsers();
+      await refreshAudit({ quiet: true });
+    } catch (error) {
+      setUserAdminFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#audit-filter-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await refreshAudit();
+      setStatusBadge("审计已刷新", "success");
     } catch (error) {
       setUserAdminFeedback(error.message, "error");
       setStatusBadge("失败", "failed");
@@ -8917,6 +9088,7 @@ updateCancelJobButton(false);
     await refreshStatus();
     await refreshAccount({ quiet: true });
     await refreshUsers({ quiet: true });
+    await refreshAudit({ quiet: true });
     try {
       await refreshSystemHealth();
     } catch {

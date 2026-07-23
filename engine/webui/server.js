@@ -27,6 +27,9 @@ const USER_STORE_PATH = process.env.SAGEWRITE_USERS_FILE
 const USER_BILLING_LEDGER_PATH = process.env.SAGEWRITE_BILLING_LEDGER_FILE
   ? path.resolve(process.env.SAGEWRITE_BILLING_LEDGER_FILE)
   : path.join(path.dirname(USER_STORE_PATH), "billing-ledger.jsonl");
+const USER_AUDIT_LOG_PATH = process.env.SAGEWRITE_AUDIT_LOG_FILE
+  ? path.resolve(process.env.SAGEWRITE_AUDIT_LOG_FILE)
+  : path.join(path.dirname(USER_STORE_PATH), "audit-log.jsonl");
 const USER_WORKSPACE_ROOT = process.env.SAGEWRITE_USER_WORKSPACE_ROOT
   ? path.resolve(process.env.SAGEWRITE_USER_WORKSPACE_ROOT)
   : path.join(WORKSPACE_PARENT_ROOT, "users");
@@ -694,6 +697,7 @@ function getAuthDetails() {
     userAuthEnabled: isUserAuthEnabled(),
     userStorePath: isUserAuthEnabled() ? USER_STORE_PATH : "",
     userWorkspaceRoot: isUserAuthEnabled() ? USER_WORKSPACE_ROOT : "",
+    auditLogPath: isUserAuthEnabled() ? USER_AUDIT_LOG_PATH : "",
     billing: getBillingConfigPublic()
   };
 }
@@ -1093,6 +1097,126 @@ function readJsonLines(filePath) {
       }
     })
     .filter(Boolean);
+}
+
+function getRequestIp(req) {
+  const forwarded = String(req?.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req?.socket?.remoteAddress || "";
+}
+
+function getAuditUserInfo(user) {
+  if (!user) {
+    return null;
+  }
+  return {
+    id: user.id || "",
+    username: user.username || "",
+    displayName: user.displayName || user.username || "",
+    role: user.role || ""
+  };
+}
+
+function sanitizeAuditData(data) {
+  if (!data || typeof data !== "object") {
+    return {};
+  }
+  try {
+    const raw = JSON.stringify(data);
+    if (raw.length > 3000) {
+      return {
+        truncated: true,
+        preview: raw.slice(0, 3000)
+      };
+    }
+    return JSON.parse(raw);
+  } catch {
+    return {
+      summary: String(data).slice(0, 500)
+    };
+  }
+}
+
+function recordAuditEvent(action, details = {}) {
+  if (!isUserAuthEnabled()) {
+    return null;
+  }
+  try {
+    const actorSource = Object.hasOwn(details, "actor") ? details.actor : getCurrentUserContext();
+    const actor = getAuditUserInfo(actorSource);
+    const targetUser = getAuditUserInfo(details.targetUser || null);
+    const event = {
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+      action: String(action || "unknown"),
+      status: details.status || "success",
+      actorUserId: actor?.id || "",
+      actorUsername: actor?.username || "",
+      actorRole: actor?.role || "",
+      targetUserId: targetUser?.id || details.targetUserId || "",
+      targetUsername: targetUser?.username || details.targetUsername || "",
+      route: details.route || "",
+      bookName: details.bookName || "",
+      jobId: details.jobId || "",
+      ip: details.req ? getRequestIp(details.req) : "",
+      userAgent: details.req ? String(details.req.headers?.["user-agent"] || "").slice(0, 240) : "",
+      message: String(details.message || "").slice(0, 500),
+      data: sanitizeAuditData(details.data)
+    };
+    appendJsonLine(USER_AUDIT_LOG_PATH, event);
+    return event;
+  } catch {
+    return null;
+  }
+}
+
+function getAuditEvents({ limit = 100, action = "", user = "", status = "" } = {}) {
+  if (!isUserAuthEnabled()) {
+    return [];
+  }
+  const safeLimit = Math.min(300, Math.max(1, Math.round(Number(limit) || 100)));
+  const actionFilter = String(action || "").trim().toLowerCase();
+  const userFilter = String(user || "").trim().toLowerCase();
+  const statusFilter = String(status || "").trim().toLowerCase();
+  return readJsonLines(USER_AUDIT_LOG_PATH)
+    .filter((event) => {
+      if (actionFilter && String(event.action || "").toLowerCase() !== actionFilter) {
+        return false;
+      }
+      if (statusFilter && String(event.status || "").toLowerCase() !== statusFilter) {
+        return false;
+      }
+      if (!userFilter) {
+        return true;
+      }
+      return [
+        event.actorUserId,
+        event.actorUsername,
+        event.targetUserId,
+        event.targetUsername,
+        event.bookName,
+        event.jobId
+      ].some((value) => String(value || "").toLowerCase().includes(userFilter));
+    })
+    .slice(-safeLimit)
+    .reverse()
+    .map((event) => ({
+      id: event.id || "",
+      createdAt: event.createdAt || "",
+      action: event.action || "",
+      status: event.status || "",
+      actorUserId: event.actorUserId || "",
+      actorUsername: event.actorUsername || "",
+      actorRole: event.actorRole || "",
+      targetUserId: event.targetUserId || "",
+      targetUsername: event.targetUsername || "",
+      route: event.route || "",
+      bookName: event.bookName || "",
+      jobId: event.jobId || "",
+      ip: event.ip || "",
+      userAgent: event.userAgent || "",
+      message: event.message || "",
+      data: event.data && typeof event.data === "object" ? event.data : {}
+    }));
 }
 
 function listFilesByExtensions(dirPath, extensions) {
@@ -3725,6 +3849,19 @@ function createJob(meta) {
   });
   jobs.set(id, job);
   initializeJobPersistence(job, createdDate);
+  recordAuditEvent("job.start", {
+    actor: currentUser,
+    targetUser: currentUser,
+    status: "running",
+    route: job.meta.route || "",
+    bookName: job.meta.bookName || "",
+    jobId: job.id,
+    message: `Started ${job.meta.route || "job"} for ${job.meta.bookName || ""}.`,
+    data: {
+      route: job.meta.route || "",
+      bookName: job.meta.bookName || ""
+    }
+  });
   return job;
 }
 
@@ -3758,6 +3895,28 @@ function finishJob(job, exitCode) {
   if (billing) {
     appendJobLifecycleLine(job, `Billing recorded. Tokens: ${billing.event.usage.total_tokens}. Credits: ${billing.event.chargedCredits}. Balance: ${billing.billing.balanceCredits}.`);
   }
+  recordAuditEvent("job.finish", {
+    actor: {
+      id: job.meta?.userId || "",
+      username: job.meta?.username || "",
+      role: ""
+    },
+    targetUser: {
+      id: job.meta?.userId || "",
+      username: job.meta?.username || "",
+      role: ""
+    },
+    status: job.status,
+    route: job.meta?.route || "",
+    bookName: job.meta?.bookName || "",
+    jobId: job.id,
+    message: `Finished ${job.meta?.route || "job"} with status ${job.status}.`,
+    data: {
+      exitCode: job.exitCode,
+      chargedCredits: billing?.event?.chargedCredits || 0,
+      totalTokens: billing?.event?.usage?.total_tokens || 0
+    }
+  });
   appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: ${job.status}. Exit code: ${job.exitCode}.`);
   archiveJobOutput(job);
   persistJobState(job);
@@ -3779,6 +3938,28 @@ function failJob(job, error) {
   if (billing) {
     appendJobLifecycleLine(job, `Billing recorded. Tokens: ${billing.event.usage.total_tokens}. Credits: ${billing.event.chargedCredits}. Balance: ${billing.billing.balanceCredits}.`);
   }
+  recordAuditEvent("job.finish", {
+    actor: {
+      id: job.meta?.userId || "",
+      username: job.meta?.username || "",
+      role: ""
+    },
+    targetUser: {
+      id: job.meta?.userId || "",
+      username: job.meta?.username || "",
+      role: ""
+    },
+    status: "failed",
+    route: job.meta?.route || "",
+    bookName: job.meta?.bookName || "",
+    jobId: job.id,
+    message: error.message,
+    data: {
+      exitCode: job.exitCode,
+      chargedCredits: billing?.event?.chargedCredits || 0,
+      totalTokens: billing?.event?.usage?.total_tokens || 0
+    }
+  });
   appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: failed. Exit code: -1.`);
   archiveJobOutput(job);
   persistJobState(job);
@@ -3819,6 +4000,22 @@ function cancelJob(job) {
   job.child = null;
   job.childPid = null;
   appendJobLifecycleLine(job, `Run cancelled. Job ID: ${job.id}.`);
+  recordAuditEvent("job.cancel", {
+    actor: getCurrentUserContext(),
+    targetUser: {
+      id: job.meta?.userId || "",
+      username: job.meta?.username || "",
+      role: ""
+    },
+    status: "cancelled",
+    route: job.meta?.route || "",
+    bookName: job.meta?.bookName || "",
+    jobId: job.id,
+    message: `Cancelled ${job.meta?.route || "job"}.`,
+    data: {
+      exitCode: job.exitCode
+    }
+  });
   archiveJobOutput(job);
   persistJobState(job);
   return job;
@@ -4744,16 +4941,39 @@ const server = http.createServer(async (req, res) => {
         const username = typeof body.username === "string" ? body.username : "";
         const user = findUserByUsername(username);
         if (!user || !verifyPassword(password, user.password)) {
+          recordAuditEvent("auth.login.failed", {
+            req,
+            actor: null,
+            status: "failed",
+            message: "Invalid username or password.",
+            data: {
+              username: normalizeUsername(username)
+            }
+          });
           sendJson(res, 401, { error: "Invalid username or password.", authRequired: true });
           return;
         }
         if (user.disabled) {
+          recordAuditEvent("auth.login.disabled", {
+            req,
+            actor: null,
+            targetUser: user,
+            status: "failed",
+            message: "Disabled user attempted to login."
+          });
           sendJson(res, 403, { error: "User account is disabled.", authRequired: true });
           return;
         }
         const userWorkspaceRoot = getUserWorkspaceRoot(user);
         ensureDir(userWorkspaceRoot);
         const token = createSession(user);
+        recordAuditEvent("auth.login.success", {
+          req,
+          actor: user,
+          targetUser: user,
+          status: "success",
+          message: "User logged in."
+        });
         res.writeHead(200, {
           "Content-Type": "application/json; charset=utf-8",
           "Cache-Control": "no-store",
@@ -4791,6 +5011,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && url.pathname === "/api/auth/logout") {
     const token = parseCookies(req)[SESSION_COOKIE];
+    const user = getAuthenticatedUserFromRequest(req);
+    if (user) {
+      recordAuditEvent("auth.logout", {
+        req,
+        actor: user,
+        targetUser: user,
+        status: "success",
+        message: "User logged out."
+      });
+    }
     if (token) {
       sessions.delete(token);
     }
@@ -4864,6 +5094,13 @@ const server = http.createServer(async (req, res) => {
       const currentToken = parseCookies(req)[SESSION_COOKIE];
       const user = changeOwnPassword(getCurrentUserContext().id, body.currentPassword, body.newPassword);
       deleteSessionsForUser(user.id, currentToken);
+      recordAuditEvent("account.password.change", {
+        req,
+        actor: user,
+        targetUser: user,
+        status: "success",
+        message: "User changed own password."
+      });
       sendJson(res, 200, { user });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -4888,13 +5125,37 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/api/users") {
+  if (req.method === "GET" && url.pathname === "/api/admin/audit") {
     try {
       if (!isUserAuthEnabled()) {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
       assertCurrentUserIsAdmin();
+      const events = getAuditEvents({
+        limit: url.searchParams.get("limit") || 100,
+        action: url.searchParams.get("action") || "",
+        user: url.searchParams.get("user") || "",
+        status: url.searchParams.get("status") || ""
+      });
+      sendJson(res, 200, {
+        events,
+        total: events.length,
+        path: canCurrentUserSeeServerPaths() ? USER_AUDIT_LOG_PATH : ""
+      });
+    } catch (error) {
+      sendJson(res, error.message === "Admin permission is required." ? 403 : 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/users") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      const adminUser = assertCurrentUserIsAdmin();
       const body = await readJsonBody(req, 100_000);
       const user = createUserAccount({
         username: body.username,
@@ -4902,6 +5163,17 @@ const server = http.createServer(async (req, res) => {
         displayName: body.displayName,
         role: body.role,
         initialCredits: body.initialCredits
+      });
+      recordAuditEvent("user.create", {
+        req,
+        actor: adminUser,
+        targetUser: user,
+        status: "success",
+        message: `Created user ${user.username}.`,
+        data: {
+          role: user.role,
+          initialCredits: user.billing?.initialCredits || 0
+        }
       });
       sendJson(res, 201, { user });
     } catch (error) {
@@ -4951,6 +5223,18 @@ const server = http.createServer(async (req, res) => {
         note: body.note,
         adminUser
       });
+      recordAuditEvent("billing.adjust", {
+        req,
+        actor: adminUser,
+        targetUser: result.user,
+        status: "success",
+        message: `Adjusted credits for ${result.user.username}.`,
+        data: {
+          creditDelta: result.event.creditDelta,
+          balanceCredits: result.billing.balanceCredits,
+          note: result.event.note || ""
+        }
+      });
       sendJson(res, 200, {
         user: result.user,
         billing: result.billing,
@@ -4970,10 +5254,17 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      assertCurrentUserIsAdmin();
+      const adminUser = assertCurrentUserIsAdmin();
       const body = await readJsonBody(req, 100_000);
       const user = resetUserPassword(decodeURIComponent(userPasswordMatch[1]), body.password);
       deleteSessionsForUser(user.id, parseCookies(req)[SESSION_COOKIE]);
+      recordAuditEvent("user.password.reset", {
+        req,
+        actor: adminUser,
+        targetUser: user,
+        status: "success",
+        message: `Reset password for ${user.username}.`
+      });
       sendJson(res, 200, { user });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
@@ -4988,7 +5279,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      assertCurrentUserIsAdmin();
+      const adminUser = assertCurrentUserIsAdmin();
       const body = await readJsonBody(req, 100_000);
       const updates = {};
       if (Object.hasOwn(body, "role")) {
@@ -5006,6 +5297,14 @@ const server = http.createServer(async (req, res) => {
       if (user.disabled) {
         deleteSessionsForUser(user.id);
       }
+      recordAuditEvent("user.update", {
+        req,
+        actor: adminUser,
+        targetUser: user,
+        status: "success",
+        message: `Updated user ${user.username}.`,
+        data: updates
+      });
       sendJson(res, 200, { user });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
