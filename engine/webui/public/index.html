@@ -14,13 +14,13 @@
             <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
           </div>
           <div class="hero-copy-block">
-            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-single-user</span></p>
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-multi-user-foundation</span></p>
             <h1>写作引擎 Web 控制台</h1>
             <p class="hero-copy">
               用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
             </p>
             <p class="release-note">
-              当前版本是单用户本地/个人云独立版；多人账号、用户隔离和多用户云系统从后续版本开始。
+              当前开发分支已进入多用户基础阶段：账号登录、用户工作区隔离和用户归属任务已开始接入。
             </p>
           </div>
         </div>
@@ -39,6 +39,11 @@
           <div class="status-card">
             <span>工作区数量</span>
             <strong id="workspace-count">0</strong>
+          </div>
+          <div class="status-card current-user-card">
+            <span>当前用户</span>
+            <strong id="current-user-name">单用户</strong>
+            <small id="current-user-workspace" class="status-card-hint">工作区路径未加载</small>
           </div>
           <div class="status-card system-health-card" id="system-health-card">
             <div class="system-health-heading">

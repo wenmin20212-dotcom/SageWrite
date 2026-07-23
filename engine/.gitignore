@@ -3,3 +3,5 @@ logs/web-service/
 __pycache__/
 screenshots/
 release-packages/
+data/users.json
+data/*.users.json

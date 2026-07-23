@@ -3,11 +3,14 @@ param(
     [string]$HostName,
     [ValidateSet("local", "cloud")]
     [string]$Mode,
-    [ValidateSet("off", "password")]
+    [ValidateSet("off", "password", "users")]
     [string]$AuthMode,
+    [string]$AdminUser,
     [string]$AdminPassword,
     [string]$OpenAIKey,
     [string]$WorkspaceRoot,
+    [string]$UsersFile,
+    [string]$UserWorkspaceRoot,
     [string]$ConfigPath,
     [switch]$OpenBrowser
 )
@@ -88,9 +91,12 @@ $EffectivePort = [int](Resolve-Setting -ParameterName "Port" -Config $Config -Co
 $EffectiveHostName = [string](Resolve-Setting -ParameterName "HostName" -Config $Config -ConfigKey "HostName" -Default "127.0.0.1")
 $EffectiveMode = [string](Resolve-Setting -ParameterName "Mode" -Config $Config -ConfigKey "Mode" -Default "")
 $EffectiveAuthMode = [string](Resolve-Setting -ParameterName "AuthMode" -Config $Config -ConfigKey "AuthMode" -Default "")
+$EffectiveAdminUser = [string](Resolve-Setting -ParameterName "AdminUser" -Config $Config -ConfigKey "AdminUser" -Default "")
 $EffectiveAdminPassword = [string](Resolve-Setting -ParameterName "AdminPassword" -Config $Config -ConfigKey "AdminPassword" -Default "")
 $EffectiveOpenAIKey = [string](Resolve-Setting -ParameterName "OpenAIKey" -Config $Config -ConfigKey "OpenAIKey" -Default "")
 $EffectiveWorkspaceRoot = [string](Resolve-Setting -ParameterName "WorkspaceRoot" -Config $Config -ConfigKey "WorkspaceRoot" -Default "")
+$EffectiveUsersFile = [string](Resolve-Setting -ParameterName "UsersFile" -Config $Config -ConfigKey "UsersFile" -Default "")
+$EffectiveUserWorkspaceRoot = [string](Resolve-Setting -ParameterName "UserWorkspaceRoot" -Config $Config -ConfigKey "UserWorkspaceRoot" -Default "")
 $EffectiveOpenBrowser = Resolve-BoolSetting -ParameterName "OpenBrowser" -Config $Config -ConfigKey "OpenBrowser" -Default $false
 
 if ($EffectivePort -lt 1 -or $EffectivePort -gt 65535) {
@@ -107,19 +113,27 @@ if ($EffectiveMode -notin @("local", "cloud")) {
 if ([string]::IsNullOrWhiteSpace($EffectiveAuthMode)) {
     $EffectiveAuthMode = if ($env:SAGEWRITE_AUTH) { $env:SAGEWRITE_AUTH } else { "off" }
 }
-if ($EffectiveAuthMode -notin @("off", "password")) {
-    throw "AuthMode must be off or password."
+if ($EffectiveAuthMode -notin @("off", "password", "users")) {
+    throw "AuthMode must be off, password, or users."
 }
-if ($EffectiveAuthMode -eq "password" -and [string]::IsNullOrWhiteSpace($EffectiveAdminPassword) -and [string]::IsNullOrWhiteSpace($env:SAGEWRITE_ADMIN_PASSWORD)) {
-    throw "AuthMode is password, but AdminPassword and SAGEWRITE_ADMIN_PASSWORD are both empty."
+if ($EffectiveAuthMode -in @("password", "users") -and [string]::IsNullOrWhiteSpace($EffectiveAdminPassword) -and [string]::IsNullOrWhiteSpace($env:SAGEWRITE_ADMIN_PASSWORD)) {
+    throw "AuthMode requires a password, but AdminPassword and SAGEWRITE_ADMIN_PASSWORD are both empty."
 }
-if ($EffectiveMode -eq "cloud" -and $EffectiveAuthMode -ne "password") {
-    Write-Warning "Cloud mode is starting without password login. Set AuthMode='password' before exposing this server."
+if ($EffectiveMode -eq "cloud" -and $EffectiveAuthMode -eq "off") {
+    Write-Warning "Cloud mode is starting without login protection. Use AuthMode='password' or AuthMode='users' before exposing this server."
 }
 
 if (-not [string]::IsNullOrWhiteSpace($EffectiveWorkspaceRoot)) {
     $EffectiveWorkspaceRoot = [System.IO.Path]::GetFullPath($EffectiveWorkspaceRoot)
     New-Item -ItemType Directory -Force -Path $EffectiveWorkspaceRoot | Out-Null
+}
+if (-not [string]::IsNullOrWhiteSpace($EffectiveUsersFile)) {
+    $EffectiveUsersFile = [System.IO.Path]::GetFullPath($EffectiveUsersFile)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $EffectiveUsersFile) | Out-Null
+}
+if (-not [string]::IsNullOrWhiteSpace($EffectiveUserWorkspaceRoot)) {
+    $EffectiveUserWorkspaceRoot = [System.IO.Path]::GetFullPath($EffectiveUserWorkspaceRoot)
+    New-Item -ItemType Directory -Force -Path $EffectiveUserWorkspaceRoot | Out-Null
 }
 
 Push-Location $WebRoot
@@ -131,6 +145,9 @@ try {
     $env:SAGEWRITE_HOST = $EffectiveHostName
     $env:SAGEWRITE_MODE = $EffectiveMode
     $env:SAGEWRITE_AUTH = $EffectiveAuthMode
+    if (-not [string]::IsNullOrWhiteSpace($EffectiveAdminUser)) {
+        $env:SAGEWRITE_ADMIN_USER = $EffectiveAdminUser
+    }
     if (-not [string]::IsNullOrWhiteSpace($EffectiveAdminPassword)) {
         $env:SAGEWRITE_ADMIN_PASSWORD = $EffectiveAdminPassword
     }
@@ -139,6 +156,12 @@ try {
     }
     if (-not [string]::IsNullOrWhiteSpace($EffectiveWorkspaceRoot)) {
         $env:SAGEWRITE_WORKSPACE_ROOT = $EffectiveWorkspaceRoot
+    }
+    if (-not [string]::IsNullOrWhiteSpace($EffectiveUsersFile)) {
+        $env:SAGEWRITE_USERS_FILE = $EffectiveUsersFile
+    }
+    if (-not [string]::IsNullOrWhiteSpace($EffectiveUserWorkspaceRoot)) {
+        $env:SAGEWRITE_USER_WORKSPACE_ROOT = $EffectiveUserWorkspaceRoot
     }
 
     $BrowserHost = if ($EffectiveHostName -eq "0.0.0.0") { "127.0.0.1" } else { $EffectiveHostName }
@@ -150,8 +173,11 @@ try {
     Write-Host "  Port: $EffectivePort"
     Write-Host "  Mode: $EffectiveMode"
     Write-Host "  AuthMode: $EffectiveAuthMode"
+    Write-Host "  AdminUser: $($EffectiveAdminUser -replace '^$', '(default admin)')"
     Write-Host "  OpenAIKey: $(if (-not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { 'configured' } else { 'missing' })"
     Write-Host "  WorkspaceRoot: $($EffectiveWorkspaceRoot -replace '^$', '(default)')"
+    Write-Host "  UsersFile: $($EffectiveUsersFile -replace '^$', '(default)')"
+    Write-Host "  UserWorkspaceRoot: $($EffectiveUserWorkspaceRoot -replace '^$', '(default)')"
     Write-Host "  LocalUrl: $Url"
 
     if ($EffectiveOpenBrowser) {

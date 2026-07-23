@@ -4,7 +4,8 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
-const { createHash, randomBytes, randomUUID, timingSafeEqual } = require("node:crypto");
+const { AsyncLocalStorage } = require("node:async_hooks");
+const { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } = require("node:crypto");
 const { URL } = require("node:url");
 
 const PORT = Number(process.env.PORT || process.env.SAGEWRITE_PORT || 3210);
@@ -14,20 +15,34 @@ const APP_MODE = String(process.env.SAGEWRITE_MODE || (HOST === "0.0.0.0" ? "clo
   : "local";
 const AUTH_MODE = String(process.env.SAGEWRITE_AUTH || "off").toLowerCase();
 const ADMIN_PASSWORD = process.env.SAGEWRITE_ADMIN_PASSWORD || "";
+const ADMIN_USER = String(process.env.SAGEWRITE_ADMIN_USER || "admin").trim() || "admin";
 const ENGINE_ROOT = path.resolve(__dirname, "..");
 const CLAW_ROOT = path.resolve(ENGINE_ROOT, "..", "..");
 const WORKSPACE_PARENT_ROOT = process.env.SAGEWRITE_WORKSPACE_ROOT
   ? path.resolve(process.env.SAGEWRITE_WORKSPACE_ROOT)
   : CLAW_ROOT;
+const USER_STORE_PATH = process.env.SAGEWRITE_USERS_FILE
+  ? path.resolve(process.env.SAGEWRITE_USERS_FILE)
+  : path.join(ENGINE_ROOT, "data", "users.json");
+const USER_WORKSPACE_ROOT = process.env.SAGEWRITE_USER_WORKSPACE_ROOT
+  ? path.resolve(process.env.SAGEWRITE_USER_WORKSPACE_ROOT)
+  : path.join(WORKSPACE_PARENT_ROOT, "users");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const jobs = new Map();
 const sessions = new Map();
+const requestContext = new AsyncLocalStorage();
 const SESSION_COOKIE = "sagewrite_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const PASSWORD_ALGORITHM = "pbkdf2-sha256";
+const PASSWORD_ITERATIONS = 120_000;
 
 function isAuthEnabled() {
-  return AUTH_MODE === "password";
+  return AUTH_MODE === "password" || AUTH_MODE === "users";
+}
+
+function isUserAuthEnabled() {
+  return AUTH_MODE === "users";
 }
 
 function hashValue(value) {
@@ -40,6 +55,210 @@ function safeEqualText(left, right) {
   return leftHash.length === rightHash.length && timingSafeEqual(leftHash, rightHash);
 }
 
+function normalizeUsername(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function makeUserId(username) {
+  const normalized = normalizeUsername(username);
+  const readable = normalized.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 42);
+  const suffix = createHash("sha256").update(normalized).digest("hex").slice(0, 10);
+  return `${readable || "user"}-${suffix}`;
+}
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString("hex");
+  const hash = pbkdf2Sync(String(password), salt, PASSWORD_ITERATIONS, 32, "sha256").toString("hex");
+  return {
+    algorithm: PASSWORD_ALGORITHM,
+    iterations: PASSWORD_ITERATIONS,
+    salt,
+    hash
+  };
+}
+
+function verifyPassword(password, passwordRecord) {
+  if (!passwordRecord || passwordRecord.algorithm !== PASSWORD_ALGORITHM) {
+    return false;
+  }
+  const iterations = Number(passwordRecord.iterations || PASSWORD_ITERATIONS);
+  const actual = pbkdf2Sync(String(password), String(passwordRecord.salt || ""), iterations, 32, "sha256");
+  const expected = Buffer.from(String(passwordRecord.hash || ""), "hex");
+  return expected.length === actual.length && timingSafeEqual(actual, expected);
+}
+
+function readUserStore() {
+  if (!fs.existsSync(USER_STORE_PATH)) {
+    return null;
+  }
+  const store = JSON.parse(fs.readFileSync(USER_STORE_PATH, "utf8").replace(/^\uFEFF/, ""));
+  return {
+    version: store.version || 1,
+    createdAt: store.createdAt || "",
+    updatedAt: store.updatedAt || store.createdAt || "",
+    users: Array.isArray(store.users) ? store.users : []
+  };
+}
+
+function writeUserStore(store) {
+  ensureDir(path.dirname(USER_STORE_PATH));
+  const nextStore = {
+    ...store,
+    version: 1,
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(USER_STORE_PATH, `${JSON.stringify(nextStore, null, 2)}\n`, "utf8");
+  return nextStore;
+}
+
+function ensureUserStore() {
+  let store = readUserStore();
+  if (store) {
+    return store;
+  }
+
+  if (!ADMIN_PASSWORD) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const adminUsername = normalizeUsername(ADMIN_USER);
+  store = {
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+    users: [{
+      id: makeUserId(adminUsername),
+      username: adminUsername,
+      displayName: ADMIN_USER,
+      role: "admin",
+      password: hashPassword(ADMIN_PASSWORD),
+      createdAt: now,
+      workspaceRoot: ""
+    }]
+  };
+  return writeUserStore(store);
+}
+
+function getUserPublic(user) {
+  if (!user) {
+    return null;
+  }
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName || user.username,
+    role: user.role || "user",
+    workspaceRoot: getUserWorkspaceRoot(user)
+  };
+}
+
+function findUserByUsername(username) {
+  const store = ensureUserStore();
+  if (!store) {
+    return null;
+  }
+  const normalized = normalizeUsername(username);
+  return store.users.find((user) => normalizeUsername(user.username) === normalized) || null;
+}
+
+function validateUsername(username) {
+  const normalized = normalizeUsername(username);
+  if (!normalized) {
+    throw new Error("username is required.");
+  }
+  if (!/^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$/.test(normalized)) {
+    throw new Error("username must be 3-64 chars and use letters, numbers, dot, underscore, or hyphen.");
+  }
+  return normalized;
+}
+
+function createUserAccount({ username, password, displayName = "", role = "user" }) {
+  const normalized = validateUsername(username);
+  if (!password || String(password).length < 8) {
+    throw new Error("password must be at least 8 characters.");
+  }
+  const nextRole = role === "admin" ? "admin" : "user";
+  const store = ensureUserStore() || {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    users: []
+  };
+  if (store.users.some((user) => normalizeUsername(user.username) === normalized)) {
+    throw new Error("username already exists.");
+  }
+  const now = new Date().toISOString();
+  const user = {
+    id: makeUserId(normalized),
+    username: normalized,
+    displayName: String(displayName || username).trim() || normalized,
+    role: nextRole,
+    password: hashPassword(password),
+    createdAt: now,
+    workspaceRoot: ""
+  };
+  store.users.push(user);
+  writeUserStore(store);
+  ensureDir(getUserWorkspaceRoot(user));
+  return getUserPublic(user);
+}
+
+function getLegacyUserContext(mode = "local") {
+  return {
+    id: mode === "password" ? "admin" : "single-user",
+    username: mode === "password" ? "admin" : "single-user",
+    displayName: mode === "password" ? "Admin" : "Single User",
+    role: "admin",
+    authMode: mode,
+    workspaceRoot: WORKSPACE_PARENT_ROOT,
+    legacy: true
+  };
+}
+
+function getUserWorkspaceRoot(user) {
+  if (!isUserAuthEnabled()) {
+    return WORKSPACE_PARENT_ROOT;
+  }
+  if (user?.workspaceRoot && path.isAbsolute(user.workspaceRoot)) {
+    return path.resolve(user.workspaceRoot);
+  }
+  const userId = user?.id || "unknown-user";
+  return path.join(USER_WORKSPACE_ROOT, userId);
+}
+
+function getCurrentUserContext() {
+  const store = requestContext.getStore();
+  if (store?.user) {
+    return store.user;
+  }
+  if (AUTH_MODE === "password") {
+    return getLegacyUserContext("password");
+  }
+  return getLegacyUserContext("local");
+}
+
+function getWorkspaceParentRoot() {
+  return getCurrentUserContext().workspaceRoot || WORKSPACE_PARENT_ROOT;
+}
+
+function getAuthDetails() {
+  return {
+    authMode: AUTH_MODE,
+    authEnabled: isAuthEnabled(),
+    userAuthEnabled: isUserAuthEnabled(),
+    userStorePath: isUserAuthEnabled() ? USER_STORE_PATH : "",
+    userWorkspaceRoot: isUserAuthEnabled() ? USER_WORKSPACE_ROOT : ""
+  };
+}
+
+function assertCurrentUserIsAdmin() {
+  const user = getCurrentUserContext();
+  if (!user || user.role !== "admin") {
+    throw new Error("Admin permission is required.");
+  }
+  return user;
+}
+
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   return Object.fromEntries(header.split(";").map((part) => {
@@ -48,11 +267,17 @@ function parseCookies(req) {
   }).filter(([name]) => name));
 }
 
-function createSession() {
+function createSession(user) {
   const token = randomBytes(32).toString("hex");
+  const publicUser = getUserPublic(user);
   sessions.set(token, {
     createdAt: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL_MS
+    expiresAt: Date.now() + SESSION_TTL_MS,
+    user: publicUser ? {
+      ...publicUser,
+      authMode: AUTH_MODE,
+      workspaceRoot: user?.workspaceRoot || publicUser.workspaceRoot
+    } : null
   });
   return token;
 }
@@ -80,6 +305,17 @@ function getValidSession(req) {
   return { token, session };
 }
 
+function getAuthenticatedUserFromRequest(req) {
+  if (!isAuthEnabled()) {
+    return getLegacyUserContext("local");
+  }
+  const valid = getValidSession(req);
+  if (valid?.session?.user) {
+    return valid.session.user;
+  }
+  return null;
+}
+
 function isLoginRequest(method, pathname) {
   return pathname === "/login.html" ||
     pathname === "/api/auth/status" ||
@@ -96,12 +332,15 @@ function redirectToLogin(res) {
 
 function requireAuth(req, res, url) {
   if (!isAuthEnabled()) {
+    req.sagewriteUser = getLegacyUserContext("local");
     return true;
   }
   if (isLoginRequest(req.method, url.pathname)) {
     return true;
   }
-  if (getValidSession(req)) {
+  const user = getAuthenticatedUserFromRequest(req);
+  if (user) {
+    req.sagewriteUser = user;
     return true;
   }
   if (url.pathname.startsWith("/api/")) {
@@ -123,17 +362,20 @@ function assertLocalOpenAllowed() {
 }
 
 function getChildProcessEnv() {
+  const workspaceParentRoot = getWorkspaceParentRoot();
   return {
     ...process.env,
     SAGEWRITE_MODE: APP_MODE,
     SAGEWRITE_HOST: HOST,
     SAGEWRITE_PORT: String(PORT),
-    SAGEWRITE_WORKSPACE_ROOT: WORKSPACE_PARENT_ROOT
+    SAGEWRITE_WORKSPACE_ROOT: workspaceParentRoot,
+    SAGEWRITE_USER_ID: getCurrentUserContext().id || "",
+    SAGEWRITE_USERNAME: getCurrentUserContext().username || ""
   };
 }
 
 function getWorkspacePaths(bookName) {
-  const workspacePath = path.join(WORKSPACE_PARENT_ROOT, `workspace-${bookName}`);
+  const workspacePath = path.join(getWorkspaceParentRoot(), `workspace-${bookName}`);
   const bookRoot = path.join(workspacePath, "sagewrite", "book");
   const logRoot = path.join(bookRoot, "logs");
   const outputRoot = path.join(bookRoot, "04_output");
@@ -2334,17 +2576,20 @@ function runCommandHealthCheck({ id, label, command, args = [], required = true,
 }
 
 function checkWorkspaceRootHealth() {
+  const workspaceParentRoot = getWorkspaceParentRoot();
   const details = {
-    workspaceParentRoot: WORKSPACE_PARENT_ROOT
+    workspaceParentRoot,
+    globalWorkspaceParentRoot: WORKSPACE_PARENT_ROOT,
+    currentUser: getUserPublic(getCurrentUserContext())
   };
-  if (!fs.existsSync(WORKSPACE_PARENT_ROOT)) {
+  if (!fs.existsSync(workspaceParentRoot)) {
     return makeHealthCheck("workspaceRoot", "工作区根目录", "fail", "工作区根目录不存在。", details);
   }
-  if (!fs.statSync(WORKSPACE_PARENT_ROOT).isDirectory()) {
+  if (!fs.statSync(workspaceParentRoot).isDirectory()) {
     return makeHealthCheck("workspaceRoot", "工作区根目录", "fail", "工作区根目录不是文件夹。", details);
   }
 
-  const probePath = path.join(WORKSPACE_PARENT_ROOT, `.sagewrite-health-${process.pid}-${Date.now()}.tmp`);
+  const probePath = path.join(workspaceParentRoot, `.sagewrite-health-${process.pid}-${Date.now()}.tmp`);
   try {
     fs.writeFileSync(probePath, "ok", "utf8");
     fs.readFileSync(probePath, "utf8");
@@ -2405,10 +2650,22 @@ function buildSystemHealthReport() {
     "登录保护",
     APP_MODE === "cloud" && !isAuthEnabled() ? "warn" : "pass",
     APP_MODE === "cloud" && !isAuthEnabled()
-      ? "当前是 cloud 模式但未启用密码登录；对外开放前必须配置 SAGEWRITE_AUTH=password。"
-      : isAuthEnabled() ? "密码登录已启用。" : "本地模式未启用登录保护。",
-    { authEnabled: isAuthEnabled(), authMode: AUTH_MODE }
+      ? "当前是 cloud 模式但未启用登录保护；对外开放前必须配置 SAGEWRITE_AUTH=password 或 SAGEWRITE_AUTH=users。"
+      : isUserAuthEnabled() ? "多用户账号登录已启用。" : isAuthEnabled() ? "密码登录已启用。" : "本地模式未启用登录保护。",
+    getAuthDetails()
   ));
+  if (isUserAuthEnabled()) {
+    const store = ensureUserStore();
+    checks.push(makeHealthCheck(
+      "userStore",
+      "用户库",
+      store && store.users.length ? "pass" : "fail",
+      store && store.users.length
+        ? `用户库可用，当前有 ${store.users.length} 个用户。`
+        : "用户库不存在或没有用户；设置 SAGEWRITE_ADMIN_PASSWORD 后重启可自动创建 admin 用户。",
+      { userStorePath: USER_STORE_PATH, userCount: store?.users?.length || 0 }
+    ));
+  }
   checks.push(checkWorkspaceRootHealth());
 
   const failCount = checks.filter((item) => item.status === "fail").length;
@@ -2661,20 +2918,31 @@ function readRunningWebJobs(webJobRoot) {
 }
 
 function findRunningJob(bookName) {
+  const currentUserId = getCurrentUserContext().id;
   const matches = Array.from(jobs.values())
-    .filter((job) => job.status === "running" && (!bookName || job.meta?.bookName === bookName))
+    .filter((job) => job.status === "running" &&
+      (!isUserAuthEnabled() || job.meta?.userId === currentUserId) &&
+      (!bookName || job.meta?.bookName === bookName))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   return matches[matches.length - 1] || null;
+}
+
+function doesJobBelongToCurrentUser(job) {
+  if (!job || !isUserAuthEnabled()) {
+    return true;
+  }
+  return job.meta?.userId === getCurrentUserContext().id;
 }
 
 function readPersistedJobById(jobId, bookName = "") {
   if (!jobId) {
     return null;
   }
+  const workspaceParentRoot = getWorkspaceParentRoot();
   const workspaceNames = bookName
     ? [`workspace-${bookName}`]
-    : fs.existsSync(WORKSPACE_PARENT_ROOT)
-      ? fs.readdirSync(WORKSPACE_PARENT_ROOT).filter((name) => name.startsWith("workspace-"))
+    : fs.existsSync(workspaceParentRoot)
+      ? fs.readdirSync(workspaceParentRoot).filter((name) => name.startsWith("workspace-"))
       : [];
 
   for (const workspaceName of workspaceNames) {
@@ -2809,15 +3077,16 @@ function readJsonBody(req, maxBytes = 5_000_000) {
 }
 
 function listWorkspaces() {
-  if (!fs.existsSync(WORKSPACE_PARENT_ROOT)) {
+  const workspaceParentRoot = getWorkspaceParentRoot();
+  if (!fs.existsSync(workspaceParentRoot)) {
     return [];
   }
 
-  return fs.readdirSync(WORKSPACE_PARENT_ROOT, { withFileTypes: true })
+  return fs.readdirSync(workspaceParentRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("workspace-"))
     .map((entry) => {
       const bookName = entry.name.replace(/^workspace-/, "");
-      const workspacePath = path.join(WORKSPACE_PARENT_ROOT, entry.name);
+      const workspacePath = path.join(workspaceParentRoot, entry.name);
       const bookRoot = path.join(workspacePath, "sagewrite", "book");
       const objectivePath = path.join(bookRoot, "00_brief", "objective.md");
       const tocPath = path.join(bookRoot, "01_outline", "toc.md");
@@ -2938,13 +3207,19 @@ function serveStatic(reqPath, res) {
 function createJob(meta) {
   const id = randomUUID();
   const createdDate = new Date();
+  const currentUser = getCurrentUserContext();
   const job = {
     id,
     status: "running",
     createdAt: createdDate.toISOString(),
     updatedAt: createdDate.toISOString(),
     timestamp: formatLocalTimestamp(createdDate),
-    meta: { ...(meta || {}) },
+    meta: {
+      ...(meta || {}),
+      userId: currentUser.id || "",
+      username: currentUser.username || "",
+      workspaceParentRoot: getWorkspaceParentRoot()
+    },
     output: "",
     archived: false
   };
@@ -3268,7 +3543,7 @@ function validateAbsoluteFolderPath(folderPath) {
   if (!fs.statSync(resolved).isDirectory()) {
     throw new Error("folderPath must point to a directory.");
   }
-  if (isCloudMode() && !isPathInside(WORKSPACE_PARENT_ROOT, resolved)) {
+  if (isCloudMode() && !isPathInside(getWorkspaceParentRoot(), resolved)) {
     throw new Error("Cloud mode only allows opening folders inside SAGEWRITE_WORKSPACE_ROOT.");
   }
 
@@ -3964,9 +4239,15 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/api/auth/status") {
+    const valid = getValidSession(req);
+    const currentUser = !isAuthEnabled()
+      ? getUserPublic(getLegacyUserContext("local"))
+      : valid?.session?.user || null;
     sendJson(res, 200, {
+      ...getAuthDetails(),
       authEnabled: isAuthEnabled(),
-      authenticated: !isAuthEnabled() || Boolean(getValidSession(req))
+      authenticated: !isAuthEnabled() || Boolean(valid),
+      currentUser
     });
     return;
   }
@@ -3974,26 +4255,51 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/auth/login") {
     try {
       if (!isAuthEnabled()) {
-        sendJson(res, 200, { authenticated: true, authEnabled: false });
-        return;
-      }
-      if (!ADMIN_PASSWORD) {
-        sendJson(res, 500, { error: "SAGEWRITE_ADMIN_PASSWORD is not set." });
+        sendJson(res, 200, { authenticated: true, authEnabled: false, currentUser: getUserPublic(getLegacyUserContext("local")) });
         return;
       }
       const body = await readJsonBody(req, 50_000);
       const password = typeof body.password === "string" ? body.password : "";
+
+      if (isUserAuthEnabled()) {
+        const username = typeof body.username === "string" ? body.username : "";
+        const user = findUserByUsername(username);
+        if (!user || !verifyPassword(password, user.password)) {
+          sendJson(res, 401, { error: "Invalid username or password.", authRequired: true });
+          return;
+        }
+        const userWorkspaceRoot = getUserWorkspaceRoot(user);
+        ensureDir(userWorkspaceRoot);
+        const token = createSession(user);
+        res.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+          "Set-Cookie": `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+        });
+        res.end(JSON.stringify({
+          authenticated: true,
+          authEnabled: true,
+          authMode: AUTH_MODE,
+          currentUser: sessions.get(token)?.user || null
+        }));
+        return;
+      }
+
+      if (!ADMIN_PASSWORD) {
+        sendJson(res, 500, { error: "SAGEWRITE_ADMIN_PASSWORD is not set." });
+        return;
+      }
       if (!safeEqualText(password, ADMIN_PASSWORD)) {
         sendJson(res, 401, { error: "Invalid password.", authRequired: true });
         return;
       }
-      const token = createSession();
+      const token = createSession(getLegacyUserContext("password"));
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
         "Set-Cookie": `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
       });
-      res.end(JSON.stringify({ authenticated: true, authEnabled: true }));
+      res.end(JSON.stringify({ authenticated: true, authEnabled: true, authMode: AUTH_MODE, currentUser: sessions.get(token)?.user || null }));
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
@@ -4017,16 +4323,59 @@ const server = http.createServer(async (req, res) => {
   if (!requireAuth(req, res, url)) {
     return;
   }
+  requestContext.enterWith({ user: req.sagewriteUser || getCurrentUserContext() });
 
   if (req.method === "GET" && url.pathname === "/api/status") {
+    const currentUser = getCurrentUserContext();
     sendJson(res, 200, {
       engineRoot: ENGINE_ROOT,
       clawRoot: CLAW_ROOT,
-      workspaceParentRoot: WORKSPACE_PARENT_ROOT,
+      workspaceParentRoot: getWorkspaceParentRoot(),
+      globalWorkspaceParentRoot: WORKSPACE_PARENT_ROOT,
       appMode: APP_MODE,
+      authMode: AUTH_MODE,
+      currentUser: getUserPublic(currentUser),
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
       workspaces: listWorkspaces()
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/users") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      assertCurrentUserIsAdmin();
+      const store = ensureUserStore();
+      sendJson(res, 200, {
+        users: (store?.users || []).map(getUserPublic)
+      });
+    } catch (error) {
+      sendJson(res, 403, { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/users") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      assertCurrentUserIsAdmin();
+      const body = await readJsonBody(req, 100_000);
+      const user = createUserAccount({
+        username: body.username,
+        password: body.password,
+        displayName: body.displayName,
+        role: body.role
+      });
+      sendJson(res, 201, { user });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
     return;
   }
 
@@ -4719,7 +5068,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && /^\/api\/jobs\/[^/]+\/cancel$/.test(url.pathname)) {
     const jobId = url.pathname.split("/")[3];
     const job = jobs.get(jobId);
-    if (!job) {
+    if (!job || !doesJobBelongToCurrentUser(job)) {
       sendJson(res, 404, { error: "Job not found." });
       return;
     }
@@ -4756,12 +5105,15 @@ const server = http.createServer(async (req, res) => {
       if (bookName) {
         validateBookName(bookName);
       }
-      const job = jobs.get(jobId) || readPersistedJobById(jobId, bookName);
+      const runningJob = jobs.get(jobId);
+      const job = runningJob && doesJobBelongToCurrentUser(runningJob)
+        ? runningJob
+        : readPersistedJobById(jobId, bookName);
       if (!job) {
         sendJson(res, 404, { error: "Job not found." });
         return;
       }
-      sendJson(res, 200, jobs.has(jobId) ? serializeJob(job) : job);
+      sendJson(res, 200, runningJob && doesJobBelongToCurrentUser(runningJob) ? serializeJob(job) : job);
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }

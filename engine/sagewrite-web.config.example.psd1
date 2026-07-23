@@ -9,9 +9,17 @@
     # Parent folder that contains workspace-* directories.
     WorkspaceRoot = 'D:\SageWriteWorkspaces'
 
-    # Use password mode before exposing the server beyond localhost.
-    AuthMode = 'password'
+    # Use users mode before exposing the server beyond localhost.
+    # On first start, AdminUser/AdminPassword create the first admin in UsersFile.
+    AuthMode = 'users'
+    AdminUser = 'admin'
     AdminPassword = 'change-this-password'
+
+    # Optional. Leave empty to use engine\data\users.json.
+    UsersFile = ''
+
+    # Optional. Leave empty to use <WorkspaceRoot>\users\<user-id>.
+    UserWorkspaceRoot = ''
 
     # Optional. Leave empty to use the machine/user environment variable instead.
     OpenAIKey = ''

@@ -2,9 +2,24 @@
 
 ## Important Version Note
 
-This version is a single-user local/personal-cloud standalone version.
+The previous single-user local/personal-cloud standalone version is locked at this tag:
 
-It is not a multi-user cloud system. Multiple browsers can open it, but there is no per-user account, per-user workspace isolation, role permission model, or concurrent project editing protection. Multi-user cloud work starts in later versions.
+```text
+sagewrite-single-user-standalone-d926c61
+```
+
+The current development branch has started the multi-user foundation.
+
+Current foundation scope:
+
+- `AuthMode='users'` account login
+- JSON user store
+- initial admin user bootstrap
+- per-user workspace root
+- per-user job ownership
+- admin user list/create API
+
+It is not yet a complete SaaS system. Project sharing, tenant administration, concurrent editing locks, password reset flow, and full user-management UI still need later work.
 
 Standalone install entry:
 
@@ -101,6 +116,26 @@ Enable password login for cloud/server use:
     OpenBrowser = $false
 }
 ```
+
+Enable multi-user login for cloud/server use:
+
+```powershell
+@{
+    Mode = 'cloud'
+    HostName = '0.0.0.0'
+    Port = 3210
+    WorkspaceRoot = 'D:\SageWriteWorkspaces'
+    AuthMode = 'users'
+    AdminUser = 'admin'
+    AdminPassword = 'change-this-password'
+    UsersFile = ''
+    UserWorkspaceRoot = ''
+    OpenAIKey = ''
+    OpenBrowser = $false
+}
+```
+
+When `AuthMode='users'` starts for the first time, SageWrite creates `engine\data\users.json` unless `UsersFile` is configured. User workspaces default to `<WorkspaceRoot>\users\<user-id>`. The users file is ignored by git.
 
 Start with a specific config file:
 

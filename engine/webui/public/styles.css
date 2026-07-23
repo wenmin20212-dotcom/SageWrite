@@ -146,6 +146,11 @@ body {
   font-size: 1.7rem;
 }
 
+.current-user-card strong {
+  font-size: 1.35rem;
+  overflow-wrap: anywhere;
+}
+
 .status-card-model {
   display: block;
 }

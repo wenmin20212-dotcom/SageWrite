@@ -54,6 +54,8 @@ const state = {
   activeFlowTarget: "project",
   suppressFlowSync: false,
   appMode: "local",
+  authMode: "off",
+  currentUser: null,
   currentJobBookName: "",
   health: null
 };
@@ -6337,7 +6339,17 @@ function renderWorkspaces(workspaces) {
 async function refreshStatus() {
   const status = await api("/api/status");
   state.appMode = status.appMode || "local";
+  state.authMode = status.authMode || "off";
+  state.currentUser = status.currentUser || null;
   $("#workspace-count").textContent = String(status.workspaces.length);
+  const currentUserName = $("#current-user-name");
+  const currentUserWorkspace = $("#current-user-workspace");
+  if (currentUserName) {
+    currentUserName.textContent = status.currentUser?.displayName || status.currentUser?.username || "单用户";
+  }
+  if (currentUserWorkspace) {
+    currentUserWorkspace.textContent = status.workspaceParentRoot || "工作区路径未加载";
+  }
   setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
 }

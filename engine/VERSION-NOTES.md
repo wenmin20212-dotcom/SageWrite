@@ -1,8 +1,27 @@
 # SageWrite 版本说明
 
+## 当前开发分支
+
+当前开发分支已经开始进入 **多用户云系统基础阶段**。
+
+已开始接入：
+
+- `AuthMode = 'users'` 用户账号登录
+- JSON 用户库
+- 管理员初始账号自动创建
+- 当前登录用户工作区隔离
+- Web 任务绑定当前用户
+- 管理员用户列表和创建用户 API
+
+上一版单用户独立安装版已经用 Git 标签锁定：
+
+```text
+sagewrite-single-user-standalone-d926c61
+```
+
 ## 当前版本定位
 
-当前版本是 **单用户本地/个人云独立版**。
+标签 `sagewrite-single-user-standalone-d926c61` 对应的是 **单用户本地/个人云独立版**。
 
 这个版本已经具备：
 
@@ -39,7 +58,7 @@
 
 ## 当前版本安装入口
 
-当前版本的独立安装入口是：
+单用户独立版的安装入口是：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-SageWrite-Standalone.ps1

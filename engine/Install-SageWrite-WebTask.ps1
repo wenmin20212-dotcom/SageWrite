@@ -53,8 +53,8 @@ if (!(Test-Path -LiteralPath $EffectiveConfigPath)) {
 }
 
 $Config = Import-PowerShellDataFile -LiteralPath $EffectiveConfigPath
-if ($Config.ContainsKey("Mode") -and $Config.Mode -eq "cloud" -and $Config.AuthMode -ne "password") {
-  Write-Warning "Config is cloud mode without password auth. Set AuthMode='password' before exposing this server."
+if ($Config.ContainsKey("Mode") -and $Config.Mode -eq "cloud" -and $Config.AuthMode -eq "off") {
+  Write-Warning "Config is cloud mode without login protection. Set AuthMode='password' or AuthMode='users' before exposing this server."
 }
 
 if ($AsSystem -and !(Test-IsAdministrator)) {
