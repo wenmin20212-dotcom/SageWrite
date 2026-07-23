@@ -193,7 +193,7 @@
               <div id="account-billing-cards" class="account-billing-cards"></div>
               <div class="account-layout">
                 <div class="account-events-wrap">
-                  <div class="workspace-list-title">最近 token 花费</div>
+                  <div class="workspace-list-title">最近积分流水</div>
                   <div id="account-event-list" class="account-event-list"></div>
                 </div>
                 <form id="change-password-form" class="form-grid account-password-form">
@@ -235,6 +235,10 @@
                 <div class="user-list-wrap">
                   <div class="user-list-toolbar">
                     <div class="workspace-list-title">已有用户</div>
+                    <label class="user-filter-toggle">
+                      <input id="filter-negative-users" type="checkbox">
+                      <span>只看负余额</span>
+                    </label>
                     <button id="refresh-users" class="ghost-button" type="button">刷新用户</button>
                   </div>
                   <div id="user-list" class="user-list"></div>

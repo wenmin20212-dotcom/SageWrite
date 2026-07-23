@@ -26,6 +26,8 @@ const state = {
   publishLastSavedAt: "",
   publishSelectedCategories: {},
   users: [],
+  userBillingEvents: {},
+  userFilterNegative: false,
   userAdminError: "",
   billingConfig: null,
   account: null,
@@ -6316,6 +6318,14 @@ function formatBillingCredits(value) {
   });
 }
 
+function formatSignedBillingCredits(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "0";
+  }
+  return `${number > 0 ? "+" : ""}${formatBillingCredits(number)}`;
+}
+
 function formatTokenCount(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -6343,6 +6353,38 @@ function formatUserDate(value) {
     return String(value);
   }
   return formatKdpReportTimestamp(date);
+}
+
+function renderBillingEventList(events, emptyText = "还没有积分流水") {
+  if (!Array.isArray(events) || !events.length) {
+    return `<div class="workspace-item muted">${escapeHtml(emptyText)}</div>`;
+  }
+  return events.map((event) => {
+    const usage = event.usage || {};
+    const isAdjustment = event.eventType === "credit_adjustment" || event.source === "admin_credit_adjustment";
+    const label = isAdjustment ? "管理员积分调整" : (event.route || event.source || "LLM 使用");
+    const detail = [
+      event.bookName ? `BookName：${event.bookName}` : "",
+      event.model ? `模型：${event.model}` : "",
+      event.jobId ? `Job：${event.jobId}` : "",
+      event.adminUsername ? `管理员：${event.adminUsername}` : "",
+      event.note ? `备注：${event.note}` : ""
+    ].filter(Boolean).join(" · ");
+    const billingLine = isAdjustment
+      ? `调整：${formatSignedBillingCredits(event.creditDelta)} 分 · 当时余额：${formatBillingCredits(event.balanceCredits)} 分`
+      : `扣分：${formatBillingCredits(event.chargedCredits)} 分 · 当时余额：${formatBillingCredits(event.balanceCredits)} 分`;
+    return `
+      <div class="account-event-item">
+        <div class="account-event-head">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(formatUserDate(event.createdAt))}</span>
+        </div>
+        ${isAdjustment ? "" : `<span>token：input ${escapeHtml(formatTokenCount(usage.input_tokens))} · output ${escapeHtml(formatTokenCount(usage.output_tokens))} · total ${escapeHtml(formatTokenCount(usage.total_tokens))}</span>`}
+        <span>${escapeHtml(billingLine)}</span>
+        ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
+      </div>
+    `;
+  }).join("");
 }
 
 function mergeUserIntoState(nextUser) {
@@ -6424,30 +6466,33 @@ function renderAccountPanel() {
     list.innerHTML = `<div class="workspace-item muted">${escapeHtml(state.accountError)}</div>`;
     return;
   }
-  if (!state.accountEvents.length) {
-    list.innerHTML = '<div class="workspace-item muted">还没有 token 花费记录</div>';
-    return;
+  list.innerHTML = renderBillingEventList(state.accountEvents, "还没有积分流水");
+}
+
+function renderAdminUserBillingEvents(userId) {
+  const billingState = state.userBillingEvents[userId];
+  if (!billingState) {
+    return `<div class="user-billing-events" data-user-billing-events="${escapeHtml(userId)}" hidden></div>`;
   }
-  list.innerHTML = state.accountEvents.map((event) => {
-    const usage = event.usage || {};
-    const label = event.route || event.source || "LLM 使用";
-    const detail = [
-      event.bookName ? `BookName：${event.bookName}` : "",
-      event.model ? `模型：${event.model}` : "",
-      event.jobId ? `Job：${event.jobId}` : ""
-    ].filter(Boolean).join(" · ");
+  if (billingState.loading) {
     return `
-      <div class="account-event-item">
-        <div class="account-event-head">
-          <strong>${escapeHtml(label)}</strong>
-          <span>${escapeHtml(formatUserDate(event.createdAt))}</span>
-        </div>
-        <span>token：input ${escapeHtml(formatTokenCount(usage.input_tokens))} · output ${escapeHtml(formatTokenCount(usage.output_tokens))} · total ${escapeHtml(formatTokenCount(usage.total_tokens))}</span>
-        <span>扣分：${escapeHtml(formatBillingCredits(event.chargedCredits))} 分 · 当时余额：${escapeHtml(formatBillingCredits(event.balanceCredits))} 分</span>
-        ${detail ? `<span>${escapeHtml(detail)}</span>` : ""}
+      <div class="user-billing-events" data-user-billing-events="${escapeHtml(userId)}">
+        <div class="workspace-item muted">正在读取积分流水...</div>
       </div>
     `;
-  }).join("");
+  }
+  if (billingState.error) {
+    return `
+      <div class="user-billing-events" data-user-billing-events="${escapeHtml(userId)}">
+        <div class="workspace-item muted">${escapeHtml(billingState.error)}</div>
+      </div>
+    `;
+  }
+  return `
+    <div class="user-billing-events" data-user-billing-events="${escapeHtml(userId)}">
+      ${renderBillingEventList(billingState.events || [], "还没有积分流水")}
+    </div>
+  `;
 }
 
 function renderUserAdminPanel() {
@@ -6469,6 +6514,7 @@ function renderUserAdminPanel() {
   const list = $("#user-list");
   const form = $("#create-user-form");
   const refreshButton = $("#refresh-users");
+  const filterNegative = $("#filter-negative-users");
 
   if (summary) {
     summary.textContent = isAdmin
@@ -6480,6 +6526,10 @@ function renderUserAdminPanel() {
   }
   if (refreshButton) {
     refreshButton.disabled = !isAdmin;
+  }
+  if (filterNegative) {
+    filterNegative.disabled = !isAdmin;
+    filterNegative.checked = Boolean(state.userFilterNegative);
   }
 
   if (!isAdmin) {
@@ -6493,8 +6543,10 @@ function renderUserAdminPanel() {
     return;
   }
 
+  const negativeUsers = state.users.filter((user) => Number(user?.billing?.balanceCredits) < 0);
+  const visibleUsers = state.userFilterNegative ? negativeUsers : state.users;
   if (note) {
-    note.textContent = state.userAdminError || `用户库已加载：${state.users.length} 个用户。`;
+    note.textContent = state.userAdminError || `用户库已加载：${state.users.length} 个用户，负余额 ${negativeUsers.length} 个。`;
   }
   if (!list) {
     return;
@@ -6508,7 +6560,12 @@ function renderUserAdminPanel() {
     return;
   }
 
-  list.innerHTML = state.users.map((user) => {
+  if (!visibleUsers.length) {
+    list.innerHTML = '<div class="workspace-item muted">当前筛选下没有用户</div>';
+    return;
+  }
+
+  list.innerHTML = visibleUsers.map((user) => {
     const userId = user.id || "";
     const disabled = Boolean(user.disabled);
     return `
@@ -6544,6 +6601,19 @@ function renderUserAdminPanel() {
         </label>
         <button class="ghost-button" type="submit">重置密码</button>
       </form>
+      <form class="user-billing-adjust-form" data-user-id="${escapeHtml(userId)}">
+        <label class="field user-credit-field">
+          <span>积分调整</span>
+          <input name="creditDelta" type="number" step="0.001" placeholder="+100 或 -25" required>
+        </label>
+        <label class="field user-credit-note-field">
+          <span>备注</span>
+          <input name="note" autocomplete="off" maxlength="500" placeholder="充值、扣分或原因">
+        </label>
+        <button class="ghost-button" type="submit">保存积分调整</button>
+        <button class="ghost-button user-view-billing" type="button" data-user-id="${escapeHtml(userId)}">查看流水</button>
+      </form>
+      ${renderAdminUserBillingEvents(userId)}
     </div>
   `;
   }).join("");
@@ -6671,6 +6741,67 @@ async function resetUserPasswordFromForm(form) {
   form.reset();
   renderUserAdminPanel();
   setUserAdminFeedback(`已重置密码：${result?.user?.username || userId}`, "success");
+}
+
+async function refreshUserBillingEvents(userId, { quiet = false } = {}) {
+  if (!userId) {
+    throw new Error("缺少用户 ID。");
+  }
+  state.userBillingEvents[userId] = {
+    ...(state.userBillingEvents[userId] || {}),
+    loading: true,
+    error: ""
+  };
+  renderUserAdminPanel();
+  try {
+    const result = await api(`/api/users/${encodeURIComponent(userId)}/billing?limit=30`);
+    mergeUserIntoState(result?.user);
+    state.userBillingEvents[userId] = {
+      loading: false,
+      error: "",
+      events: result?.events || []
+    };
+    renderUserAdminPanel();
+    if (!quiet) {
+      setUserAdminFeedback(`已读取积分流水：${result?.user?.username || userId}`, "success");
+    }
+  } catch (error) {
+    state.userBillingEvents[userId] = {
+      loading: false,
+      error: error.message || "积分流水读取失败。",
+      events: []
+    };
+    renderUserAdminPanel();
+    throw error;
+  }
+}
+
+async function adjustUserCreditsFromForm(form) {
+  const userId = form.dataset.userId || "";
+  const data = formToObject(form);
+  const creditDelta = Number(data.creditDelta);
+  if (!Number.isFinite(creditDelta) || creditDelta === 0) {
+    throw new Error("请填写非 0 的积分调整数。充值填正数，扣分填负数。");
+  }
+  const result = await api(`/api/users/${encodeURIComponent(userId)}/billing-adjustment`, {
+    method: "POST",
+    body: JSON.stringify({
+      creditDelta,
+      note: String(data.note || "").trim()
+    })
+  });
+  mergeUserIntoState(result?.user);
+  state.userBillingEvents[userId] = {
+    loading: false,
+    error: "",
+    events: result?.events || []
+  };
+  form.reset();
+  renderUserAdminPanel();
+  setUserAdminFeedback(
+    `已调整积分：${result?.user?.username || userId} ${formatSignedBillingCredits(creditDelta)} 分，余额 ${formatBillingCredits(result?.billing?.balanceCredits)} 分。`,
+    "success"
+  );
 }
 
 function renderWorkspaces(workspaces) {
@@ -8184,14 +8315,27 @@ function setupForms() {
     event.currentTarget.dataset.touched = "true";
   });
 
+  $("#filter-negative-users")?.addEventListener("change", (event) => {
+    state.userFilterNegative = Boolean(event.currentTarget.checked);
+    renderUserAdminPanel();
+  });
+
   $("#user-list")?.addEventListener("click", async (event) => {
     const roleButton = event.target.closest(".user-update-role");
     const toggleButton = event.target.closest(".user-toggle-disabled");
-    if (!roleButton && !toggleButton) {
+    const billingButton = event.target.closest(".user-view-billing");
+    if (!roleButton && !toggleButton && !billingButton) {
       return;
     }
 
     try {
+      if (billingButton) {
+        const userId = billingButton.dataset.userId || "";
+        await refreshUserBillingEvents(userId);
+        setStatusBadge("流水已加载", "success");
+        return;
+      }
+
       if (roleButton) {
         const item = roleButton.closest(".user-item");
         const role = item?.querySelector("[data-user-role]")?.value || "user";
@@ -8213,13 +8357,19 @@ function setupForms() {
   });
 
   $("#user-list")?.addEventListener("submit", async (event) => {
-    const form = event.target.closest(".user-reset-password-form");
-    if (!form) {
+    const passwordForm = event.target.closest(".user-reset-password-form");
+    const billingForm = event.target.closest(".user-billing-adjust-form");
+    if (!passwordForm && !billingForm) {
       return;
     }
     event.preventDefault();
     try {
-      await resetUserPasswordFromForm(form);
+      if (billingForm) {
+        await adjustUserCreditsFromForm(billingForm);
+        setStatusBadge("积分已调整", "success");
+        return;
+      }
+      await resetUserPasswordFromForm(passwordForm);
       setStatusBadge("密码已重置", "success");
     } catch (error) {
       setUserAdminFeedback(error.message, "error");

@@ -521,6 +521,80 @@ function recordUserTokenUsage(userId, details = {}) {
   };
 }
 
+function recordUserBillingAdjustment(userId, { creditDelta, note = "", adminUser = null } = {}) {
+  if (!isUserAuthEnabled()) {
+    throw new Error("User account mode is not enabled.");
+  }
+  const rawDelta = Number(creditDelta);
+  if (!Number.isFinite(rawDelta)) {
+    throw new Error("creditDelta must be a number.");
+  }
+  const nextCreditDelta = roundBillingNumber(rawDelta);
+  if (nextCreditDelta === 0) {
+    throw new Error("creditDelta cannot be zero.");
+  }
+  if (Math.abs(nextCreditDelta) > 1_000_000) {
+    throw new Error("creditDelta is too large.");
+  }
+  const cleanNote = String(note || "").replace(/\s+/g, " ").trim();
+  if (cleanNote.length > 500) {
+    throw new Error("note must be 500 characters or fewer.");
+  }
+
+  const store = ensureUserStore();
+  if (!store) {
+    throw new Error("User store is not initialized.");
+  }
+  const user = findUserById(userId, store);
+  if (!user) {
+    throw new Error("User not found.");
+  }
+
+  const currentBilling = getUserBillingPublic(user);
+  const now = new Date().toISOString();
+  const initialCredits = roundBillingNumber(currentBilling.initialCredits + nextCreditDelta);
+  user.billing = {
+    initialCredits,
+    usedTokens: currentBilling.usedTokens,
+    usedCredits: currentBilling.usedCredits,
+    balanceCredits: roundBillingNumber(initialCredits - currentBilling.usedCredits),
+    updatedAt: now
+  };
+  user.updatedAt = now;
+  writeUserStore(store);
+
+  const event = {
+    id: randomUUID(),
+    eventType: "credit_adjustment",
+    createdAt: now,
+    userId: user.id,
+    username: user.username,
+    source: "admin_credit_adjustment",
+    route: "admin-billing",
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      cached_tokens: 0
+    },
+    chargedCredits: 0,
+    creditDelta: nextCreditDelta,
+    balanceCredits: user.billing.balanceCredits,
+    initialCredits,
+    usedCredits: user.billing.usedCredits,
+    tokensPerCredit: TOKENS_PER_CREDIT,
+    note: cleanNote,
+    adminUserId: adminUser?.id || "",
+    adminUsername: adminUser?.username || adminUser?.displayName || ""
+  };
+  appendJsonLine(USER_BILLING_LEDGER_PATH, event);
+  return {
+    event,
+    user: getUserPublic(user),
+    billing: getUserBillingPublic(user)
+  };
+}
+
 function getUserBillingEvents(userId, limit = 20) {
   if (!isUserAuthEnabled() || !userId) {
     return [];
@@ -538,6 +612,7 @@ function getUserBillingEvents(userId, limit = 20) {
       jobId: event.jobId || "",
       bookName: event.bookName || "",
       model: event.model || "",
+      eventType: event.eventType || (event.source === "admin_credit_adjustment" ? "credit_adjustment" : "token_usage"),
       usage: normalizeUsageObject(event.usage) || {
         input_tokens: 0,
         output_tokens: 0,
@@ -545,8 +620,14 @@ function getUserBillingEvents(userId, limit = 20) {
         cached_tokens: 0
       },
       chargedCredits: roundBillingNumber(event.chargedCredits),
+      creditDelta: roundBillingNumber(event.creditDelta),
       balanceCredits: roundBillingNumber(event.balanceCredits),
-      tokensPerCredit: normalizeBillingNumber(event.tokensPerCredit, TOKENS_PER_CREDIT)
+      initialCredits: roundBillingNumber(event.initialCredits),
+      usedCredits: roundBillingNumber(event.usedCredits),
+      tokensPerCredit: normalizeBillingNumber(event.tokensPerCredit, TOKENS_PER_CREDIT),
+      note: event.note || "",
+      adminUsername: event.adminUsername || "",
+      adminUserId: event.adminUserId || ""
     }));
 }
 
@@ -4825,6 +4906,59 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 201, { user });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const userBillingMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/billing$/);
+  if (req.method === "GET" && userBillingMatch) {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      assertCurrentUserIsAdmin();
+      const userId = decodeURIComponent(userBillingMatch[1]);
+      const store = ensureUserStore();
+      const user = findUserById(userId, store);
+      if (!user) {
+        sendJson(res, 404, { error: "User not found." });
+        return;
+      }
+      const limit = Number(url.searchParams.get("limit") || 30);
+      sendJson(res, 200, {
+        user: getUserPublic(user),
+        billing: getUserBillingPublic(user),
+        events: getUserBillingEvents(user.id, limit)
+      });
+    } catch (error) {
+      sendJson(res, error.message === "Admin permission is required." ? 403 : 400, { error: error.message });
+    }
+    return;
+  }
+
+  const userBillingAdjustmentMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/billing-adjustment$/);
+  if (req.method === "POST" && userBillingAdjustmentMatch) {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      const adminUser = assertCurrentUserIsAdmin();
+      const body = await readJsonBody(req, 100_000);
+      const result = recordUserBillingAdjustment(decodeURIComponent(userBillingAdjustmentMatch[1]), {
+        creditDelta: body.creditDelta,
+        note: body.note,
+        adminUser
+      });
+      sendJson(res, 200, {
+        user: result.user,
+        billing: result.billing,
+        event: getUserBillingEvents(result.user.id, 1)[0] || result.event,
+        events: getUserBillingEvents(result.user.id, 30)
+      });
+    } catch (error) {
+      sendJson(res, error.message === "Admin permission is required." ? 403 : 400, { error: error.message });
     }
     return;
   }

@@ -843,6 +843,20 @@ textarea {
   margin-bottom: 10px;
 }
 
+.user-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.user-filter-toggle input {
+  width: 18px;
+  height: 18px;
+}
+
 .user-list {
   display: grid;
   gap: 10px;
@@ -917,7 +931,8 @@ textarea {
 }
 
 .user-actions,
-.user-reset-password-form {
+.user-reset-password-form,
+.user-billing-adjust-form {
   display: grid;
   grid-template-columns: minmax(160px, 1fr) auto auto;
   gap: 8px;
@@ -929,9 +944,34 @@ textarea {
   grid-template-columns: minmax(180px, 1fr) auto;
 }
 
+.user-billing-adjust-form {
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1fr) auto auto;
+  padding-top: 8px;
+  border-top: 1px solid rgba(29, 42, 34, 0.08);
+}
+
 .user-action-field,
-.user-password-field {
+.user-password-field,
+.user-credit-field,
+.user-credit-note-field {
   margin: 0;
+}
+
+.user-billing-events {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(29, 42, 34, 0.08);
+}
+
+.user-billing-events[hidden] {
+  display: none;
+}
+
+.user-billing-events .account-event-item {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.48);
 }
 
 .toc-preview-wrap {
@@ -3607,8 +3647,14 @@ textarea {
   .user-admin-layout,
   .user-actions,
   .user-reset-password-form,
+  .user-billing-adjust-form,
   .project-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .user-list-toolbar {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .flow-nav {
