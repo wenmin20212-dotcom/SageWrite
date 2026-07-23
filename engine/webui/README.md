@@ -1,5 +1,35 @@
 # SageWrite Web UI
 
+## Important Version Note
+
+This version is a single-user local/personal-cloud standalone version.
+
+It is not a multi-user cloud system. Multiple browsers can open it, but there is no per-user account, per-user workspace isolation, role permission model, or concurrent project editing protection. Multi-user cloud work starts in later versions.
+
+Standalone install entry:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-SageWrite-Standalone.ps1
+```
+
+Local standalone install and start:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-SageWrite-Standalone.ps1 -Mode local -StartNow
+```
+
+Personal cloud / Windows server install:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-SageWrite-Standalone.ps1 -Mode cloud -AdminPassword "change-this-password" -WorkspaceRoot "D:\SageWriteWorkspaces" -InstallAutoStart -TaskTrigger AtStartup -AsSystem -StartNow
+```
+
+Create a standalone package from the current Git commit:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\New-SageWrite-StandalonePackage.ps1
+```
+
 ## Start
 
 ```powershell
