@@ -5,3 +5,5 @@ screenshots/
 release-packages/
 data/users.json
 data/*.users.json
+data/billing-ledger.jsonl
+data/*.billing-ledger.jsonl

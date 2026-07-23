@@ -27,6 +27,7 @@ const state = {
   publishSelectedCategories: {},
   users: [],
   userAdminError: "",
+  billingConfig: null,
   chapterListCache: {},
   chapterContentCache: {},
   chapterListLoadingBook: "",
@@ -6299,6 +6300,35 @@ function getUserStatusLabel(user) {
   return user?.disabled ? "已禁用" : "可使用";
 }
 
+function formatBillingCredits(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "0";
+  }
+  return number.toLocaleString("zh-CN", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3
+  });
+}
+
+function formatTokenCount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "0";
+  }
+  return Math.round(number).toLocaleString("zh-CN");
+}
+
+function formatUserBillingLine(user) {
+  const billing = user?.billing || {};
+  return [
+    `初始 ${formatBillingCredits(billing.initialCredits)} 分`,
+    `已用 ${formatBillingCredits(billing.usedCredits)} 分`,
+    `余额 ${formatBillingCredits(billing.balanceCredits)} 分`,
+    `token ${formatTokenCount(billing.usedTokens)}`
+  ].join(" · ");
+}
+
 function formatUserDate(value) {
   if (!value) {
     return "-";
@@ -6405,6 +6435,7 @@ function renderUserAdminPanel() {
       <span>用户 ID：${escapeHtml(user.id || "")}</span>
       <span>创建时间：${escapeHtml(formatUserDate(user.createdAt))}</span>
       <span>更新时间：${escapeHtml(formatUserDate(user.updatedAt))}</span>
+      <span>计费：${escapeHtml(formatUserBillingLine(user))}</span>
       <span>工作区：${escapeHtml(user.workspaceRoot || "")}</span>
       <div class="user-actions">
         <label class="field user-action-field">
@@ -6461,13 +6492,19 @@ async function createUserFromForm(form) {
     username: String(data.username || "").trim(),
     displayName: String(data.displayName || "").trim(),
     role: String(data.role || "user"),
-    password: String(data.password || "")
+    password: String(data.password || ""),
+    initialCredits: Number(data.initialCredits || state.billingConfig?.defaultInitialCredits || 1000)
   };
   const result = await api("/api/users", {
     method: "POST",
     body: JSON.stringify(payload)
   });
   form.reset();
+  const initialCreditsField = form.querySelector('input[name="initialCredits"]');
+  if (initialCreditsField && state.billingConfig?.defaultInitialCredits !== undefined) {
+    initialCreditsField.value = String(state.billingConfig.defaultInitialCredits);
+    delete initialCreditsField.dataset.touched;
+  }
   setUserAdminFeedback(`已创建用户：${result?.user?.username || payload.username}`, "success");
   await refreshUsers({ quiet: true });
 }
@@ -6550,14 +6587,25 @@ async function refreshStatus() {
   state.appMode = status.appMode || "local";
   state.authMode = status.authMode || "off";
   state.currentUser = status.currentUser || null;
+  state.billingConfig = status.billing || status.auth?.billing || null;
   $("#workspace-count").textContent = String(status.workspaces.length);
   const currentUserName = $("#current-user-name");
+  const currentUserBilling = $("#current-user-billing");
   const currentUserWorkspace = $("#current-user-workspace");
   if (currentUserName) {
     currentUserName.textContent = status.currentUser?.displayName || status.currentUser?.username || "单用户";
   }
+  if (currentUserBilling) {
+    currentUserBilling.textContent = status.currentUser?.billing
+      ? `积分余额：${formatBillingCredits(status.currentUser.billing.balanceCredits)} 分 · 已用：${formatBillingCredits(status.currentUser.billing.usedCredits)} 分`
+      : "积分未启用";
+  }
   if (currentUserWorkspace) {
     currentUserWorkspace.textContent = status.workspaceParentRoot || "工作区路径未加载";
+  }
+  const initialCreditsField = document.querySelector('#create-user-form input[name="initialCredits"]');
+  if (initialCreditsField && state.billingConfig?.defaultInitialCredits !== undefined && !initialCreditsField.dataset.touched) {
+    initialCreditsField.value = String(state.billingConfig.defaultInitialCredits);
   }
   renderUserAdminPanel();
   setDefaultModelName(getDefaultModelName());
@@ -7963,6 +8011,10 @@ function setupForms() {
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
+  });
+
+  document.querySelector('#create-user-form input[name="initialCredits"]')?.addEventListener("input", (event) => {
+    event.currentTarget.dataset.touched = "true";
   });
 
   $("#user-list")?.addEventListener("click", async (event) => {

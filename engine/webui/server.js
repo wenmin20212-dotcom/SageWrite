@@ -24,9 +24,14 @@ const WORKSPACE_PARENT_ROOT = process.env.SAGEWRITE_WORKSPACE_ROOT
 const USER_STORE_PATH = process.env.SAGEWRITE_USERS_FILE
   ? path.resolve(process.env.SAGEWRITE_USERS_FILE)
   : path.join(ENGINE_ROOT, "data", "users.json");
+const USER_BILLING_LEDGER_PATH = process.env.SAGEWRITE_BILLING_LEDGER_FILE
+  ? path.resolve(process.env.SAGEWRITE_BILLING_LEDGER_FILE)
+  : path.join(path.dirname(USER_STORE_PATH), "billing-ledger.jsonl");
 const USER_WORKSPACE_ROOT = process.env.SAGEWRITE_USER_WORKSPACE_ROOT
   ? path.resolve(process.env.SAGEWRITE_USER_WORKSPACE_ROOT)
   : path.join(WORKSPACE_PARENT_ROOT, "users");
+const DEFAULT_INITIAL_CREDITS = Math.max(0, normalizeBillingNumber(process.env.SAGEWRITE_INITIAL_CREDITS, 1000));
+const TOKENS_PER_CREDIT = Math.max(1, normalizeBillingNumber(process.env.SAGEWRITE_TOKENS_PER_CREDIT, 1000));
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const jobs = new Map();
@@ -57,6 +62,20 @@ function safeEqualText(left, right) {
 
 function normalizeUsername(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeBillingNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function roundBillingNumber(value) {
+  return Math.round(normalizeBillingNumber(value, 0) * 1000) / 1000;
+}
+
+function normalizeTokenCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
 }
 
 function makeUserId(username) {
@@ -133,6 +152,7 @@ function ensureUserStore() {
       displayName: ADMIN_USER,
       role: "admin",
       disabled: false,
+      billing: createInitialBillingRecord(DEFAULT_INITIAL_CREDITS),
       password: hashPassword(ADMIN_PASSWORD),
       createdAt: now,
       updatedAt: now,
@@ -140,6 +160,36 @@ function ensureUserStore() {
     }]
   };
   return writeUserStore(store);
+}
+
+function createInitialBillingRecord(initialCredits = DEFAULT_INITIAL_CREDITS) {
+  const credits = roundBillingNumber(initialCredits);
+  return {
+    initialCredits: credits,
+    usedTokens: 0,
+    usedCredits: 0,
+    balanceCredits: credits,
+    updatedAt: ""
+  };
+}
+
+function getUserBillingPublic(user) {
+  const billing = user?.billing || {};
+  const initialCredits = roundBillingNumber(Object.hasOwn(billing, "initialCredits")
+    ? billing.initialCredits
+    : DEFAULT_INITIAL_CREDITS);
+  const usedTokens = normalizeTokenCount(billing.usedTokens);
+  const usedCredits = roundBillingNumber(Object.hasOwn(billing, "usedCredits")
+    ? billing.usedCredits
+    : usedTokens / TOKENS_PER_CREDIT);
+  return {
+    initialCredits,
+    usedTokens,
+    usedCredits,
+    balanceCredits: roundBillingNumber(initialCredits - usedCredits),
+    tokensPerCredit: TOKENS_PER_CREDIT,
+    updatedAt: billing.updatedAt || ""
+  };
 }
 
 function getUserPublic(user) {
@@ -155,6 +205,7 @@ function getUserPublic(user) {
     status: user.disabled ? "disabled" : "active",
     createdAt: user.createdAt || "",
     updatedAt: user.updatedAt || user.createdAt || "",
+    billing: getUserBillingPublic(user),
     workspaceRoot: getUserWorkspaceRoot(user)
   };
 }
@@ -186,12 +237,16 @@ function validateUsername(username) {
   return normalized;
 }
 
-function createUserAccount({ username, password, displayName = "", role = "user" }) {
+function createUserAccount({ username, password, displayName = "", role = "user", initialCredits = DEFAULT_INITIAL_CREDITS }) {
   const normalized = validateUsername(username);
   if (!password || String(password).length < 8) {
     throw new Error("password must be at least 8 characters.");
   }
   const nextRole = role === "admin" ? "admin" : "user";
+  const nextInitialCredits = roundBillingNumber(initialCredits);
+  if (nextInitialCredits < 0) {
+    throw new Error("initialCredits cannot be negative.");
+  }
   const store = ensureUserStore() || {
     version: 1,
     createdAt: new Date().toISOString(),
@@ -207,6 +262,7 @@ function createUserAccount({ username, password, displayName = "", role = "user"
     displayName: String(displayName || username).trim() || normalized,
     role: nextRole,
     disabled: false,
+    billing: createInitialBillingRecord(nextInitialCredits),
     password: hashPassword(password),
     createdAt: now,
     updatedAt: now,
@@ -279,6 +335,188 @@ function resetUserPassword(userId, password) {
   return getUserPublic(user);
 }
 
+function getBillingConfigPublic() {
+  return {
+    enabled: isUserAuthEnabled(),
+    defaultInitialCredits: DEFAULT_INITIAL_CREDITS,
+    tokensPerCredit: TOKENS_PER_CREDIT,
+    ledgerPath: isUserAuthEnabled() ? USER_BILLING_LEDGER_PATH : ""
+  };
+}
+
+function normalizeUsageObject(usage) {
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+  const inputTokens = normalizeTokenCount(usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens);
+  const outputTokens = normalizeTokenCount(usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens);
+  const totalTokens = normalizeTokenCount(usage.total_tokens ?? usage.totalTokens) || inputTokens + outputTokens;
+  if (!totalTokens) {
+    return null;
+  }
+  const cachedTokens = normalizeTokenCount(
+    usage.cached_tokens ??
+    usage.cachedTokens ??
+    usage.input_tokens_details?.cached_tokens ??
+    usage.prompt_tokens_details?.cached_tokens
+  );
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    cached_tokens: cachedTokens
+  };
+}
+
+function extractTokenUsageFromText(text) {
+  const source = String(text || "");
+  const totalLineMatches = Array.from(source.matchAll(/Token usage total:\s*input=(\d+)\s*,?\s*output=(\d+)\s*,?\s*total=(\d+)/gi));
+  const usageMatches = Array.from(source.matchAll(/Token usage:\s*input=(\d+)\s*,?\s*output=(\d+)\s*,?\s*total=(\d+)/gi));
+  const match = totalLineMatches.at(-1) || usageMatches.at(-1);
+  if (!match) {
+    return null;
+  }
+  return normalizeUsageObject({
+    input_tokens: match[1],
+    output_tokens: match[2],
+    total_tokens: match[3]
+  });
+}
+
+function parseLocalTimestamp(value) {
+  if (!value) {
+    return null;
+  }
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!match) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6])
+  );
+}
+
+function extractTokenUsageFromRunHistory(job) {
+  const bookName = job.meta?.bookName;
+  if (!bookName) {
+    return null;
+  }
+  const paths = getWorkspacePaths(bookName, job.meta?.workspaceParentRoot || getWorkspaceParentRoot());
+  const runLogPath = path.join(paths.logRoot, "run_history.jsonl");
+  if (!fs.existsSync(runLogPath)) {
+    return null;
+  }
+  const startedAt = new Date(job.createdAt).getTime() - 10_000;
+  const route = String(job.meta?.route || "");
+  const routeStepAliases = {
+    "refine-translation": "refine_translation"
+  };
+  const expectedStep = routeStepAliases[route] || route;
+  const lines = fs.readFileSync(runLogPath, "utf8").split(/\r?\n/).filter(Boolean).slice(-200);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const entry = JSON.parse(lines[index]);
+      const entryDate = parseLocalTimestamp(entry.timestamp);
+      if (entryDate && entryDate.getTime() < startedAt) {
+        continue;
+      }
+      if (expectedStep && entry.step && entry.step !== expectedStep) {
+        continue;
+      }
+      const data = entry.data || {};
+      const usage = normalizeUsageObject({
+        input_tokens: data.input_tokens_total ?? data.input_tokens,
+        output_tokens: data.output_tokens_total ?? data.output_tokens,
+        total_tokens: data.total_tokens_total ?? data.total_tokens
+      });
+      if (usage) {
+        return usage;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function recordUserTokenUsage(userId, details = {}) {
+  if (!isUserAuthEnabled() || !userId) {
+    return null;
+  }
+  const usage = normalizeUsageObject(details.usage);
+  if (!usage) {
+    return null;
+  }
+  const store = ensureUserStore();
+  if (!store) {
+    return null;
+  }
+  const user = findUserById(userId, store);
+  if (!user) {
+    return null;
+  }
+
+  const currentBilling = getUserBillingPublic(user);
+  const usedTokens = currentBilling.usedTokens + usage.total_tokens;
+  const chargedCredits = roundBillingNumber(usage.total_tokens / TOKENS_PER_CREDIT);
+  const usedCredits = roundBillingNumber(currentBilling.usedCredits + chargedCredits);
+  const now = new Date().toISOString();
+  user.billing = {
+    initialCredits: currentBilling.initialCredits,
+    usedTokens,
+    usedCredits,
+    balanceCredits: roundBillingNumber(currentBilling.initialCredits - usedCredits),
+    updatedAt: now
+  };
+  user.updatedAt = now;
+  writeUserStore(store);
+
+  const event = {
+    id: randomUUID(),
+    createdAt: now,
+    userId: user.id,
+    username: user.username,
+    source: details.source || "unknown",
+    route: details.route || "",
+    jobId: details.jobId || "",
+    bookName: details.bookName || "",
+    model: details.model || "",
+    usage,
+    chargedCredits,
+    balanceCredits: user.billing.balanceCredits,
+    tokensPerCredit: TOKENS_PER_CREDIT
+  };
+  appendJsonLine(USER_BILLING_LEDGER_PATH, event);
+  return {
+    event,
+    billing: getUserBillingPublic(user)
+  };
+}
+
+function recordJobTokenUsage(job) {
+  if (!job || job.billingRecorded) {
+    return null;
+  }
+  job.billingRecorded = true;
+  const usage = extractTokenUsageFromText(job.output) || extractTokenUsageFromRunHistory(job);
+  if (!usage) {
+    return null;
+  }
+  return recordUserTokenUsage(job.meta?.userId, {
+    usage,
+    source: "powershell_job",
+    route: job.meta?.route || "",
+    jobId: job.id,
+    bookName: job.meta?.bookName || ""
+  });
+}
+
 function getLegacyUserContext(mode = "local") {
   return {
     id: mode === "password" ? "admin" : "single-user",
@@ -323,7 +561,8 @@ function getAuthDetails() {
     authEnabled: isAuthEnabled(),
     userAuthEnabled: isUserAuthEnabled(),
     userStorePath: isUserAuthEnabled() ? USER_STORE_PATH : "",
-    userWorkspaceRoot: isUserAuthEnabled() ? USER_WORKSPACE_ROOT : ""
+    userWorkspaceRoot: isUserAuthEnabled() ? USER_WORKSPACE_ROOT : "",
+    billing: getBillingConfigPublic()
   };
 }
 
@@ -3357,6 +3596,10 @@ function finishJob(job, exitCode) {
   job.updatedAt = new Date().toISOString();
   job.child = null;
   job.childPid = null;
+  const billing = recordJobTokenUsage(job);
+  if (billing) {
+    appendJobLifecycleLine(job, `Billing recorded. Tokens: ${billing.event.usage.total_tokens}. Credits: ${billing.event.chargedCredits}. Balance: ${billing.billing.balanceCredits}.`);
+  }
   appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: ${job.status}. Exit code: ${job.exitCode}.`);
   archiveJobOutput(job);
   persistJobState(job);
@@ -3374,6 +3617,10 @@ function failJob(job, error) {
   appendJobOutput(job, `\n[webui-error] ${error.message}\n`);
   job.child = null;
   job.childPid = null;
+  const billing = recordJobTokenUsage(job);
+  if (billing) {
+    appendJobLifecycleLine(job, `Billing recorded. Tokens: ${billing.event.usage.total_tokens}. Credits: ${billing.event.chargedCredits}. Balance: ${billing.billing.balanceCredits}.`);
+  }
   appendJobLifecycleLine(job, `Run finished. Job ID: ${job.id}. Status: failed. Exit code: -1.`);
   archiveJobOutput(job);
   persistJobState(job);
@@ -4435,6 +4682,7 @@ const server = http.createServer(async (req, res) => {
       globalWorkspaceParentRoot: WORKSPACE_PARENT_ROOT,
       appMode: APP_MODE,
       authMode: AUTH_MODE,
+      billing: getBillingConfigPublic(),
       currentUser: getUserPublic(currentUser),
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
       workspaces: listWorkspaces()
@@ -4471,7 +4719,8 @@ const server = http.createServer(async (req, res) => {
         username: body.username,
         password: body.password,
         displayName: body.displayName,
-        role: body.role
+        role: body.role,
+        initialCredits: body.initialCredits
       });
       sendJson(res, 201, { user });
     } catch (error) {
@@ -5927,6 +6176,13 @@ const server = http.createServer(async (req, res) => {
         regionCount: regions.length,
         usage: savedResult.usage
       });
+      const billing = recordUserTokenUsage(getCurrentUserContext().id, {
+        usage: responseJson.usage || null,
+        source: "kdp_llm_text_regions",
+        route: "kdp-llm-text-regions",
+        bookName,
+        model
+      });
 
       sendJson(res, 200, {
         bookName,
@@ -5943,6 +6199,7 @@ const server = http.createServer(async (req, res) => {
         regions,
         rawText: modelText,
         usage: responseJson.usage || null,
+        billing,
         responseId: responseJson.id || "",
         responseStatus: responseJson.status || "",
         createdAt: savedResult.createdAt,

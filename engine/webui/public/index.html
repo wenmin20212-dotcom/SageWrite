@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260723-user-lifecycle">
+    <link rel="stylesheet" href="/styles.css?v=20260723-user-billing">
   </head>
   <body>
     <div class="page-shell">
@@ -14,7 +14,7 @@
             <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
           </div>
           <div class="hero-copy-block">
-            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-user-lifecycle</span></p>
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-user-billing</span></p>
             <h1>写作引擎 Web 控制台</h1>
             <p class="hero-copy">
               用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -43,6 +43,7 @@
           <div class="status-card current-user-card">
             <span>当前用户</span>
             <strong id="current-user-name">单用户</strong>
+            <small id="current-user-billing" class="status-card-hint">积分未加载</small>
             <small id="current-user-workspace" class="status-card-hint">工作区路径未加载</small>
           </div>
           <div class="status-card system-health-card" id="system-health-card">
@@ -210,6 +211,10 @@
                   <label class="field">
                     <span>初始密码</span>
                     <input name="password" type="password" autocomplete="new-password" minlength="8" required>
+                  </label>
+                  <label class="field">
+                    <span>初始积分</span>
+                    <input name="initialCredits" type="number" step="0.001" min="0" value="1000">
                   </label>
                   <button class="primary-button" type="submit">创建用户</button>
                   <div id="user-admin-feedback" class="user-admin-feedback" aria-live="polite"></div>
@@ -1576,6 +1581,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260723-user-lifecycle"></script>
+    <script src="/app.js?v=20260723-user-billing"></script>
   </body>
 </html>
