@@ -6295,6 +6295,33 @@ function getRoleLabel(role) {
   return role === "admin" ? "管理员" : "普通用户";
 }
 
+function getUserStatusLabel(user) {
+  return user?.disabled ? "已禁用" : "可使用";
+}
+
+function formatUserDate(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return formatKdpReportTimestamp(date);
+}
+
+function mergeUserIntoState(nextUser) {
+  if (!nextUser?.id) {
+    return;
+  }
+  const index = state.users.findIndex((user) => user.id === nextUser.id);
+  if (index >= 0) {
+    state.users[index] = nextUser;
+  } else {
+    state.users.push(nextUser);
+  }
+}
+
 function setUserAdminFeedback(message = "", kind = "") {
   const feedback = $("#user-admin-feedback");
   if (!feedback) {
@@ -6362,17 +6389,44 @@ function renderUserAdminPanel() {
     return;
   }
 
-  list.innerHTML = state.users.map((user) => `
-    <div class="user-item">
+  list.innerHTML = state.users.map((user) => {
+    const userId = user.id || "";
+    const disabled = Boolean(user.disabled);
+    return `
+    <div class="user-item${disabled ? " is-disabled" : ""}" data-user-id="${escapeHtml(userId)}">
       <div class="user-item-head">
         <strong>${escapeHtml(user.displayName || user.username || "")}</strong>
-        <span class="user-role-badge">${escapeHtml(getRoleLabel(user.role))}</span>
+        <div class="user-badge-row">
+          <span class="user-role-badge">${escapeHtml(getRoleLabel(user.role))}</span>
+          <span class="user-status-badge" data-status="${disabled ? "disabled" : "active"}">${escapeHtml(getUserStatusLabel(user))}</span>
+        </div>
       </div>
       <span>用户名：${escapeHtml(user.username || "")}</span>
       <span>用户 ID：${escapeHtml(user.id || "")}</span>
+      <span>创建时间：${escapeHtml(formatUserDate(user.createdAt))}</span>
+      <span>更新时间：${escapeHtml(formatUserDate(user.updatedAt))}</span>
       <span>工作区：${escapeHtml(user.workspaceRoot || "")}</span>
+      <div class="user-actions">
+        <label class="field user-action-field">
+          <span>角色</span>
+          <select class="user-role-select" data-user-role>
+            <option value="user"${user.role === "admin" ? "" : " selected"}>普通用户</option>
+            <option value="admin"${user.role === "admin" ? " selected" : ""}>管理员</option>
+          </select>
+        </label>
+        <button class="ghost-button user-update-role" type="button" data-user-id="${escapeHtml(userId)}">修改角色</button>
+        <button class="ghost-button user-toggle-disabled" type="button" data-user-id="${escapeHtml(userId)}" data-disabled="${disabled ? "false" : "true"}">${disabled ? "启用用户" : "禁用用户"}</button>
+      </div>
+      <form class="user-reset-password-form" data-user-id="${escapeHtml(userId)}">
+        <label class="field user-password-field">
+          <span>新密码</span>
+          <input name="password" type="password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <button class="ghost-button" type="submit">重置密码</button>
+      </form>
     </div>
-  `).join("");
+  `;
+  }).join("");
 }
 
 async function refreshUsers({ quiet = false } = {}) {
@@ -6416,6 +6470,31 @@ async function createUserFromForm(form) {
   form.reset();
   setUserAdminFeedback(`已创建用户：${result?.user?.username || payload.username}`, "success");
   await refreshUsers({ quiet: true });
+}
+
+async function updateUserFromPanel(userId, updates, successMessage) {
+  const result = await api(`/api/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(updates)
+  });
+  mergeUserIntoState(result?.user);
+  renderUserAdminPanel();
+  setUserAdminFeedback(successMessage, "success");
+  await refreshUsers({ quiet: true });
+}
+
+async function resetUserPasswordFromForm(form) {
+  const userId = form.dataset.userId || "";
+  const data = formToObject(form);
+  const password = String(data.password || "");
+  const result = await api(`/api/users/${encodeURIComponent(userId)}/password`, {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+  mergeUserIntoState(result?.user);
+  form.reset();
+  renderUserAdminPanel();
+  setUserAdminFeedback(`已重置密码：${result?.user?.username || userId}`, "success");
 }
 
 function renderWorkspaces(workspaces) {
@@ -7879,6 +7958,50 @@ function setupForms() {
     try {
       await createUserFromForm(event.currentTarget);
       setStatusBadge("用户已创建", "success");
+    } catch (error) {
+      setUserAdminFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#user-list")?.addEventListener("click", async (event) => {
+    const roleButton = event.target.closest(".user-update-role");
+    const toggleButton = event.target.closest(".user-toggle-disabled");
+    if (!roleButton && !toggleButton) {
+      return;
+    }
+
+    try {
+      if (roleButton) {
+        const item = roleButton.closest(".user-item");
+        const role = item?.querySelector("[data-user-role]")?.value || "user";
+        const userId = roleButton.dataset.userId || "";
+        await updateUserFromPanel(userId, { role }, `已修改角色：${getRoleLabel(role)}`);
+        setStatusBadge("角色已修改", "success");
+        return;
+      }
+
+      const userId = toggleButton.dataset.userId || "";
+      const disabled = toggleButton.dataset.disabled === "true";
+      await updateUserFromPanel(userId, { disabled }, disabled ? "用户已禁用" : "用户已启用");
+      setStatusBadge(disabled ? "用户已禁用" : "用户已启用", "success");
+    } catch (error) {
+      setUserAdminFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#user-list")?.addEventListener("submit", async (event) => {
+    const form = event.target.closest(".user-reset-password-form");
+    if (!form) {
+      return;
+    }
+    event.preventDefault();
+    try {
+      await resetUserPasswordFromForm(form);
+      setStatusBadge("密码已重置", "success");
     } catch (error) {
       setUserAdminFeedback(error.message, "error");
       setStatusBadge("失败", "failed");

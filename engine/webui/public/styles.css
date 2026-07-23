@@ -782,6 +782,11 @@ textarea {
   background: rgba(251, 246, 238, 0.86);
 }
 
+.user-item.is-disabled {
+  opacity: 0.76;
+  background: rgba(243, 240, 234, 0.86);
+}
+
 .user-item strong {
   font-size: 1rem;
   overflow-wrap: anywhere;
@@ -800,6 +805,13 @@ textarea {
   gap: 10px;
 }
 
+.user-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .user-role-badge {
   flex: 0 0 auto;
   padding: 3px 9px;
@@ -809,6 +821,41 @@ textarea {
   color: var(--accent-strong);
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.user-status-badge {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 42, 34, 0.14);
+  background: rgba(11, 110, 79, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.user-status-badge[data-status="disabled"] {
+  border-color: rgba(177, 67, 54, 0.2);
+  background: rgba(177, 67, 54, 0.08);
+  color: var(--danger);
+}
+
+.user-actions,
+.user-reset-password-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 6px;
+}
+
+.user-reset-password-form {
+  grid-template-columns: minmax(180px, 1fr) auto;
+}
+
+.user-action-field,
+.user-password-field {
+  margin: 0;
 }
 
 .toc-preview-wrap {
@@ -3480,6 +3527,8 @@ textarea {
   .workspace-frame,
   .project-summary-panel,
   .user-admin-layout,
+  .user-actions,
+  .user-reset-password-form,
   .project-summary-grid {
     grid-template-columns: 1fr;
   }

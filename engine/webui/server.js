@@ -132,8 +132,10 @@ function ensureUserStore() {
       username: adminUsername,
       displayName: ADMIN_USER,
       role: "admin",
+      disabled: false,
       password: hashPassword(ADMIN_PASSWORD),
       createdAt: now,
+      updatedAt: now,
       workspaceRoot: ""
     }]
   };
@@ -149,6 +151,10 @@ function getUserPublic(user) {
     username: user.username,
     displayName: user.displayName || user.username,
     role: user.role || "user",
+    disabled: Boolean(user.disabled),
+    status: user.disabled ? "disabled" : "active",
+    createdAt: user.createdAt || "",
+    updatedAt: user.updatedAt || user.createdAt || "",
     workspaceRoot: getUserWorkspaceRoot(user)
   };
 }
@@ -160,6 +166,13 @@ function findUserByUsername(username) {
   }
   const normalized = normalizeUsername(username);
   return store.users.find((user) => normalizeUsername(user.username) === normalized) || null;
+}
+
+function findUserById(userId, store = ensureUserStore()) {
+  if (!store) {
+    return null;
+  }
+  return store.users.find((user) => String(user.id || "") === String(userId || "")) || null;
 }
 
 function validateUsername(username) {
@@ -193,13 +206,76 @@ function createUserAccount({ username, password, displayName = "", role = "user"
     username: normalized,
     displayName: String(displayName || username).trim() || normalized,
     role: nextRole,
+    disabled: false,
     password: hashPassword(password),
     createdAt: now,
+    updatedAt: now,
     workspaceRoot: ""
   };
   store.users.push(user);
   writeUserStore(store);
   ensureDir(getUserWorkspaceRoot(user));
+  return getUserPublic(user);
+}
+
+function countActiveAdmins(store) {
+  return (store?.users || []).filter((user) => user.role === "admin" && !user.disabled).length;
+}
+
+function assertActiveAdminRemains(store, user, nextRole, nextDisabled) {
+  const wasActiveAdmin = user.role === "admin" && !user.disabled;
+  const willBeActiveAdmin = nextRole === "admin" && !nextDisabled;
+  if (wasActiveAdmin && !willBeActiveAdmin && countActiveAdmins(store) <= 1) {
+    throw new Error("At least one active admin is required.");
+  }
+}
+
+function updateUserAccount(userId, updates = {}) {
+  const store = ensureUserStore();
+  if (!store) {
+    throw new Error("User store is not initialized.");
+  }
+  const user = findUserById(userId, store);
+  if (!user) {
+    throw new Error("User not found.");
+  }
+
+  const nextRole = Object.hasOwn(updates, "role")
+    ? String(updates.role || "user").toLowerCase()
+    : (user.role || "user");
+  if (!["admin", "user"].includes(nextRole)) {
+    throw new Error("role must be admin or user.");
+  }
+
+  const nextDisabled = Object.hasOwn(updates, "disabled")
+    ? Boolean(updates.disabled)
+    : Boolean(user.disabled);
+
+  assertActiveAdminRemains(store, user, nextRole, nextDisabled);
+
+  user.role = nextRole;
+  user.disabled = nextDisabled;
+  user.updatedAt = new Date().toISOString();
+  writeUserStore(store);
+  return getUserPublic(user);
+}
+
+function resetUserPassword(userId, password) {
+  if (!password || String(password).length < 8) {
+    throw new Error("password must be at least 8 characters.");
+  }
+  const store = ensureUserStore();
+  if (!store) {
+    throw new Error("User store is not initialized.");
+  }
+  const user = findUserById(userId, store);
+  if (!user) {
+    throw new Error("User not found.");
+  }
+  user.password = hashPassword(password);
+  user.passwordUpdatedAt = new Date().toISOString();
+  user.updatedAt = user.passwordUpdatedAt;
+  writeUserStore(store);
   return getUserPublic(user);
 }
 
@@ -291,6 +367,14 @@ function cleanupSessions() {
   }
 }
 
+function deleteSessionsForUser(userId, exceptToken = "") {
+  for (const [token, session] of sessions.entries()) {
+    if (token !== exceptToken && session?.user?.id === userId) {
+      sessions.delete(token);
+    }
+  }
+}
+
 function getValidSession(req) {
   if (!isAuthEnabled()) {
     return null;
@@ -311,6 +395,19 @@ function getAuthenticatedUserFromRequest(req) {
   }
   const valid = getValidSession(req);
   if (valid?.session?.user) {
+    if (isUserAuthEnabled()) {
+      const user = findUserById(valid.session.user.id) || findUserByUsername(valid.session.user.username);
+      if (!user || user.disabled) {
+        sessions.delete(valid.token);
+        return null;
+      }
+      const refreshedUser = {
+        ...getUserPublic(user),
+        authMode: AUTH_MODE
+      };
+      valid.session.user = refreshedUser;
+      return refreshedUser;
+    }
     return valid.session.user;
   }
   return null;
@@ -4239,14 +4336,14 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/api/auth/status") {
-    const valid = getValidSession(req);
+    const authenticatedUser = getAuthenticatedUserFromRequest(req);
     const currentUser = !isAuthEnabled()
       ? getUserPublic(getLegacyUserContext("local"))
-      : valid?.session?.user || null;
+      : authenticatedUser || null;
     sendJson(res, 200, {
       ...getAuthDetails(),
       authEnabled: isAuthEnabled(),
-      authenticated: !isAuthEnabled() || Boolean(valid),
+      authenticated: !isAuthEnabled() || Boolean(authenticatedUser),
       currentUser
     });
     return;
@@ -4266,6 +4363,10 @@ const server = http.createServer(async (req, res) => {
         const user = findUserByUsername(username);
         if (!user || !verifyPassword(password, user.password)) {
           sendJson(res, 401, { error: "Invalid username or password.", authRequired: true });
+          return;
+        }
+        if (user.disabled) {
+          sendJson(res, 403, { error: "User account is disabled.", authRequired: true });
           return;
         }
         const userWorkspaceRoot = getUserWorkspaceRoot(user);
@@ -4373,6 +4474,56 @@ const server = http.createServer(async (req, res) => {
         role: body.role
       });
       sendJson(res, 201, { user });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const userPasswordMatch = url.pathname.match(/^\/api\/users\/([^/]+)\/password$/);
+  if (req.method === "POST" && userPasswordMatch) {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      assertCurrentUserIsAdmin();
+      const body = await readJsonBody(req, 100_000);
+      const user = resetUserPassword(decodeURIComponent(userPasswordMatch[1]), body.password);
+      deleteSessionsForUser(user.id, parseCookies(req)[SESSION_COOKIE]);
+      sendJson(res, 200, { user });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const userAccountMatch = url.pathname.match(/^\/api\/users\/([^/]+)$/);
+  if (req.method === "PATCH" && userAccountMatch) {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      assertCurrentUserIsAdmin();
+      const body = await readJsonBody(req, 100_000);
+      const updates = {};
+      if (Object.hasOwn(body, "role")) {
+        updates.role = body.role;
+      }
+      if (Object.hasOwn(body, "disabled")) {
+        updates.disabled = body.disabled;
+      } else if (Object.hasOwn(body, "status")) {
+        updates.disabled = String(body.status || "").toLowerCase() === "disabled";
+      }
+      if (!Object.keys(updates).length) {
+        throw new Error("No user updates were provided.");
+      }
+      const user = updateUserAccount(decodeURIComponent(userAccountMatch[1]), updates);
+      if (user.disabled) {
+        deleteSessionsForUser(user.id);
+      }
+      sendJson(res, 200, { user });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
