@@ -7431,6 +7431,33 @@ async function adjustUserCreditsFromForm(form) {
   await refreshAudit({ quiet: true });
 }
 
+function getWorkspaceProjectLine(item) {
+  const project = item?.project || null;
+  if (!project) {
+    return "归属：未记录";
+  }
+  const tenantLabel = project.tenantName && project.tenantId && project.tenantName !== project.tenantId
+    ? `${project.tenantName}（${project.tenantId}）`
+    : (project.tenantName || project.tenantId || "未记录");
+  const ownerLabel = project.ownerDisplayName || project.ownerUsername || project.ownerUserId || "";
+  const authorLabel = project.authorUsername || project.authorUserId || "";
+  const editorLabel = project.editorUsername || project.editorUserId || "";
+  const parts = [`公司：${tenantLabel}`];
+  if (ownerLabel) {
+    parts.push(`创建/所有者：${ownerLabel}`);
+  }
+  if (authorLabel) {
+    parts.push(`作者：${authorLabel}`);
+  }
+  if (editorLabel) {
+    parts.push(`负责编辑：${editorLabel}`);
+  }
+  if (project.legacyImported && !project.explicitOwnership) {
+    parts.push("旧项目：未锁定个人");
+  }
+  return parts.join(" · ");
+}
+
 function renderWorkspaces(workspaces) {
   state.workspaces = workspaces;
   const wrap = $("#workspace-list");
@@ -7448,6 +7475,7 @@ function renderWorkspaces(workspaces) {
     button.className = "workspace-item";
     button.innerHTML = `
       <strong>${escapeHtml(item.bookName)}</strong>
+      <span class="workspace-owner-line">${escapeHtml(getWorkspaceProjectLine(item))}</span>
       <span>${item.chapterCount} 个章节文件</span>
       <span>${item.outputFiles.length} 个输出文档</span>
       <span>${(item.outputLanguages || []).length ? `输出语言: ${escapeHtml(item.outputLanguages.join(", "))}` : "04 输出语言未检测到"}</span>

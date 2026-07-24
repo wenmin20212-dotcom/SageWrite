@@ -33,6 +33,8 @@ const USER_AUDIT_LOG_PATH = process.env.SAGEWRITE_AUDIT_LOG_FILE
 const USER_WORKSPACE_ROOT = process.env.SAGEWRITE_USER_WORKSPACE_ROOT
   ? path.resolve(process.env.SAGEWRITE_USER_WORKSPACE_ROOT)
   : path.join(WORKSPACE_PARENT_ROOT, "users");
+const PROJECT_METADATA_DIR = ".sagewrite";
+const PROJECT_METADATA_FILE = "project.json";
 const DEFAULT_TENANT_ID = normalizeTenantId(process.env.SAGEWRITE_DEFAULT_TENANT_ID || "default");
 const DEFAULT_TENANT_NAME = String(process.env.SAGEWRITE_DEFAULT_TENANT_NAME || "Default Company").trim() || "Default Company";
 const DEFAULT_INITIAL_CREDITS = Math.max(0, normalizeBillingNumber(process.env.SAGEWRITE_INITIAL_CREDITS, 1000));
@@ -1439,15 +1441,14 @@ function assertLocalOpenAllowed() {
   }
 }
 
-function getChildProcessEnv() {
-  const workspaceParentRoot = getWorkspaceParentRoot();
+function getChildProcessEnv(workspaceParentRoot = getWorkspaceParentRoot()) {
   const currentUser = getCurrentUserContext();
   return {
     ...process.env,
     SAGEWRITE_MODE: APP_MODE,
     SAGEWRITE_HOST: HOST,
     SAGEWRITE_PORT: String(PORT),
-    SAGEWRITE_WORKSPACE_ROOT: workspaceParentRoot,
+    SAGEWRITE_WORKSPACE_ROOT: path.resolve(workspaceParentRoot || getWorkspaceParentRoot()),
     SAGEWRITE_USER_ID: currentUser.id || "",
     SAGEWRITE_USERNAME: currentUser.username || "",
     SAGEWRITE_TENANT_ID: getTenantIdFromUser(currentUser),
@@ -1455,7 +1456,11 @@ function getChildProcessEnv() {
   };
 }
 
-function getWorkspacePaths(bookName, workspaceParentRoot = getWorkspaceParentRoot()) {
+function getWorkspacePaths(bookName, workspaceParentRoot = getWorkspaceParentRoot(), options = {}) {
+  if (workspaceParentRoot && typeof workspaceParentRoot === "object") {
+    options = workspaceParentRoot;
+    workspaceParentRoot = options.workspaceParentRoot || getWorkspaceParentRoot();
+  }
   const workspacePath = path.join(workspaceParentRoot, `workspace-${bookName}`);
   const bookRoot = path.join(workspacePath, "sagewrite", "book");
   const logRoot = path.join(bookRoot, "logs");
@@ -1481,7 +1486,7 @@ function getWorkspacePaths(bookName, workspaceParentRoot = getWorkspaceParentRoo
   const webRunIndexPath = path.join(logRoot, "webui_runs.jsonl");
   const webJobRoot = path.join(logRoot, "webui-jobs");
 
-  return {
+  const paths = {
     workspacePath,
     bookRoot,
     logRoot,
@@ -1507,6 +1512,10 @@ function getWorkspacePaths(bookName, workspaceParentRoot = getWorkspaceParentRoo
     webRunIndexPath,
     webJobRoot
   };
+  if (!options.skipProjectAccessCheck) {
+    assertCurrentUserCanAccessProjectPaths(bookName, paths);
+  }
+  return paths;
 }
 
 function hasCoverArtifactsAt(root) {
@@ -1564,6 +1573,229 @@ function resolveInside(rootPath, ...segments) {
     throw new Error("Resolved path is outside the allowed directory.");
   }
   return targetPath;
+}
+
+function getProjectMetadataPath(bookRoot) {
+  return path.join(bookRoot, PROJECT_METADATA_DIR, PROJECT_METADATA_FILE);
+}
+
+function getWorkspaceParentRootFromPaths(paths) {
+  return path.dirname(path.resolve(paths.workspacePath));
+}
+
+function inferTenantIdFromWorkspaceParentRoot(workspaceParentRoot) {
+  if (!isUserAuthEnabled()) {
+    return DEFAULT_TENANT_ID;
+  }
+  const root = path.resolve(workspaceParentRoot || getWorkspaceParentRoot());
+  const userRoot = path.resolve(USER_WORKSPACE_ROOT);
+  const relative = path.relative(userRoot, root);
+  if (relative && relative !== "." && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+    const [tenantSegment] = relative.split(path.sep);
+    if (tenantSegment) {
+      return normalizeTenantId(tenantSegment, DEFAULT_TENANT_ID);
+    }
+  }
+  return getTenantIdFromUser(getCurrentUserContext());
+}
+
+function getProjectTenantName(tenantId) {
+  const tenant = isUserAuthEnabled() ? findTenantById(tenantId) : null;
+  return tenant?.name || (tenantId === DEFAULT_TENANT_ID ? DEFAULT_TENANT_NAME : tenantId);
+}
+
+function readProjectMetadataFile(bookRoot) {
+  const metadataPath = getProjectMetadataPath(bookRoot);
+  if (!fs.existsSync(metadataPath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(metadataPath, "utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProjectMetadata(rawMetadata, { bookName, paths, explicit = false } = {}) {
+  const workspaceParentRoot = paths ? getWorkspaceParentRootFromPaths(paths) : getWorkspaceParentRoot();
+  const tenantId = normalizeTenantId(rawMetadata?.tenantId || inferTenantIdFromWorkspaceParentRoot(workspaceParentRoot), DEFAULT_TENANT_ID);
+  const tenantName = String(rawMetadata?.tenantName || getProjectTenantName(tenantId)).trim() || tenantId;
+  const createdAt = rawMetadata?.createdAt || new Date().toISOString();
+  const hasExplicitOwner = Boolean(
+    rawMetadata?.ownerUserId ||
+    rawMetadata?.authorUserId ||
+    rawMetadata?.editorUserId ||
+    rawMetadata?.createdByUserId
+  );
+  return {
+    version: Math.max(Number(rawMetadata?.version) || 1, 1),
+    bookName: String(rawMetadata?.bookName || bookName || "").trim(),
+    tenantId,
+    tenantName,
+    ownerUserId: String(rawMetadata?.ownerUserId || "").trim(),
+    ownerUsername: String(rawMetadata?.ownerUsername || "").trim(),
+    ownerDisplayName: String(rawMetadata?.ownerDisplayName || "").trim(),
+    authorUserId: String(rawMetadata?.authorUserId || "").trim(),
+    authorUsername: String(rawMetadata?.authorUsername || "").trim(),
+    editorUserId: String(rawMetadata?.editorUserId || "").trim(),
+    editorUsername: String(rawMetadata?.editorUsername || "").trim(),
+    createdByUserId: String(rawMetadata?.createdByUserId || rawMetadata?.ownerUserId || "").trim(),
+    createdByUsername: String(rawMetadata?.createdByUsername || rawMetadata?.ownerUsername || "").trim(),
+    createdAt,
+    updatedAt: rawMetadata?.updatedAt || createdAt,
+    explicitOwnership: Boolean(explicit && hasExplicitOwner),
+    legacyImported: Boolean(rawMetadata?.legacyImported || !explicit || !hasExplicitOwner),
+    metadataPath: paths ? getProjectMetadataPath(paths.bookRoot) : ""
+  };
+}
+
+function getProjectMetadataForPaths(bookName, paths) {
+  const rawMetadata = readProjectMetadataFile(paths.bookRoot);
+  return normalizeProjectMetadata(rawMetadata || {}, {
+    bookName,
+    paths,
+    explicit: Boolean(rawMetadata)
+  });
+}
+
+function getManagedAuthorIdsForEditor(editorUser) {
+  if (!canManageAssignedAuthors(editorUser)) {
+    return new Set();
+  }
+  const store = ensureUserStore();
+  return new Set((store?.users || [])
+    .filter((user) =>
+      getRoleId(user.role) === "author" &&
+      getTenantIdFromUser(user) === getTenantIdFromUser(editorUser) &&
+      String(user.managerUserId || "") === String(editorUser.id || "")
+    )
+    .map((user) => String(user.id || ""))
+    .filter(Boolean));
+}
+
+function canUserAccessProjectMetadata(user, metadata) {
+  if (!isUserAuthEnabled()) {
+    return true;
+  }
+  if (!user || !metadata) {
+    return false;
+  }
+  if (isPlatformAdmin(user)) {
+    return true;
+  }
+  if (normalizeTenantId(metadata.tenantId) !== getTenantIdFromUser(user)) {
+    return false;
+  }
+  const role = getRoleId(user.role);
+  if (role === "tenant_admin") {
+    return true;
+  }
+  const userId = String(user.id || "");
+  const directUserIds = new Set([
+    metadata.ownerUserId,
+    metadata.authorUserId,
+    metadata.editorUserId,
+    metadata.createdByUserId
+  ].map((value) => String(value || "")).filter(Boolean));
+  if (directUserIds.has(userId)) {
+    return true;
+  }
+  if (role === "editor") {
+    const managedAuthorIds = getManagedAuthorIdsForEditor(user);
+    if (managedAuthorIds.has(metadata.ownerUserId) ||
+        managedAuthorIds.has(metadata.authorUserId) ||
+        managedAuthorIds.has(metadata.createdByUserId)) {
+      return true;
+    }
+    return Boolean(metadata.legacyImported && !metadata.explicitOwnership);
+  }
+  if (role === "author") {
+    return false;
+  }
+  if (role === "user") {
+    return Boolean(metadata.legacyImported && !metadata.explicitOwnership);
+  }
+  return true;
+}
+
+function getProjectPublicMetadata(metadata) {
+  if (!metadata) {
+    return null;
+  }
+  return {
+    bookName: metadata.bookName || "",
+    tenantId: metadata.tenantId || "",
+    tenantName: metadata.tenantName || "",
+    ownerUserId: metadata.ownerUserId || "",
+    ownerUsername: metadata.ownerUsername || "",
+    ownerDisplayName: metadata.ownerDisplayName || "",
+    authorUserId: metadata.authorUserId || "",
+    authorUsername: metadata.authorUsername || "",
+    editorUserId: metadata.editorUserId || "",
+    editorUsername: metadata.editorUsername || "",
+    createdByUserId: metadata.createdByUserId || "",
+    createdByUsername: metadata.createdByUsername || "",
+    createdAt: metadata.createdAt || "",
+    updatedAt: metadata.updatedAt || "",
+    explicitOwnership: Boolean(metadata.explicitOwnership),
+    legacyImported: Boolean(metadata.legacyImported)
+  };
+}
+
+function assertCurrentUserCanAccessProjectPaths(bookName, paths) {
+  if (!isUserAuthEnabled()) {
+    return getProjectMetadataForPaths(bookName, paths);
+  }
+  if (!fs.existsSync(paths.workspacePath)) {
+    return getProjectMetadataForPaths(bookName, paths);
+  }
+  const metadata = getProjectMetadataForPaths(bookName, paths);
+  if (!canUserAccessProjectMetadata(getCurrentUserContext(), metadata)) {
+    throw new Error("Current user cannot access this project.");
+  }
+  return metadata;
+}
+
+function writeProjectMetadata(bookRoot, metadata) {
+  const metadataPath = getProjectMetadataPath(bookRoot);
+  fs.mkdirSync(path.dirname(metadataPath), { recursive: true });
+  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  return metadata;
+}
+
+function buildProjectMetadataForActor(bookName, paths, actor = getCurrentUserContext(), existingMetadata = {}) {
+  const role = getRoleId(actor?.role);
+  const tenantId = getTenantIdFromUser(actor);
+  const now = new Date().toISOString();
+  const manager = role === "author" && actor?.managerUserId ? findUserById(actor.managerUserId) : null;
+  return {
+    version: 1,
+    bookName,
+    tenantId,
+    tenantName: actor?.tenantName || getProjectTenantName(tenantId),
+    ownerUserId: existingMetadata.ownerUserId || actor?.id || "",
+    ownerUsername: existingMetadata.ownerUsername || actor?.username || "",
+    ownerDisplayName: existingMetadata.ownerDisplayName || actor?.displayName || "",
+    authorUserId: existingMetadata.authorUserId || (role === "author" ? actor?.id || "" : ""),
+    authorUsername: existingMetadata.authorUsername || (role === "author" ? actor?.username || "" : ""),
+    editorUserId: existingMetadata.editorUserId || (role === "editor" ? actor?.id || "" : manager?.id || ""),
+    editorUsername: existingMetadata.editorUsername || (role === "editor" ? actor?.username || "" : manager?.username || ""),
+    createdByUserId: existingMetadata.createdByUserId || actor?.id || "",
+    createdByUsername: existingMetadata.createdByUsername || actor?.username || "",
+    createdAt: existingMetadata.createdAt || now,
+    updatedAt: now,
+    workspaceRoot: getWorkspaceParentRootFromPaths(paths)
+  };
+}
+
+function ensureProjectMetadataForCurrentUser(bookName, paths) {
+  const currentMetadata = getProjectMetadataForPaths(bookName, paths);
+  if (currentMetadata.explicitOwnership) {
+    return currentMetadata;
+  }
+  const metadata = buildProjectMetadataForActor(bookName, paths, getCurrentUserContext(), currentMetadata);
+  writeProjectMetadata(paths.bookRoot, metadata);
+  return getProjectMetadataForPaths(bookName, paths);
 }
 
 function assertFileNameOnly(fileName, label = "fileName") {
@@ -4309,6 +4541,10 @@ function listWorkspaces() {
       const bookName = entry.name.replace(/^workspace-/, "");
       const workspacePath = path.join(workspaceParentRoot, entry.name);
       const bookRoot = path.join(workspacePath, "sagewrite", "book");
+      const projectMetadata = getProjectMetadataForPaths(bookName, { workspacePath, bookRoot });
+      if (!canUserAccessProjectMetadata(getCurrentUserContext(), projectMetadata)) {
+        return null;
+      }
       const objectivePath = path.join(bookRoot, "00_brief", "objective.md");
       const tocPath = path.join(bookRoot, "01_outline", "toc.md");
       const toc2Path = path.join(bookRoot, "01_outline", "toc2.md");
@@ -4390,12 +4626,14 @@ function listWorkspaces() {
         outputFiles: outputs,
         outputLanguages,
         publishLanguages,
+        project: getProjectPublicMetadata(projectMetadata),
         coverArtifacts,
         status,
         recentRuns: mergedRuns,
         editReport
       };
     })
+    .filter(Boolean)
     .sort((a, b) => a.bookName.localeCompare(b.bookName, "zh-Hans-CN"));
 }
 
@@ -4952,7 +5190,7 @@ function runScript(scriptName, params, meta) {
 
   const child = spawn("powershell.exe", args, {
     cwd: ENGINE_ROOT,
-    env: getChildProcessEnv()
+    env: getChildProcessEnv(meta?.workspaceParentRoot)
   });
 
   job.child = child;
@@ -4965,6 +5203,21 @@ function runScript(scriptName, params, meta) {
   child.on("close", (code) => finishJob(job, code ?? -1));
 
   return job;
+}
+
+function getBookNameParam(params = []) {
+  const item = params.find((param) => String(param?.flag || "").toLowerCase() === "-bookname");
+  return item ? String(item.value || "").trim() : "";
+}
+
+function getWorkspaceParentRootForScriptParams(params = []) {
+  const bookName = getBookNameParam(params);
+  if (!bookName) {
+    return getWorkspaceParentRoot();
+  }
+  validateBookName(bookName);
+  const paths = getWorkspacePaths(bookName);
+  return getWorkspaceParentRootFromPaths(paths);
 }
 
 function runPowerShellJson(scriptName, params = []) {
@@ -4988,7 +5241,7 @@ function runPowerShellJson(scriptName, params = []) {
   });
   const result = spawnSync("powershell.exe", args, {
     cwd: ENGINE_ROOT,
-    env: getChildProcessEnv(),
+    env: getChildProcessEnv(getWorkspaceParentRootForScriptParams(params)),
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024
   });
@@ -5032,7 +5285,7 @@ function runDetachedScript(scriptName, params, meta, message = "") {
 
   const child = spawn("powershell.exe", args, {
     cwd: ENGINE_ROOT,
-    env: getChildProcessEnv(),
+    env: getChildProcessEnv(meta?.workspaceParentRoot),
     detached: true,
     stdio: "ignore"
   });
@@ -5094,7 +5347,7 @@ function launchScriptInNewConsole(scriptName, params, meta, message = "") {
     windowTitle
   ], {
     cwd: __dirname,
-    env: getChildProcessEnv(),
+    env: getChildProcessEnv(meta?.workspaceParentRoot),
     detached: true,
     stdio: "ignore",
     windowsHide: false
@@ -5110,6 +5363,19 @@ async function handleRun(route, body, res) {
   try {
     const bookName = body.bookName;
     validateBookName(bookName);
+    const paths = getWorkspacePaths(bookName);
+    const projectExists = fs.existsSync(paths.workspacePath);
+    if (route === "intake") {
+      ensureProjectMetadataForCurrentUser(bookName, paths);
+    } else if (!projectExists) {
+      throw new Error("Project workspace not found.");
+    }
+    const runMeta = {
+      route,
+      bookName,
+      workspaceParentRoot: getWorkspaceParentRootFromPaths(paths),
+      project: getProjectPublicMetadata(getProjectMetadataForPaths(bookName, paths))
+    };
 
     let job;
 
@@ -5137,12 +5403,12 @@ async function handleRun(route, body, res) {
           { flag: "-CoreThesis", value: body.coreThesis },
           { flag: "-Scope", value: body.scope },
           { flag: "-Style", value: body.style }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "structure":
         job = runScript("02-structure.ps1", [
           { flag: "-BookName", value: bookName }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "expand":
         if (body.mode === "chapter") {
@@ -5164,7 +5430,7 @@ async function handleRun(route, body, res) {
           { flag: "-MaxSubsections", value: body.maxSubsections || 5 },
           { flag: "-Model", value: body.model || "gpt-4o-mini" },
           { flag: "-All", type: "switch", enabled: body.mode === "all" }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "write":
         if (!body.model) {
@@ -5189,7 +5455,7 @@ async function handleRun(route, body, res) {
           { flag: "-AdditionalInstructions", value: body.additionalInstructions || undefined },
           { flag: "-ReferenceGlossary", type: "switch", enabled: Boolean(body.referenceGlossary) },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "translate":
         if (!body.language) {
@@ -5211,7 +5477,7 @@ async function handleRun(route, body, res) {
           { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
           { flag: "-All", type: "switch", enabled: body.mode === "all" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "refine-translation":
         if (!body.language) {
@@ -5235,55 +5501,55 @@ async function handleRun(route, body, res) {
           { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
           { flag: "-All", type: "switch", enabled: body.mode === "all" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "edit":
         job = runScript("04-edit.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Strict", type: "switch", enabled: Boolean(body.strict) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "build":
         job = runScript("05-build.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "build-simple":
         job = runScript("05a-simple-docx.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "build-simple-toc":
         job = runScript("05aa-simple-docx-toc.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "build-epub":
         job = runScript("05b-epub.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "build-pdf":
         job = runScript("05c-pdf.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "build-print-pdf":
         job = runScript("05cc-print-pdf.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-AutoNumber", type: "switch", enabled: Boolean(body.autoNumber) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover":
         job = runScript("08-cover.ps1", [
@@ -5296,7 +5562,7 @@ async function handleRun(route, body, res) {
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) },
           { flag: "-SkipLayout", type: "switch", enabled: Boolean(body.skipLayout) },
           { flag: "-SkipMockup", type: "switch", enabled: Boolean(body.skipMockup) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-drafts":
         job = runScript("08-cover-drafts.ps1", [
@@ -5307,7 +5573,7 @@ async function handleRun(route, body, res) {
           { flag: "-Variants", value: body.variants || 4 },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-layout":
         job = runScript("08-cover-layout.ps1", [
@@ -5317,14 +5583,14 @@ async function handleRun(route, body, res) {
           { flag: "-Author", value: body.author || undefined },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-mockup":
         job = runScript("08-cover-mockup.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-assist":
         job = runScript("07a-cover-assist.ps1", [
@@ -5334,7 +5600,7 @@ async function handleRun(route, body, res) {
           { flag: "-Subtitle", value: body.subtitle || undefined },
           { flag: "-Author", value: body.author || undefined },
           { flag: "-Model", value: body.model || undefined }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-midjourney-prompt-ai":
         job = runScript("08n-midjourney-prompt.ps1", [
@@ -5344,7 +5610,7 @@ async function handleRun(route, body, res) {
           { flag: "-Subtitle", value: body.subtitle || undefined },
           { flag: "-Author", value: body.author || undefined },
           { flag: "-Model", value: body.model || "gpt-5.2" }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next":
         job = runScript("08n-cover.ps1", [
@@ -5358,7 +5624,7 @@ async function handleRun(route, body, res) {
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) },
           { flag: "-SkipMockup", type: "switch", enabled: Boolean(body.skipMockup) },
           { flag: "-SkipPrintSpread", type: "switch", enabled: Boolean(body.skipPrintSpread) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-brief":
         job = runScript("08n-base-brief.ps1", [
@@ -5368,7 +5634,7 @@ async function handleRun(route, body, res) {
           { flag: "-Subtitle", value: body.subtitle || undefined },
           { flag: "-Author", value: body.author || undefined },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-prompt":
         job = runScript("08n-base-prompt.ps1", [
@@ -5376,7 +5642,7 @@ async function handleRun(route, body, res) {
           { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-generate":
         job = runScript("08n-base-generate.ps1", [
@@ -5385,7 +5651,7 @@ async function handleRun(route, body, res) {
           { flag: "-Variants", value: body.variants || 4 },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-review":
         job = runScript("08n-base-review.ps1", [
@@ -5393,7 +5659,7 @@ async function handleRun(route, body, res) {
           { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-layout":
         job = runScript("08n-title-layout.ps1", [
@@ -5404,7 +5670,7 @@ async function handleRun(route, body, res) {
           { flag: "-Author", value: body.author || undefined },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-image-edit":
         job = runScript("08n-image-edit.ps1", [
@@ -5418,7 +5684,7 @@ async function handleRun(route, body, res) {
           { flag: "-CoverText", value: body.coverText || undefined },
           { flag: "-ImageModel", value: body.imageModel || "gpt-image-1.5" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "kdp-fix-image-edit":
         job = runScript("kdp-fix-image-edit.ps1", [
@@ -5428,13 +5694,13 @@ async function handleRun(route, body, res) {
           { flag: "-Prompt", value: body.prompt || undefined },
           { flag: "-ImageModel", value: body.imageModel || "gpt-image-1.5" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "kdp-acceptance-files":
         job = runScript("kdp-acceptance-files.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Action", value: body.action || "List" }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "kdp-imagemagick-fix":
         job = runScript("kdp-imagemagick-fix.ps1", [
@@ -5444,7 +5710,7 @@ async function handleRun(route, body, res) {
           { flag: "-InstructionJson", value: body.instructionJson || undefined },
           { flag: "-InstructionFile", value: body.instructionFileName || undefined },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-print":
         job = runScript("08n-cover.ps1", [
@@ -5456,7 +5722,7 @@ async function handleRun(route, body, res) {
           { flag: "-Variants", value: body.variants || 4 },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-mockup":
         job = runScript("08n-mockup.ps1", [
@@ -5464,14 +5730,14 @@ async function handleRun(route, body, res) {
           { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
           { flag: "-Mode", value: body.mode || "auto" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "cover-next-export":
         job = runScript("08n-export.ps1", [
           { flag: "-BookName", value: bookName },
           { flag: "-Edition", value: body.nextEdition || body.edition || "ebook" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "publish":
         job = runScript("09-publish.ps1", [
@@ -5479,7 +5745,7 @@ async function handleRun(route, body, res) {
           { flag: "-Language", value: body.language || "zh" },
           { flag: "-Platform", value: body.platform || "all" },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }
-        ], { route, bookName });
+        ], runMeta);
         break;
       case "submit":
         if (!body.platform || body.platform === "all") {
@@ -5504,9 +5770,9 @@ async function handleRun(route, body, res) {
               : submitMode === "details" && body.platform === "amazon"
                 ? "Amazon details-page session started in a new PowerShell window."
                 : "Submit assist session started in a new PowerShell window. Browser automation will continue from there.";
-            job = launchScriptInNewConsole("09f-submit.ps1", submitParams, { route, bookName }, launchMessage);
+            job = launchScriptInNewConsole("09f-submit.ps1", submitParams, runMeta, launchMessage);
           } else {
-            job = runScript("09f-submit.ps1", submitParams, { route, bookName });
+            job = runScript("09f-submit.ps1", submitParams, runMeta);
           }
         }
         break;
@@ -5973,6 +6239,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const paths = getWorkspacePaths(bookName);
+      ensureProjectMetadataForCurrentUser(bookName, paths);
       const briefRoot = path.join(paths.bookRoot, "00_brief");
       const objectivePath = path.join(briefRoot, "objective.md");
 
@@ -6734,6 +7001,7 @@ const server = http.createServer(async (req, res) => {
 
       validateBookName(bookName);
       const paths = getWorkspacePaths(bookName);
+      ensureProjectMetadataForCurrentUser(bookName, paths);
       const outlineRoot = path.join(paths.bookRoot, "01_outline");
       const tocPath = path.join(outlineRoot, "toc.md");
 
@@ -6825,6 +7093,7 @@ const server = http.createServer(async (req, res) => {
 
       validateBookName(bookName);
       const paths = getWorkspacePaths(bookName);
+      ensureProjectMetadataForCurrentUser(bookName, paths);
       const chapterRoot = path.join(paths.bookRoot, "02_chapters");
       validateChapterFileName(fileName);
       const safeFileName = fileName;

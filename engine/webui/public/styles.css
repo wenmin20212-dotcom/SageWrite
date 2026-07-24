@@ -3608,6 +3608,11 @@ textarea {
   font-size: 0.88rem;
 }
 
+.workspace-item .workspace-owner-line {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
 .workspace-item.muted {
   cursor: default;
 }
