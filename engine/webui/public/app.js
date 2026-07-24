@@ -28,14 +28,19 @@ const state = {
   users: [],
   tenants: [],
   assignableEditors: [],
+  projects: [],
+  assignableProjectAuthors: [],
+  assignableProjectEditors: [],
   canManageTenants: false,
   canManageUsers: false,
   canManageAuthors: false,
+  canManageProjects: false,
   canAdjustBilling: false,
   currentTenantId: "",
   userBillingEvents: {},
   userFilterNegative: false,
   userAdminError: "",
+  projectManagementError: "",
   auditEvents: [],
   auditError: "",
   auditLoading: false,
@@ -102,6 +107,7 @@ const COVER_KDP_FIX_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-fix-workbench-o
 const COVER_KDP_IMG_BLACK_WORKBENCH_STORAGE_KEY = "sagewrite-cover-kdp-img-black-workbench-open";
 const PROJECT_PICKER_WORKBENCH_STORAGE_KEY = "sagewrite-project-picker-workbench-open";
 const PROJECT_STATUS_WORKBENCH_STORAGE_KEY = "sagewrite-project-status-workbench-open";
+const COMPANY_PROJECT_WORKBENCH_STORAGE_KEY = "sagewrite-company-project-workbench-open";
 const USER_ADMIN_WORKBENCH_STORAGE_KEY = "sagewrite-user-admin-workbench-open";
 const ACCOUNT_WORKBENCH_STORAGE_KEY = "sagewrite-account-workbench-open";
 const SELECTED_BOOKNAME_STORAGE_KEY = "sagewrite-selected-bookname";
@@ -116,6 +122,7 @@ const PUBLISH_RAW_TOGGLE_STORAGE_KEY = "sagewrite-publish-raw-toggle-open";
 const FLOW_ACTIVE_STORAGE_KEY = "sagewrite-active-flow-target";
 const FLOW_WORKBENCHES = [
   { id: "project", selector: "#project-picker-workbench-shell", section: '[data-flow-section="project"]' },
+  { id: "company-projects", selector: "#company-project-workbench-shell", section: '[data-flow-section="company-projects"]' },
   { id: "account", selector: "#account-workbench-shell", section: '[data-flow-section="account"]' },
   { id: "users", selector: "#user-admin-workbench-shell", section: '[data-flow-section="users"]' },
   { id: "intake", selector: "#intake-workbench-shell", section: '[data-flow-section="intake"]' },
@@ -6332,6 +6339,10 @@ function canUseUserManagementPanel(user = state.currentUser || {}) {
   return Boolean(permissions.manageUsers || permissions.manageAuthors);
 }
 
+function canUseCompanyProjectPanel(user = state.currentUser || {}) {
+  return state.authMode === "users" && Boolean(user?.id);
+}
+
 function getRoleLabel(role) {
   return {
     platform_admin: "平台管理员",
@@ -6430,6 +6441,7 @@ function getRolePermissionsForUser(user) {
     manageTenants: role === "platform_admin",
     manageUsers: admin,
     manageAuthors: role === "editor",
+    manageProjects: admin,
     viewAudit: admin,
     adjustBilling: admin,
     viewManagedAuthorBilling: admin || role === "editor",
@@ -6451,6 +6463,7 @@ function getCurrentPermissions() {
       manageTenants: true,
       manageUsers: true,
       manageAuthors: false,
+      manageProjects: true,
       viewAudit: true,
       adjustBilling: true,
       viewManagedAuthorBilling: true,
@@ -6685,6 +6698,7 @@ function getAuditActionLabel(action) {
     "user.password.reset": "重置密码",
     "account.password.change": "自改密码",
     "billing.adjust": "积分调整",
+    "project.update": "项目归属修改",
     "permission.denied": "权限拒绝",
     "job.start": "任务开始",
     "job.finish": "任务结束",
@@ -7158,6 +7172,222 @@ function renderUserAdminPanel() {
   renderAdminAuditPanel();
 }
 
+function getProjectUserLabel(user) {
+  if (!user) {
+    return "";
+  }
+  const name = user.displayName || user.username || user.id || "";
+  const username = user.username && user.username !== name ? ` (${user.username})` : "";
+  const tenant = user.tenantName && user.tenantId && user.tenantName !== user.tenantId
+    ? ` · ${user.tenantName}`
+    : (user.tenantId ? ` · ${user.tenantId}` : "");
+  return `${name}${username}${tenant}`;
+}
+
+function getProjectUserOptions(users, selectedUserId = "", tenantId = "", emptyLabel = "未分配") {
+  const selected = String(selectedUserId || "");
+  const normalizedTenantId = String(tenantId || "");
+  const options = (users || [])
+    .filter((user) => !normalizedTenantId || !user.tenantId || String(user.tenantId) === normalizedTenantId)
+    .map((user) =>
+      `<option value="${escapeHtml(user.id || "")}"${selected === user.id ? " selected" : ""}>${escapeHtml(getProjectUserLabel(user))}</option>`
+    );
+  return [
+    `<option value="">${escapeHtml(emptyLabel)}</option>`,
+    ...options
+  ].join("");
+}
+
+function getProjectAssignedName(project, kind) {
+  if (kind === "author") {
+    return project?.authorUsername || project?.authorUserId || "未分配";
+  }
+  if (kind === "editor") {
+    return project?.editorUsername || project?.editorUserId || "未分配";
+  }
+  return project?.ownerDisplayName || project?.ownerUsername || project?.ownerUserId || "未记录";
+}
+
+function setCompanyProjectFeedback(message = "", kind = "") {
+  const node = $("#company-project-feedback");
+  if (!node) {
+    return;
+  }
+  node.textContent = message;
+  node.dataset.kind = kind || "";
+}
+
+function selectCompanyProject(item) {
+  if (!item?.bookName) {
+    return;
+  }
+  $("#bookName").value = item.bookName;
+  setRememberedBookName(item.bookName);
+  state.selectedRunKey = "";
+  const tenantId = String(item.project?.tenantId || "");
+  const selected = (state.workspaces || []).find((workspace) =>
+    workspace.bookName === item.bookName &&
+    (!tenantId || String(workspace.project?.tenantId || "") === tenantId)
+  ) || item;
+  renderWorkspaceSelection(selected);
+  activateFlowWorkbench("project", { scroll: true });
+}
+
+function renderCompanyProjectPanel() {
+  const panel = $("#company-project-panel");
+  if (!panel) {
+    return;
+  }
+  const navItem = document.querySelector('[data-flow-target="company-projects"]');
+  const canUsePanel = canUseCompanyProjectPanel(state.currentUser || {});
+  if (navItem) {
+    navItem.hidden = !canUsePanel;
+  }
+  panel.hidden = !canUsePanel;
+  if (!canUsePanel) {
+    return;
+  }
+
+  const permissions = getCurrentPermissions();
+  const canManage = Boolean(permissions.manageProjects || state.canManageProjects);
+  const heading = panel.querySelector(".panel-header h2");
+  const title = panel.querySelector(".workbench-title");
+  const summary = $("#company-project-summary");
+  const note = $("#company-project-note");
+  const list = $("#company-project-list");
+  const refreshButton = $("#refresh-projects");
+  if (heading) {
+    heading.textContent = canManage ? "公司项目管理" : "项目查看";
+  }
+  if (title) {
+    title.textContent = canManage ? "公司项目管理工作台" : "我的项目工作台";
+  }
+  if (summary) {
+    summary.textContent = canManage
+      ? "查看公司项目，并调整项目作者和负责编辑"
+      : "查看当前账号可访问的项目";
+  }
+  if (refreshButton) {
+    refreshButton.disabled = state.authMode !== "users";
+  }
+  if (note) {
+    note.textContent = state.projectManagementError ||
+      (canManage
+        ? `已加载 ${state.projects.length} 个公司项目。`
+        : `已加载 ${state.projects.length} 个可访问项目。`);
+  }
+  if (!list) {
+    return;
+  }
+  if (state.projectManagementError) {
+    list.innerHTML = `<div class="workspace-item muted">${escapeHtml(state.projectManagementError)}</div>`;
+    return;
+  }
+  if (!state.projects.length) {
+    list.innerHTML = '<div class="workspace-item muted">还没有项目</div>';
+    return;
+  }
+
+  list.innerHTML = state.projects.map((item) => {
+    const project = item.project || {};
+    const bookName = item.bookName || project.bookName || "";
+    const tenantId = project.tenantId || "";
+    const tenantLabel = project.tenantName && project.tenantId && project.tenantName !== project.tenantId
+      ? `${project.tenantName}（${project.tenantId}）`
+      : (project.tenantName || project.tenantId || "未记录");
+    const updatedAt = project.updatedAt ? formatUserDate(project.updatedAt) : "-";
+    const assignmentControls = canManage ? `
+      <label class="field company-project-action-field">
+        <span>项目作者</span>
+        <select data-project-author>
+          ${getProjectUserOptions(state.assignableProjectAuthors, project.authorUserId || "", tenantId, "未分配作者")}
+        </select>
+      </label>
+      <label class="field company-project-action-field">
+        <span>负责编辑</span>
+        <select data-project-editor>
+          ${getProjectUserOptions(state.assignableProjectEditors, project.editorUserId || "", tenantId, "未分配编辑")}
+        </select>
+      </label>
+      <button class="ghost-button company-project-save" type="button">保存归属</button>
+    ` : "";
+    return `
+      <div class="company-project-item" data-book-name="${escapeHtml(bookName)}" data-tenant-id="${escapeHtml(tenantId)}">
+        <div class="company-project-head">
+          <div class="company-project-meta">
+            <strong>${escapeHtml(bookName)}</strong>
+            <span>公司：${escapeHtml(tenantLabel)}</span>
+            <span>作者：${escapeHtml(getProjectAssignedName(project, "author"))}</span>
+            <span>负责编辑：${escapeHtml(getProjectAssignedName(project, "editor"))}</span>
+            <span>创建/所有者：${escapeHtml(getProjectAssignedName(project, "owner"))}</span>
+            <span>更新时间：${escapeHtml(updatedAt)}</span>
+            <span>路径：${escapeHtml(item.workspacePath || project.workspaceRoot || "")}</span>
+            ${project.legacyImported && !project.explicitOwnership ? '<span class="workspace-owner-line">旧项目：已按当前公司导入，可在这里补齐归属</span>' : ""}
+          </div>
+          <button class="ghost-button company-project-select" type="button">选择项目</button>
+        </div>
+        ${assignmentControls ? `<div class="company-project-actions">${assignmentControls}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
+async function refreshProjects({ quiet = false } = {}) {
+  if (state.authMode !== "users") {
+    state.projects = [];
+    state.assignableProjectAuthors = [];
+    state.assignableProjectEditors = [];
+    state.canManageProjects = false;
+    state.projectManagementError = "";
+    renderCompanyProjectPanel();
+    return;
+  }
+
+  try {
+    const result = await api("/api/projects");
+    state.projects = result?.projects || [];
+    state.assignableProjectAuthors = result?.assignableAuthors || [];
+    state.assignableProjectEditors = result?.assignableEditors || [];
+    state.canManageProjects = Boolean(result?.canManageProjects);
+    state.currentTenantId = result?.currentTenantId || state.currentTenantId || "";
+    state.projectManagementError = "";
+    renderCompanyProjectPanel();
+    if (!quiet) {
+      setCompanyProjectFeedback(`项目列表已刷新：${state.projects.length} 个项目。`, "success");
+    }
+  } catch (error) {
+    state.projects = [];
+    state.assignableProjectAuthors = [];
+    state.assignableProjectEditors = [];
+    state.canManageProjects = false;
+    state.projectManagementError = error.message || "项目列表读取失败。";
+    renderCompanyProjectPanel();
+    if (!quiet) {
+      setCompanyProjectFeedback(state.projectManagementError, "error");
+    }
+  }
+}
+
+async function updateProjectAssignmentFromPanel(button) {
+  const item = button?.closest?.(".company-project-item");
+  if (!item) {
+    return;
+  }
+  const bookName = item.dataset.bookName || "";
+  const tenantId = item.dataset.tenantId || "";
+  const authorUserId = item.querySelector("[data-project-author]")?.value || "";
+  const editorUserId = item.querySelector("[data-project-editor]")?.value || "";
+  const result = await api("/api/projects", {
+    method: "PATCH",
+    body: JSON.stringify({ bookName, tenantId, authorUserId, editorUserId })
+  });
+  state.projects = result?.projects || state.projects;
+  renderCompanyProjectPanel();
+  setCompanyProjectFeedback(`已保存项目归属：${bookName}`, "success");
+  await refreshStatus();
+  await refreshAudit({ quiet: true });
+}
+
 async function refreshUsers({ quiet = false } = {}) {
   if (state.authMode !== "users") {
     state.users = [];
@@ -7541,6 +7771,7 @@ async function refreshStatus() {
   }
   renderAccountPanel();
   renderUserAdminPanel();
+  renderCompanyProjectPanel();
   setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
   applyRolePermissions();
@@ -8923,6 +9154,7 @@ function setupForms() {
       await refreshStatus();
       await refreshAccount({ quiet: true });
       await refreshUsers({ quiet: true });
+      await refreshProjects({ quiet: true });
       await refreshAudit({ quiet: true });
     } catch (error) {
       setStatusBadge("失败", "failed");
@@ -8960,6 +9192,46 @@ function setupForms() {
       await refreshAudit({ quiet: true });
     } catch (error) {
       setUserAdminFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#refresh-projects")?.addEventListener("click", async () => {
+    try {
+      await refreshProjects();
+      await refreshStatus();
+      await refreshAudit({ quiet: true });
+    } catch (error) {
+      setCompanyProjectFeedback(error.message, "error");
+      setStatusBadge("失败", "failed");
+      setLog(error.message);
+    }
+  });
+
+  $("#company-project-list")?.addEventListener("click", async (event) => {
+    const selectButton = event.target.closest(".company-project-select");
+    const saveButton = event.target.closest(".company-project-save");
+    if (!selectButton && !saveButton) {
+      return;
+    }
+    try {
+      const itemNode = event.target.closest(".company-project-item");
+      const bookName = itemNode?.dataset.bookName || "";
+      const tenantId = itemNode?.dataset.tenantId || "";
+      const item = (state.projects || []).find((projectItem) =>
+        projectItem.bookName === bookName &&
+        String(projectItem.project?.tenantId || "") === String(tenantId || "")
+      );
+      if (selectButton) {
+        selectCompanyProject(item);
+        setCompanyProjectFeedback(`已选择项目：${bookName}`, "success");
+        return;
+      }
+      await updateProjectAssignmentFromPanel(saveButton);
+      setStatusBadge("项目归属已保存", "success");
+    } catch (error) {
+      setCompanyProjectFeedback(error.message, "error");
       setStatusBadge("失败", "failed");
       setLog(error.message);
     }
@@ -9586,6 +9858,7 @@ function setupForms() {
 async function init() {
 initWorkbenchState("#project-picker-workbench-shell", PROJECT_PICKER_WORKBENCH_STORAGE_KEY, true);
 initWorkbenchState("#project-status-workbench-shell", PROJECT_STATUS_WORKBENCH_STORAGE_KEY);
+initWorkbenchState("#company-project-workbench-shell", COMPANY_PROJECT_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#account-workbench-shell", ACCOUNT_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#user-admin-workbench-shell", USER_ADMIN_WORKBENCH_STORAGE_KEY);
 initWorkbenchState("#intake-workbench-shell", INTAKE_WORKBENCH_STORAGE_KEY);
@@ -9617,6 +9890,7 @@ updateCancelJobButton(false);
     await refreshStatus();
     await refreshAccount({ quiet: true });
     await refreshUsers({ quiet: true });
+    await refreshProjects({ quiet: true });
     await refreshAudit({ quiet: true });
     try {
       await refreshSystemHealth();

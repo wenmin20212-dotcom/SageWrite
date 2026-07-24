@@ -129,6 +129,10 @@ function canUseUserManagement(user) {
   return canManageTenantUsers(user) || canManageAssignedAuthors(user);
 }
 
+function canManageCompanyProjects(user) {
+  return ["platform_admin", "tenant_admin"].includes(getRoleId(user?.role));
+}
+
 function canAssignRole(actor, role) {
   const nextRole = getRoleId(role);
   if (isPlatformAdmin(actor)) {
@@ -155,6 +159,7 @@ function getRolePermissionsPublic(user) {
     manageTenants: role === "platform_admin",
     manageUsers: admin,
     manageAuthors: role === "editor",
+    manageProjects: admin,
     viewAudit: admin,
     adjustBilling: admin,
     viewManagedAuthorBilling: admin || role === "editor",
@@ -1316,6 +1321,7 @@ function getRequiredProjectPermission(method, pathname) {
     return null;
   }
   if (pathname === "/api/users" ||
+      pathname === "/api/projects" ||
       pathname === "/api/admin/audit" ||
       /^\/api\/users\/[^/]+(?:\/password|\/billing|\/billing-adjustment)?$/.test(pathname)) {
     return null;
@@ -1694,8 +1700,7 @@ function canUserAccessProjectMetadata(user, metadata) {
   const directUserIds = new Set([
     metadata.ownerUserId,
     metadata.authorUserId,
-    metadata.editorUserId,
-    metadata.createdByUserId
+    metadata.editorUserId
   ].map((value) => String(value || "")).filter(Boolean));
   if (directUserIds.has(userId)) {
     return true;
@@ -1703,8 +1708,7 @@ function canUserAccessProjectMetadata(user, metadata) {
   if (role === "editor") {
     const managedAuthorIds = getManagedAuthorIdsForEditor(user);
     if (managedAuthorIds.has(metadata.ownerUserId) ||
-        managedAuthorIds.has(metadata.authorUserId) ||
-        managedAuthorIds.has(metadata.createdByUserId)) {
+        managedAuthorIds.has(metadata.authorUserId)) {
       return true;
     }
     return Boolean(metadata.legacyImported && !metadata.explicitOwnership);
@@ -4529,8 +4533,7 @@ function readJsonBody(req, maxBytes = 5_000_000) {
   });
 }
 
-function listWorkspaces() {
-  const workspaceParentRoot = getWorkspaceParentRoot();
+function listWorkspacesFromRoot(workspaceParentRoot = getWorkspaceParentRoot()) {
   if (!fs.existsSync(workspaceParentRoot)) {
     return [];
   }
@@ -4611,6 +4614,7 @@ function listWorkspaces() {
         .slice(-8);
 
       return {
+        projectKey: `${projectMetadata.tenantId}:${bookName}`,
         bookName,
         workspacePath,
         hasObjective: fs.existsSync(objectivePath),
@@ -4635,6 +4639,209 @@ function listWorkspaces() {
     })
     .filter(Boolean)
     .sort((a, b) => a.bookName.localeCompare(b.bookName, "zh-Hans-CN"));
+}
+
+function listWorkspaces() {
+  return listWorkspacesFromRoot(getWorkspaceParentRoot());
+}
+
+function getProjectManagementRootsForActor(actor = getCurrentUserContext()) {
+  if (!isUserAuthEnabled()) {
+    return [WORKSPACE_PARENT_ROOT];
+  }
+  if (!isPlatformAdmin(actor)) {
+    return [getUserWorkspaceRoot(actor)];
+  }
+
+  const roots = new Set([path.resolve(WORKSPACE_PARENT_ROOT)]);
+  const store = ensureUserStore();
+  (store?.tenants || []).forEach((tenant) => {
+    roots.add(path.resolve(getTenantWorkspaceRoot(tenant.id)));
+  });
+  if (fs.existsSync(USER_WORKSPACE_ROOT)) {
+    fs.readdirSync(USER_WORKSPACE_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .forEach((entry) => roots.add(path.resolve(path.join(USER_WORKSPACE_ROOT, entry.name))));
+  }
+  return Array.from(roots);
+}
+
+function listProjectsForActor(actor = getCurrentUserContext()) {
+  const seen = new Set();
+  return getProjectManagementRootsForActor(actor)
+    .flatMap((root) => listWorkspacesFromRoot(root))
+    .filter((item) => {
+      const key = `${item.project?.tenantId || ""}:${item.bookName}:${path.resolve(item.workspacePath || "")}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const tenantCompare = String(a.project?.tenantName || a.project?.tenantId || "")
+        .localeCompare(String(b.project?.tenantName || b.project?.tenantId || ""), "zh-Hans-CN");
+      return tenantCompare || a.bookName.localeCompare(b.bookName, "zh-Hans-CN");
+    });
+}
+
+function getAssignableAuthorsForActor(actor, store = ensureUserStore()) {
+  if (!store || !actor) {
+    return [];
+  }
+  const role = getRoleId(actor.role);
+  if (isPlatformAdmin(actor)) {
+    return (store.users || []).filter((user) => getRoleId(user.role) === "author" && !user.disabled);
+  }
+  if (role === "tenant_admin") {
+    const tenantId = getTenantIdFromUser(actor);
+    return (store.users || []).filter((user) =>
+      getRoleId(user.role) === "author" &&
+      !user.disabled &&
+      getTenantIdFromUser(user) === tenantId
+    );
+  }
+  if (role === "editor") {
+    const managedAuthorIds = getManagedAuthorIdsForEditor(actor);
+    return (store.users || []).filter((user) => managedAuthorIds.has(String(user.id || "")) && !user.disabled);
+  }
+  if (role === "author") {
+    const author = findUserById(actor.id, store) || actor;
+    return author && !author.disabled ? [author] : [];
+  }
+  return [];
+}
+
+function getProjectUserOptionPublic(user) {
+  const publicUser = getUserPublic(user);
+  return publicUser ? {
+    id: publicUser.id,
+    username: publicUser.username,
+    displayName: publicUser.displayName,
+    role: publicUser.role,
+    roleId: publicUser.roleId,
+    tenantId: publicUser.tenantId,
+    tenantName: publicUser.tenantName,
+    managerUserId: publicUser.managerUserId || "",
+    managerUsername: publicUser.managerUsername || ""
+  } : null;
+}
+
+function findActiveProjectUser(userId, { role, tenantId, store = ensureUserStore() } = {}) {
+  const cleanUserId = String(userId || "").trim();
+  if (!cleanUserId) {
+    return null;
+  }
+  const user = findUserById(cleanUserId, store);
+  if (!user || user.disabled) {
+    throw new Error("Assigned project user must be active.");
+  }
+  if (role && getRoleId(user.role) !== role) {
+    throw new Error(`Assigned project user must be ${role}.`);
+  }
+  if (tenantId && getTenantIdFromUser(user) !== normalizeTenantId(tenantId)) {
+    throw new Error("Assigned project user must be in the same tenant.");
+  }
+  return user;
+}
+
+function findProjectForActor(bookName, tenantId = "", actor = getCurrentUserContext()) {
+  validateBookName(bookName);
+  const normalizedTenantId = tenantId ? normalizeTenantId(tenantId) : "";
+  for (const root of getProjectManagementRootsForActor(actor)) {
+    const workspacePath = path.join(root, `workspace-${bookName}`);
+    if (!fs.existsSync(workspacePath)) {
+      continue;
+    }
+    const paths = getWorkspacePaths(bookName, root);
+    const metadata = getProjectMetadataForPaths(bookName, paths);
+    if (normalizedTenantId && normalizeTenantId(metadata.tenantId) !== normalizedTenantId) {
+      continue;
+    }
+    if (canUserAccessProjectMetadata(actor, metadata)) {
+      return { paths, metadata };
+    }
+  }
+  return null;
+}
+
+function assertCurrentUserCanManageProjects() {
+  const user = getCurrentUserContext();
+  if (!user || !canManageCompanyProjects(user)) {
+    throw new Error("Project management permission is required.");
+  }
+  return user;
+}
+
+function updateProjectMetadataForActor({ bookName, tenantId = "", authorUserId = undefined, editorUserId = undefined }, actor = getCurrentUserContext()) {
+  if (!canManageCompanyProjects(actor)) {
+    throw new Error("Project management permission is required.");
+  }
+  const found = findProjectForActor(bookName, tenantId, actor);
+  if (!found) {
+    throw new Error("Project not found.");
+  }
+
+  const { paths, metadata } = found;
+  const projectTenantId = normalizeTenantId(metadata.tenantId);
+  if (!isPlatformAdmin(actor) && projectTenantId !== getTenantIdFromUser(actor)) {
+    throw new Error("You can only manage projects in your own tenant.");
+  }
+
+  const store = ensureUserStore();
+  const nextMetadata = {
+    version: 1,
+    bookName,
+    tenantId: projectTenantId,
+    tenantName: metadata.tenantName || getProjectTenantName(projectTenantId),
+    ownerUserId: metadata.ownerUserId || metadata.createdByUserId || actor.id || "",
+    ownerUsername: metadata.ownerUsername || metadata.createdByUsername || actor.username || "",
+    ownerDisplayName: metadata.ownerDisplayName || actor.displayName || "",
+    authorUserId: metadata.authorUserId || "",
+    authorUsername: metadata.authorUsername || "",
+    editorUserId: metadata.editorUserId || "",
+    editorUsername: metadata.editorUsername || "",
+    createdByUserId: metadata.createdByUserId || actor.id || "",
+    createdByUsername: metadata.createdByUsername || actor.username || "",
+    createdAt: metadata.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    workspaceRoot: getWorkspaceParentRootFromPaths(paths)
+  };
+
+  if (authorUserId !== undefined) {
+    const author = findActiveProjectUser(authorUserId, { role: "author", tenantId: projectTenantId, store });
+    nextMetadata.authorUserId = author?.id || "";
+    nextMetadata.authorUsername = author?.username || "";
+    if (author) {
+      nextMetadata.ownerUserId = author.id || "";
+      nextMetadata.ownerUsername = author.username || "";
+      nextMetadata.ownerDisplayName = author.displayName || author.username || "";
+    } else {
+      nextMetadata.ownerUserId = actor.id || "";
+      nextMetadata.ownerUsername = actor.username || "";
+      nextMetadata.ownerDisplayName = actor.displayName || actor.username || "";
+    }
+    if (author && editorUserId === undefined && !nextMetadata.editorUserId && author.managerUserId) {
+      const manager = findActiveProjectUser(author.managerUserId, { role: "editor", tenantId: projectTenantId, store });
+      nextMetadata.editorUserId = manager?.id || "";
+      nextMetadata.editorUsername = manager?.username || "";
+    }
+  }
+
+  if (editorUserId !== undefined) {
+    const editor = findActiveProjectUser(editorUserId, { role: "editor", tenantId: projectTenantId, store });
+    nextMetadata.editorUserId = editor?.id || "";
+    nextMetadata.editorUsername = editor?.username || "";
+  }
+
+  writeProjectMetadata(paths.bookRoot, nextMetadata);
+  return {
+    ...listWorkspacesFromRoot(getWorkspaceParentRootFromPaths(paths)).find((item) =>
+      item.bookName === bookName &&
+      normalizeTenantId(item.project?.tenantId || DEFAULT_TENANT_ID) === projectTenantId
+    ),
+    project: getProjectPublicMetadata(getProjectMetadataForPaths(bookName, paths))
+  };
 }
 
 function serveStatic(reqPath, res) {
@@ -6212,6 +6419,66 @@ const server = http.createServer(async (req, res) => {
         data: updates
       });
       sendJson(res, 200, { user });
+    } catch (error) {
+      sendJson(res, getPermissionErrorStatus(error), { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/projects") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      const actor = getCurrentUserContext();
+      const store = ensureUserStore();
+      sendJson(res, 200, {
+        projects: listProjectsForActor(actor),
+        assignableAuthors: getAssignableAuthorsForActor(actor, store).map(getProjectUserOptionPublic).filter(Boolean),
+        assignableEditors: getAssignableEditorsForActor(actor, store).map(getProjectUserOptionPublic).filter(Boolean),
+        canManageProjects: canManageCompanyProjects(actor),
+        canManageTenants: isPlatformAdmin(actor),
+        currentTenantId: getTenantIdFromUser(actor)
+      });
+    } catch (error) {
+      sendJson(res, getPermissionErrorStatus(error), { error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "PATCH" && url.pathname === "/api/projects") {
+    try {
+      if (!isUserAuthEnabled()) {
+        sendJson(res, 400, { error: "User account mode is not enabled." });
+        return;
+      }
+      const actor = assertCurrentUserCanManageProjects();
+      const body = await readJsonBody(req, 100_000);
+      const updates = {
+        bookName: body.bookName,
+        tenantId: body.tenantId || "",
+        authorUserId: Object.hasOwn(body, "authorUserId") ? body.authorUserId : undefined,
+        editorUserId: Object.hasOwn(body, "editorUserId") ? body.editorUserId : undefined
+      };
+      const project = updateProjectMetadataForActor(updates, actor);
+      recordAuditEvent("project.update", {
+        req,
+        actor,
+        status: "success",
+        tenantId: project?.project?.tenantId || updates.tenantId || "",
+        bookName: updates.bookName || "",
+        message: `Updated project ${updates.bookName || ""}.`,
+        data: {
+          tenantId: updates.tenantId || "",
+          authorUserId: updates.authorUserId === undefined ? "" : String(updates.authorUserId || ""),
+          editorUserId: updates.editorUserId === undefined ? "" : String(updates.editorUserId || "")
+        }
+      });
+      sendJson(res, 200, {
+        project,
+        projects: listProjectsForActor(actor)
+      });
     } catch (error) {
       sendJson(res, getPermissionErrorStatus(error), { error: error.message });
     }

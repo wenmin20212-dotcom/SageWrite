@@ -69,6 +69,10 @@
               <span>项目</span>
               <strong>选择与状态</strong>
             </button>
+            <button class="flow-nav-item" type="button" data-flow-target="company-projects" hidden>
+              <span>项目</span>
+              <strong>公司项目</strong>
+            </button>
             <button class="flow-nav-item" type="button" data-flow-target="account">
               <span>账户</span>
               <strong>个人管理</strong>
@@ -173,6 +177,29 @@
                 <div class="workspace-list-title">已有工作区</div>
                 <div id="workspace-list" class="workspace-list"></div>
               </div>
+            </div>
+          </details>
+        </section>
+
+        <section id="company-project-panel" class="panel company-project-panel" data-flow-section="company-projects" hidden>
+          <div class="panel-header">
+            <h2>公司项目管理</h2>
+          </div>
+          <details id="company-project-workbench-shell" class="workbench-shell" open>
+            <summary>
+              <div class="workbench-summary">
+                <span class="workbench-kicker">Projects</span>
+                <strong class="workbench-title">公司项目管理工作台</strong>
+                <span id="company-project-summary" class="workbench-meta">查看公司项目，并调整项目作者和负责编辑</span>
+              </div>
+            </summary>
+            <div class="workbench-body">
+              <div class="account-toolbar">
+                <div id="company-project-note" class="company-project-note">正在读取项目归属。</div>
+                <button id="refresh-projects" class="ghost-button" type="button">刷新项目</button>
+              </div>
+              <div id="company-project-feedback" class="company-project-feedback" aria-live="polite"></div>
+              <div id="company-project-list" class="company-project-list"></div>
             </div>
           </details>
         </section>
@@ -310,6 +337,7 @@
                       <option value="user.password.reset">重置密码</option>
                       <option value="account.password.change">自改密码</option>
                       <option value="billing.adjust">积分调整</option>
+                      <option value="project.update">项目归属修改</option>
                       <option value="permission.denied">权限拒绝</option>
                       <option value="job.start">任务开始</option>
                       <option value="job.finish">任务结束</option>

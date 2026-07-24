@@ -729,6 +729,7 @@ textarea {
 }
 
 .account-panel[hidden],
+.company-project-panel[hidden],
 .user-admin-panel[hidden],
 .admin-audit-section[hidden] {
   display: none;
@@ -736,6 +737,8 @@ textarea {
 
 .account-note,
 .account-feedback,
+.company-project-note,
+.company-project-feedback,
 .user-admin-note,
 .user-admin-feedback,
 .audit-note {
@@ -745,11 +748,13 @@ textarea {
 }
 
 .account-feedback[data-kind="success"],
+.company-project-feedback[data-kind="success"],
 .user-admin-feedback[data-kind="success"] {
   color: var(--accent-strong);
 }
 
 .account-feedback[data-kind="error"],
+.company-project-feedback[data-kind="error"],
 .user-admin-feedback[data-kind="error"] {
   color: var(--danger);
 }
@@ -983,6 +988,59 @@ textarea {
 .user-billing-events .account-event-item {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.48);
+}
+
+.company-project-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.company-project-item {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(29, 42, 34, 0.1);
+  border-radius: 14px;
+  background: rgba(251, 246, 238, 0.86);
+}
+
+.company-project-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.company-project-meta {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.company-project-meta strong {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.company-project-meta span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.company-project-actions {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(170px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding-top: 10px;
+  border-top: 1px solid rgba(29, 42, 34, 0.08);
+}
+
+.company-project-action-field {
+  margin: 0;
 }
 
 .admin-audit-section {
@@ -3734,12 +3792,17 @@ textarea {
   .account-layout,
   .account-billing-cards,
   .user-admin-layout,
+  .company-project-actions,
   .user-actions,
   .user-reset-password-form,
   .user-billing-adjust-form,
   .audit-filter-form,
   .project-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .company-project-head {
+    flex-direction: column;
   }
 
   .user-list-toolbar {
