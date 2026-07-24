@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SageWrite 控制台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260723-admin-audit">
+    <link rel="stylesheet" href="/styles.css?v=20260724-tenant-permissions">
   </head>
   <body>
     <div class="page-shell">
@@ -14,7 +14,7 @@
             <img src="/sagewrite-press-mark.svg?v=20260504-restore-brand" alt="SageWrite Press - Inspiring Ideas. Empowering Writers.">
           </div>
           <div class="hero-copy-block">
-            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.23-admin-audit</span></p>
+            <p class="eyebrow">SageWrite Engine <span class="version-badge">v2026.07.24-tenant-permissions</span></p>
             <h1>写作引擎 Web 控制台</h1>
             <p class="hero-copy">
               用浏览器驱动现有的 PowerShell 流程：初始化、生成目录、扩展小节、写章节、检查、构建、封面与上架。
@@ -257,11 +257,24 @@
                     <span>显示名称</span>
                     <input name="displayName" autocomplete="off" placeholder="例如 编辑一号">
                   </label>
+                  <label class="field" data-tenant-create-field>
+                    <span>公司 ID</span>
+                    <input name="tenantId" list="tenant-id-options" autocomplete="off" placeholder="例如 acme">
+                    <datalist id="tenant-id-options"></datalist>
+                  </label>
+                  <label class="field" data-tenant-create-field>
+                    <span>新公司名称</span>
+                    <input name="tenantName" autocomplete="off" placeholder="例如 Acme Publishing">
+                  </label>
                   <label class="field">
                     <span>角色</span>
                     <select name="role">
+                      <option value="tenant_admin">公司管理员</option>
+                      <option value="editor">编辑</option>
+                      <option value="author">作者</option>
+                      <option value="viewer">只读</option>
                       <option value="user">普通用户</option>
-                      <option value="admin">管理员</option>
+                      <option value="platform_admin">平台管理员</option>
                     </select>
                   </label>
                   <label class="field">
@@ -1670,6 +1683,6 @@
       </div>
     </div>
 
-    <script src="/app.js?v=20260723-admin-audit"></script>
+    <script src="/app.js?v=20260724-tenant-permissions"></script>
   </body>
 </html>

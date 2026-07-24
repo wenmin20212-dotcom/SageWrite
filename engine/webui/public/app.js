@@ -26,6 +26,9 @@ const state = {
   publishLastSavedAt: "",
   publishSelectedCategories: {},
   users: [],
+  tenants: [],
+  canManageTenants: false,
+  currentTenantId: "",
   userBillingEvents: {},
   userFilterNegative: false,
   userAdminError: "",
@@ -6304,8 +6307,62 @@ function renderWorkspaceSelection(item) {
   renderFrontmatterEditor(item);
 }
 
+function getRoleId(role) {
+  const normalized = String(role || "user").trim().toLowerCase();
+  if (normalized === "admin") {
+    return "platform_admin";
+  }
+  if (["platform_admin", "tenant_admin", "editor", "author", "viewer", "user"].includes(normalized)) {
+    return normalized;
+  }
+  return "user";
+}
+
+function isAdminUser(user) {
+  return ["platform_admin", "tenant_admin"].includes(user?.roleId || getRoleId(user?.role));
+}
+
 function getRoleLabel(role) {
-  return role === "admin" ? "管理员" : "普通用户";
+  return {
+    platform_admin: "平台管理员",
+    tenant_admin: "公司管理员",
+    editor: "编辑",
+    author: "作者",
+    viewer: "只读",
+    user: "普通用户"
+  }[getRoleId(role)] || "普通用户";
+}
+
+function getUserTenantLabel(user) {
+  const tenantName = user?.tenantName || "";
+  const tenantId = user?.tenantId || "";
+  if (tenantName && tenantId && tenantName !== tenantId) {
+    return `${tenantName}（${tenantId}）`;
+  }
+  return tenantName || tenantId || "-";
+}
+
+function getRoleOptions(selectedRole, { includePlatformAdmin = false } = {}) {
+  const selected = getRoleId(selectedRole);
+  const roles = [
+    ...(includePlatformAdmin ? [["platform_admin", "平台管理员"]] : []),
+    ["tenant_admin", "公司管理员"],
+    ["editor", "编辑"],
+    ["author", "作者"],
+    ["viewer", "只读"],
+    ["user", "普通用户"]
+  ];
+  return roles.map(([value, label]) =>
+    `<option value="${escapeHtml(value)}"${selected === value ? " selected" : ""}>${escapeHtml(label)}</option>`
+  ).join("");
+}
+
+function getTenantOptions(selectedTenantId = "") {
+  return (state.tenants || []).map((tenant) => {
+    const value = tenant.id || "";
+    const label = tenant.name && tenant.name !== value ? `${tenant.name}（${value}）` : value;
+    return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+  }).join("");
 }
 
 function getUserStatusLabel(user) {
@@ -6472,7 +6529,7 @@ function renderAccountPanel() {
   const list = $("#account-event-list");
 
   if (summary) {
-    summary.textContent = `${accountUser.username || accountUser.displayName || "当前用户"} · ${getRoleLabel(accountUser.role)}`;
+    summary.textContent = `${accountUser.username || accountUser.displayName || "当前用户"} · ${getRoleLabel(accountUser.roleId || accountUser.role)} · ${getUserTenantLabel(accountUser)}`;
   }
   if (note) {
     note.textContent = state.accountError || `每 ${formatTokenCount(billing.tokensPerCredit || state.billingConfig?.tokensPerCredit || 1000)} token 记 1 分，积分可为负。`;
@@ -6532,7 +6589,7 @@ function renderAdminAuditPanel() {
     return;
   }
   const isUserMode = state.authMode === "users";
-  const isAdmin = (state.currentUser || {}).role === "admin";
+  const isAdmin = isAdminUser(state.currentUser || {});
   section.hidden = !isUserMode || !isAdmin;
   if (section.hidden) {
     return;
@@ -6568,6 +6625,7 @@ function renderAdminAuditPanel() {
     const detail = [
       event.actorUsername ? `操作者：${event.actorUsername}` : "操作者：系统/未登录",
       event.targetUsername ? `目标用户：${event.targetUsername}` : "",
+      event.tenantId ? `公司：${event.tenantId}` : "",
       event.bookName ? `BookName：${event.bookName}` : "",
       event.route ? `流程：${event.route}` : "",
       event.jobId ? `Job：${event.jobId}` : "",
@@ -6609,7 +6667,7 @@ function renderUserAdminPanel() {
   }
 
   const currentUser = state.currentUser || {};
-  const isAdmin = currentUser.role === "admin";
+  const isAdmin = isAdminUser(currentUser);
   const summary = $("#user-admin-summary");
   const note = $("#user-admin-note");
   const list = $("#user-list");
@@ -6619,8 +6677,8 @@ function renderUserAdminPanel() {
 
   if (summary) {
     summary.textContent = isAdmin
-      ? `当前管理员：${currentUser.username || currentUser.displayName || ""}`
-      : `当前用户：${currentUser.username || currentUser.displayName || ""}`;
+      ? `当前管理员：${currentUser.username || currentUser.displayName || ""} · ${getUserTenantLabel(currentUser)}`
+      : `当前用户：${currentUser.username || currentUser.displayName || ""} · ${getUserTenantLabel(currentUser)}`;
   }
   if (form) {
     form.hidden = !isAdmin;
@@ -6631,6 +6689,26 @@ function renderUserAdminPanel() {
   if (filterNegative) {
     filterNegative.disabled = !isAdmin;
     filterNegative.checked = Boolean(state.userFilterNegative);
+  }
+  const tenantFields = document.querySelectorAll("[data-tenant-create-field]");
+  tenantFields.forEach((field) => {
+    field.hidden = !state.canManageTenants;
+    field.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !state.canManageTenants;
+    });
+  });
+  const createTenantDatalist = $("#tenant-id-options");
+  if (createTenantDatalist) {
+    createTenantDatalist.innerHTML = getTenantOptions();
+  }
+  const createTenantInput = document.querySelector('#create-user-form input[name="tenantId"]');
+  if (createTenantInput && !createTenantInput.dataset.touched && state.currentTenantId) {
+    createTenantInput.value = state.currentTenantId;
+  }
+  const createRoleSelect = document.querySelector('#create-user-form select[name="role"]');
+  if (createRoleSelect) {
+    const selectedRole = createRoleSelect.value || "tenant_admin";
+    createRoleSelect.innerHTML = getRoleOptions(selectedRole, { includePlatformAdmin: state.canManageTenants });
   }
 
   if (!isAdmin) {
@@ -6685,6 +6763,7 @@ function renderUserAdminPanel() {
       </div>
       <span>用户名：${escapeHtml(user.username || "")}</span>
       <span>用户 ID：${escapeHtml(user.id || "")}</span>
+      <span>公司：${escapeHtml(getUserTenantLabel(user))}</span>
       <span>创建时间：${escapeHtml(formatUserDate(user.createdAt))}</span>
       <span>更新时间：${escapeHtml(formatUserDate(user.updatedAt))}</span>
       <span>计费：${escapeHtml(formatUserBillingLine(user))}</span>
@@ -6693,8 +6772,7 @@ function renderUserAdminPanel() {
         <label class="field user-action-field">
           <span>角色</span>
           <select class="user-role-select" data-user-role>
-            <option value="user"${user.role === "admin" ? "" : " selected"}>普通用户</option>
-            <option value="admin"${user.role === "admin" ? " selected" : ""}>管理员</option>
+            ${getRoleOptions(user.roleId || user.role, { includePlatformAdmin: state.canManageTenants })}
           </select>
         </label>
         <button class="ghost-button user-update-role" type="button" data-user-id="${escapeHtml(userId)}">修改角色</button>
@@ -6729,6 +6807,9 @@ function renderUserAdminPanel() {
 async function refreshUsers({ quiet = false } = {}) {
   if (state.authMode !== "users") {
     state.users = [];
+    state.tenants = [];
+    state.canManageTenants = false;
+    state.currentTenantId = "";
     state.userAdminError = "";
     renderUserAdminPanel();
     return;
@@ -6737,6 +6818,9 @@ async function refreshUsers({ quiet = false } = {}) {
   try {
     const result = await api("/api/users");
     state.users = result?.users || [];
+    state.tenants = result?.tenants || [];
+    state.canManageTenants = Boolean(result?.canManageTenants);
+    state.currentTenantId = result?.currentTenantId || state.currentUser?.tenantId || "";
     state.userAdminError = "";
     renderUserAdminPanel();
     if (!quiet) {
@@ -6753,7 +6837,7 @@ async function refreshUsers({ quiet = false } = {}) {
 }
 
 async function refreshAudit({ quiet = false } = {}) {
-  const isAdmin = state.authMode === "users" && (state.currentUser || {}).role === "admin";
+  const isAdmin = state.authMode === "users" && isAdminUser(state.currentUser || {});
   if (!isAdmin) {
     state.auditEvents = [];
     state.auditError = "";
@@ -6854,7 +6938,9 @@ async function createUserFromForm(form) {
     displayName: String(data.displayName || "").trim(),
     role: String(data.role || "user"),
     password: String(data.password || ""),
-    initialCredits: Number(data.initialCredits || state.billingConfig?.defaultInitialCredits || 1000)
+    initialCredits: Number(data.initialCredits || state.billingConfig?.defaultInitialCredits || 1000),
+    tenantId: String(data.tenantId || state.currentTenantId || "").trim(),
+    tenantName: String(data.tenantName || "").trim()
   };
   const result = await api("/api/users", {
     method: "POST",
@@ -6865,6 +6951,11 @@ async function createUserFromForm(form) {
   if (initialCreditsField && state.billingConfig?.defaultInitialCredits !== undefined) {
     initialCreditsField.value = String(state.billingConfig.defaultInitialCredits);
     delete initialCreditsField.dataset.touched;
+  }
+  const tenantIdField = form.querySelector('input[name="tenantId"]');
+  if (tenantIdField) {
+    tenantIdField.value = state.currentTenantId || "";
+    delete tenantIdField.dataset.touched;
   }
   setUserAdminFeedback(`已创建用户：${result?.user?.username || payload.username}`, "success");
   await refreshUsers({ quiet: true });
@@ -7013,6 +7104,7 @@ async function refreshStatus() {
   state.appMode = status.appMode || "local";
   state.authMode = status.authMode || "off";
   state.currentUser = status.currentUser || null;
+  state.currentTenantId = status.currentUser?.tenantId || state.currentTenantId || "";
   state.billingConfig = status.billing || status.auth?.billing || null;
   $("#workspace-count").textContent = String(status.workspaces.length);
   const currentUserName = $("#current-user-name");
@@ -8483,6 +8575,10 @@ function setupForms() {
   });
 
   document.querySelector('#create-user-form input[name="initialCredits"]')?.addEventListener("input", (event) => {
+    event.currentTarget.dataset.touched = "true";
+  });
+
+  document.querySelector('#create-user-form input[name="tenantId"]')?.addEventListener("input", (event) => {
     event.currentTarget.dataset.touched = "true";
   });
 
