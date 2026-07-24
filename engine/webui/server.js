@@ -131,6 +131,60 @@ function getTenantIdFromUser(user) {
   return normalizeTenantId(user?.tenantId || DEFAULT_TENANT_ID);
 }
 
+function getRolePermissionsPublic(user) {
+  const role = getRoleId(user?.role);
+  const admin = role === "platform_admin" || role === "tenant_admin";
+  const editor = role === "editor" || role === "user";
+  const author = role === "author";
+  return {
+    role,
+    readProject: true,
+    manageTenants: role === "platform_admin",
+    manageUsers: admin,
+    viewAudit: admin,
+    adjustBilling: admin,
+    writeProject: admin || editor,
+    writeChapters: admin || editor || author,
+    runAll: admin || editor,
+    runAuthoring: admin || editor || author,
+    coverTools: admin || editor,
+    publishTools: admin || editor,
+    readOnly: role === "viewer"
+  };
+}
+
+function canWriteProject(user) {
+  const permissions = getRolePermissionsPublic(user);
+  return permissions.writeProject;
+}
+
+function canWriteChapters(user) {
+  const permissions = getRolePermissionsPublic(user);
+  return permissions.writeChapters;
+}
+
+function canUseCoverTools(user) {
+  const permissions = getRolePermissionsPublic(user);
+  return permissions.coverTools;
+}
+
+function canUsePublishTools(user) {
+  const permissions = getRolePermissionsPublic(user);
+  return permissions.publishTools;
+}
+
+function canRunRoute(user, route) {
+  const normalizedRoute = String(route || "").trim();
+  const permissions = getRolePermissionsPublic(user);
+  if (permissions.runAll) {
+    return true;
+  }
+  if (!permissions.runAuthoring) {
+    return false;
+  }
+  return new Set(["write", "translate", "refine-translation"]).has(normalizedRoute);
+}
+
 function hashPassword(password) {
   const salt = randomBytes(16).toString("hex");
   const hash = pbkdf2Sync(String(password), salt, PASSWORD_ITERATIONS, 32, "sha256").toString("hex");
@@ -325,6 +379,7 @@ function getUserPublic(user) {
     roleId: getRoleId(user.role),
     tenantId,
     tenantName: tenant?.name || user.tenantName || (tenantId === DEFAULT_TENANT_ID ? DEFAULT_TENANT_NAME : tenantId),
+    permissions: getRolePermissionsPublic(user),
     disabled: Boolean(user.disabled),
     status: user.disabled ? "disabled" : "active",
     createdAt: user.createdAt || "",
@@ -1080,6 +1135,148 @@ function requireAuth(req, res, url) {
     redirectToLogin(res);
   }
   return false;
+}
+
+function denyRoleAccess(req, res, action, details = {}) {
+  recordAuditEvent("permission.denied", {
+    req,
+    actor: getCurrentUserContext(),
+    status: "failed",
+    route: details.route || "",
+    bookName: details.bookName || "",
+    jobId: details.jobId || "",
+    message: details.message || `Permission denied for ${action}.`,
+    data: {
+      action,
+      pathname: details.pathname || "",
+      method: details.method || ""
+    }
+  });
+  sendJson(res, 403, { error: details.message || "当前角色没有权限执行这个操作。" });
+  return false;
+}
+
+function getRequiredProjectPermission(method, pathname) {
+  if (!isUserAuthEnabled() || method === "GET") {
+    return null;
+  }
+  if (pathname === "/api/account/password" || pathname === "/api/auth/logout") {
+    return null;
+  }
+  if (pathname === "/api/users" ||
+      pathname === "/api/admin/audit" ||
+      /^\/api\/users\/[^/]+(?:\/password|\/billing|\/billing-adjustment)?$/.test(pathname)) {
+    return null;
+  }
+  if (/^\/api\/jobs\/[^/]+\/cancel$/.test(pathname)) {
+    return "cancel_job";
+  }
+  if (pathname.startsWith("/api/run/")) {
+    return "run_route";
+  }
+
+  const readLikePostPaths = new Set([
+    "/api/open-output",
+    "/api/open-output-folder",
+    "/api/reveal-output",
+    "/api/open-publish-folder",
+    "/api/reveal-publish-file",
+    "/api/open-publish-file",
+    "/api/open-cover-folder",
+    "/api/reveal-cover-file"
+  ]);
+  if (readLikePostPaths.has(pathname)) {
+    return null;
+  }
+
+  if (pathname === "/api/chapter") {
+    return "write_chapters";
+  }
+
+  const projectWritePaths = new Set([
+    "/api/objective-md",
+    "/api/toc",
+    "/api/frontmatter"
+  ]);
+  if (projectWritePaths.has(pathname)) {
+    return "write_project";
+  }
+
+  const publishWritePaths = new Set([
+    "/api/publish-metadata",
+    "/api/amazon-description",
+    "/api/generate-kobo-account-md"
+  ]);
+  if (publishWritePaths.has(pathname)) {
+    return "publish_tools";
+  }
+
+  const coverWritePaths = new Set([
+    "/api/kdp-acceptance-existing-file",
+    "/api/kdp-acceptance",
+    "/api/kdp-acceptance-png",
+    "/api/kdp-llm-text-regions",
+    "/api/kdp-fix-report",
+    "/api/kdp-fix-workbench/prepare",
+    "/api/kdp-img-black/crop",
+    "/api/kdp-img-black/resize",
+    "/api/kdp-img-black/state",
+    "/api/kdp-img-black/fill",
+    "/api/kdp-img-black/composite",
+    "/api/kdp-img-black/png-to-pdf",
+    "/api/cover-midjourney-prompt",
+    "/api/cover-workbench-state",
+    "/api/cover-midjourney-prompt/save",
+    "/api/cover-base-image/import",
+    "/api/cover-copy"
+  ]);
+  if (coverWritePaths.has(pathname)) {
+    return "cover_tools";
+  }
+
+  if (method === "POST" || method === "PATCH" || method === "DELETE") {
+    return "write_project";
+  }
+  return null;
+}
+
+function authorizeProjectApiRequest(req, res, url) {
+  const required = getRequiredProjectPermission(req.method, url.pathname);
+  if (!required) {
+    return true;
+  }
+  const user = getCurrentUserContext();
+  if (required === "write_chapters" && canWriteChapters(user)) {
+    return true;
+  }
+  if (required === "write_project" && canWriteProject(user)) {
+    return true;
+  }
+  if (required === "cover_tools" && canUseCoverTools(user)) {
+    return true;
+  }
+  if (required === "publish_tools" && canUsePublishTools(user)) {
+    return true;
+  }
+  if (required === "run_route") {
+    const route = url.pathname.split("/").pop();
+    if (canRunRoute(user, route)) {
+      return true;
+    }
+    return denyRoleAccess(req, res, required, {
+      pathname: url.pathname,
+      method: req.method,
+      route,
+      message: `当前角色不能运行 ${route}。`
+    });
+  }
+  if (required === "cancel_job") {
+    return true;
+  }
+  return denyRoleAccess(req, res, required, {
+    pathname: url.pathname,
+    method: req.method
+  });
 }
 
 function isCloudMode() {
@@ -5300,6 +5497,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   requestContext.enterWith({ user: req.sagewriteUser || getCurrentUserContext() });
+  if (!authorizeProjectApiRequest(req, res, url)) {
+    return;
+  }
 
   if (req.method === "GET" && url.pathname === "/api/status") {
     const currentUser = getCurrentUserContext();
@@ -5448,7 +5648,7 @@ const server = http.createServer(async (req, res) => {
       });
       sendJson(res, 201, { user });
     } catch (error) {
-      sendJson(res, 400, { error: error.message });
+      sendJson(res, error.message === "Admin permission is required." ? 403 : 400, { error: error.message });
     }
     return;
   }
@@ -6268,6 +6468,17 @@ const server = http.createServer(async (req, res) => {
     const job = jobs.get(jobId);
     if (!job || !doesJobBelongToCurrentUser(job)) {
       sendJson(res, 404, { error: "Job not found." });
+      return;
+    }
+    if (!canRunRoute(getCurrentUserContext(), job.meta?.route || "")) {
+      denyRoleAccess(req, res, "cancel_job", {
+        pathname: url.pathname,
+        method: req.method,
+        route: job.meta?.route || "",
+        bookName: job.meta?.bookName || "",
+        jobId: job.id,
+        message: "当前角色不能停止这个任务。"
+      });
       return;
     }
 

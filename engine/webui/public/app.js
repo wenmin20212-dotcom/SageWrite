@@ -6305,6 +6305,7 @@ function renderWorkspaceSelection(item) {
   renderCoverPanel(item);
   renderCoverCopyEditor(item);
   renderFrontmatterEditor(item);
+  applyRolePermissions();
 }
 
 function getRoleId(role) {
@@ -6365,6 +6366,250 @@ function getTenantOptions(selectedTenantId = "") {
   }).join("");
 }
 
+function getRolePermissionsForUser(user) {
+  const role = getRoleId(user?.roleId || user?.role);
+  const admin = role === "platform_admin" || role === "tenant_admin";
+  const editor = role === "editor" || role === "user";
+  const author = role === "author";
+  return {
+    role,
+    readProject: true,
+    manageTenants: role === "platform_admin",
+    manageUsers: admin,
+    viewAudit: admin,
+    adjustBilling: admin,
+    writeProject: admin || editor,
+    writeChapters: admin || editor || author,
+    runAll: admin || editor,
+    runAuthoring: admin || editor || author,
+    coverTools: admin || editor,
+    publishTools: admin || editor,
+    readOnly: role === "viewer"
+  };
+}
+
+function getCurrentPermissions() {
+  if (state.authMode !== "users") {
+    return {
+      role: "local",
+      readProject: true,
+      manageTenants: true,
+      manageUsers: true,
+      viewAudit: true,
+      adjustBilling: true,
+      writeProject: true,
+      writeChapters: true,
+      runAll: true,
+      runAuthoring: true,
+      coverTools: true,
+      publishTools: true,
+      readOnly: false
+    };
+  }
+  return state.currentUser?.permissions || getRolePermissionsForUser(state.currentUser || {});
+}
+
+function canCurrentRunRoute(route) {
+  const permissions = getCurrentPermissions();
+  if (permissions.runAll) {
+    return true;
+  }
+  if (!permissions.runAuthoring) {
+    return false;
+  }
+  return new Set(["write", "translate", "refine-translation"]).has(String(route || "").trim());
+}
+
+function getPermissionSummary(user) {
+  const permissions = user?.permissions || getRolePermissionsForUser(user || {});
+  if (permissions.manageTenants) {
+    return "平台管理、公司管理、完整工作流";
+  }
+  if (permissions.manageUsers) {
+    return "公司用户管理、积分管理、完整工作流";
+  }
+  if (permissions.runAll) {
+    return "完整项目工作流";
+  }
+  if (permissions.writeChapters) {
+    return "章节写作、翻译与修饰";
+  }
+  return "只读查看";
+}
+
+function clearRoleManagedState() {
+  document.querySelectorAll("[data-role-disabled='true']").forEach((element) => {
+    element.disabled = false;
+    delete element.dataset.roleDisabled;
+    if (element.dataset.roleDisabledTitle === "true") {
+      element.removeAttribute("title");
+      delete element.dataset.roleDisabledTitle;
+    }
+  });
+  document.querySelectorAll("[data-role-readonly='true']").forEach((element) => {
+    element.readOnly = false;
+    delete element.dataset.roleReadonly;
+    if (element.dataset.roleReadonlyTitle === "true") {
+      element.removeAttribute("title");
+      delete element.dataset.roleReadonlyTitle;
+    }
+  });
+}
+
+function setRoleDisabled(selectors, disabled, title) {
+  selectors.forEach((selector) => {
+    document.querySelectorAll(selector).forEach((element) => {
+      if (!("disabled" in element)) {
+        return;
+      }
+      if (!disabled) {
+        return;
+      }
+      if (!element.disabled) {
+        element.disabled = true;
+        element.dataset.roleDisabled = "true";
+      }
+      if (!element.title && title) {
+        element.title = title;
+        element.dataset.roleDisabledTitle = "true";
+      }
+    });
+  });
+}
+
+function setRoleReadonly(selectors, readonly, title) {
+  selectors.forEach((selector) => {
+    document.querySelectorAll(selector).forEach((element) => {
+      if (!("readOnly" in element)) {
+        return;
+      }
+      if (!readonly) {
+        return;
+      }
+      if (!element.readOnly) {
+        element.readOnly = true;
+        element.dataset.roleReadonly = "true";
+      }
+      if (!element.title && title) {
+        element.title = title;
+        element.dataset.roleReadonlyTitle = "true";
+      }
+    });
+  });
+}
+
+function applyRolePermissions() {
+  clearRoleManagedState();
+
+  const permissions = getCurrentPermissions();
+  const projectWriteTitle = "当前角色不能修改项目设置。";
+  const chapterWriteTitle = "当前角色不能写入章节内容。";
+  const runAllTitle = "当前角色不能运行这个工作流。";
+  const coverTitle = "当前角色不能使用封面和修图工具。";
+  const publishTitle = "当前角色不能使用上架工具。";
+
+  if (!permissions.writeProject) {
+    setRoleDisabled([
+      "#intake-form input",
+      "#intake-form textarea",
+      "#intake-form select",
+      "#intake-form button",
+      "#save-objective-md",
+      "#save-toc",
+      "#save-frontmatter"
+    ], true, projectWriteTitle);
+    setRoleReadonly([
+      "#objective-md-editor",
+      "#toc-preview",
+      "#frontmatter-cover-page",
+      "#frontmatter-title-page",
+      "#frontmatter-copyright-page"
+    ], true, projectWriteTitle);
+  }
+
+  if (!permissions.writeChapters) {
+    setRoleDisabled([
+      "#write-form input",
+      "#write-form textarea",
+      "#write-form select",
+      "#write-form button",
+      "#save-chapter",
+      "#rewrite-current-chapter",
+      "#save-write-notes",
+      "#clear-write-notes"
+    ], true, chapterWriteTitle);
+    setRoleReadonly([
+      "#chapter-preview",
+      "#write-notes-editor"
+    ], true, chapterWriteTitle);
+  }
+
+  if (!permissions.runAuthoring) {
+    setRoleDisabled([
+      "#translate-form input",
+      "#translate-form select",
+      "#translate-form button",
+      "#refine-form input",
+      "#refine-form select",
+      "#refine-form button"
+    ], true, chapterWriteTitle);
+  }
+
+  if (!permissions.runAll) {
+    setRoleDisabled([
+      "#structure-form input",
+      "#structure-form select",
+      "#structure-form button",
+      "#expand-form input",
+      "#expand-form select",
+      "#expand-form button",
+      "#edit-form input",
+      "#edit-form select",
+      "#edit-form button",
+      "#build-form input",
+      "#build-form select",
+      "#build-form button",
+      "#build-simple-button",
+      "#build-simple-toc-button",
+      "#build-epub-button",
+      "#build-pdf-button",
+      "#build-print-pdf-button"
+    ], true, runAllTitle);
+  }
+
+  if (!permissions.coverTools) {
+    setRoleDisabled([
+      "#cover-form input",
+      "#cover-form select",
+      "#cover-form textarea",
+      "#cover-form button",
+      "#save-frontmatter"
+    ], true, coverTitle);
+    setRoleReadonly([
+      "#frontmatter-cover-page",
+      "#frontmatter-title-page",
+      "#frontmatter-copyright-page"
+    ], true, coverTitle);
+  }
+
+  if (!permissions.publishTools) {
+    setRoleDisabled([
+      "#publish-form input",
+      "#publish-form select",
+      "#publish-form button",
+      "#run-publish-amazon-details",
+      "#run-publish-amazon-content",
+      "#save-amazon-description",
+      "#save-publish-metadata",
+      "#generate-kobo-account-md"
+    ], true, publishTitle);
+    setRoleReadonly([
+      "#amazon-description-editor",
+      "#publish-metadata-editor"
+    ], true, publishTitle);
+  }
+}
+
 function getUserStatusLabel(user) {
   return user?.disabled ? "已禁用" : "可使用";
 }
@@ -6380,6 +6625,7 @@ function getAuditActionLabel(action) {
     "user.password.reset": "重置密码",
     "account.password.change": "自改密码",
     "billing.adjust": "积分调整",
+    "permission.denied": "权限拒绝",
     "job.start": "任务开始",
     "job.finish": "任务结束",
     "job.cancel": "任务取消"
@@ -6532,7 +6778,7 @@ function renderAccountPanel() {
     summary.textContent = `${accountUser.username || accountUser.displayName || "当前用户"} · ${getRoleLabel(accountUser.roleId || accountUser.role)} · ${getUserTenantLabel(accountUser)}`;
   }
   if (note) {
-    note.textContent = state.accountError || `每 ${formatTokenCount(billing.tokensPerCredit || state.billingConfig?.tokensPerCredit || 1000)} token 记 1 分，积分可为负。`;
+    note.textContent = state.accountError || `每 ${formatTokenCount(billing.tokensPerCredit || state.billingConfig?.tokensPerCredit || 1000)} token 记 1 分，积分可为负。权限：${getPermissionSummary(accountUser)}。`;
   }
   if (cards) {
     cards.innerHTML = [
@@ -7111,7 +7357,10 @@ async function refreshStatus() {
   const currentUserBilling = $("#current-user-billing");
   const currentUserWorkspace = $("#current-user-workspace");
   if (currentUserName) {
-    currentUserName.textContent = status.currentUser?.displayName || status.currentUser?.username || "单用户";
+    const displayUserName = status.currentUser?.displayName || status.currentUser?.username || "单用户";
+    currentUserName.textContent = status.currentUser
+      ? `${displayUserName} · ${getRoleLabel(status.currentUser.roleId || status.currentUser.role)}`
+      : displayUserName;
   }
   if (currentUserBilling) {
     currentUserBilling.textContent = status.currentUser?.billing
@@ -7132,6 +7381,7 @@ async function refreshStatus() {
   renderUserAdminPanel();
   setDefaultModelName(getDefaultModelName());
   renderWorkspaces(status.workspaces);
+  applyRolePermissions();
 }
 
 async function restoreActiveJob() {
@@ -7264,6 +7514,9 @@ async function pollJob(jobId, bookName = "") {
 }
 
 async function run(route, payload) {
+  if (!canCurrentRunRoute(route)) {
+    throw new Error(`当前角色不能运行 ${route}。`);
+  }
   setStatusBadge("提交中", "running");
   setLog("正在启动脚本，请稍候...");
   const result = await api(`/api/run/${route}`, {
