@@ -119,10 +119,21 @@ function canManageTenantUsers(user) {
   return ["platform_admin", "tenant_admin"].includes(getRoleId(user?.role));
 }
 
+function canManageAssignedAuthors(user) {
+  return getRoleId(user?.role) === "editor";
+}
+
+function canUseUserManagement(user) {
+  return canManageTenantUsers(user) || canManageAssignedAuthors(user);
+}
+
 function canAssignRole(actor, role) {
   const nextRole = getRoleId(role);
   if (isPlatformAdmin(actor)) {
     return true;
+  }
+  if (canManageAssignedAuthors(actor)) {
+    return nextRole === "author";
   }
   return ["tenant_admin", "editor", "author", "viewer", "user"].includes(nextRole);
 }
@@ -141,8 +152,10 @@ function getRolePermissionsPublic(user) {
     readProject: true,
     manageTenants: role === "platform_admin",
     manageUsers: admin,
+    manageAuthors: role === "editor",
     viewAudit: admin,
     adjustBilling: admin,
+    viewManagedAuthorBilling: admin || role === "editor",
     writeProject: admin || editor,
     writeChapters: admin || editor || author,
     runAll: admin || editor,
@@ -265,12 +278,27 @@ function normalizeUserStore(rawStore = {}) {
     return {
       ...user,
       tenantId,
-      role: user.role || "user"
+      role: user.role || "user",
+      managerUserId: String(user.managerUserId || "").trim()
     };
   });
 
+  const userById = new Map(users.map((user) => [String(user.id || ""), user]));
+  users.forEach((user) => {
+    if (getRoleId(user.role) !== "author" || !user.managerUserId) {
+      user.managerUserId = "";
+      return;
+    }
+    const manager = userById.get(String(user.managerUserId));
+    if (!manager ||
+        getRoleId(manager.role) !== "editor" ||
+        getTenantIdFromUser(manager) !== getTenantIdFromUser(user)) {
+      user.managerUserId = "";
+    }
+  });
+
   return {
-    version: rawStore.version || 2,
+    version: Math.max(Number(rawStore.version) || 2, 3),
     createdAt,
     updatedAt: rawStore.updatedAt || rawStore.createdAt || createdAt,
     tenants: Array.from(tenantMap.values()),
@@ -292,7 +320,7 @@ function writeUserStore(store) {
     ...store,
     updatedAt: new Date().toISOString()
   });
-  nextStore.version = 2;
+  nextStore.version = 3;
   fs.writeFileSync(USER_STORE_PATH, `${JSON.stringify(nextStore, null, 2)}\n`, "utf8");
   return nextStore;
 }
@@ -310,7 +338,7 @@ function ensureUserStore() {
   const now = new Date().toISOString();
   const adminUsername = normalizeUsername(ADMIN_USER);
   store = {
-    version: 2,
+    version: 3,
     createdAt: now,
     updatedAt: now,
     tenants: [createTenantRecord({
@@ -365,12 +393,33 @@ function getUserBillingPublic(user) {
   };
 }
 
+function getUserManagerPublic(user) {
+  const managerUserId = String(user?.managerUserId || "").trim();
+  if (!managerUserId) {
+    return {
+      managerUserId: "",
+      managerUsername: "",
+      managerDisplayName: "",
+      managerName: ""
+    };
+  }
+  const manager = findUserById(managerUserId);
+  const managerName = manager ? (manager.displayName || manager.username || manager.id || "") : "";
+  return {
+    managerUserId,
+    managerUsername: manager?.username || "",
+    managerDisplayName: manager?.displayName || "",
+    managerName
+  };
+}
+
 function getUserPublic(user) {
   if (!user) {
     return null;
   }
   const tenantId = getTenantIdFromUser(user);
   const tenant = isUserAuthEnabled() ? findTenantById(tenantId) : null;
+  const manager = getUserManagerPublic(user);
   return {
     id: user.id,
     username: user.username,
@@ -379,6 +428,7 @@ function getUserPublic(user) {
     roleId: getRoleId(user.role),
     tenantId,
     tenantName: tenant?.name || user.tenantName || (tenantId === DEFAULT_TENANT_ID ? DEFAULT_TENANT_NAME : tenantId),
+    ...manager,
     permissions: getRolePermissionsPublic(user),
     disabled: Boolean(user.disabled),
     status: user.disabled ? "disabled" : "active",
@@ -455,14 +505,63 @@ function canActorAccessTenant(actor, tenantId) {
   return normalizeTenantId(tenantId) === getTenantIdFromUser(actor);
 }
 
+function getAssignableEditorsForTenant(tenantId, store = ensureUserStore()) {
+  const normalizedTenantId = normalizeTenantId(tenantId || DEFAULT_TENANT_ID);
+  return (store?.users || []).filter((user) =>
+    getRoleId(user.role) === "editor" &&
+    !user.disabled &&
+    getTenantIdFromUser(user) === normalizedTenantId
+  );
+}
+
+function getAssignableEditorsForActor(actor, store = ensureUserStore()) {
+  if (!store || !actor) {
+    return [];
+  }
+  if (isPlatformAdmin(actor)) {
+    return (store.users || []).filter((user) => getRoleId(user.role) === "editor" && !user.disabled);
+  }
+  if (getRoleId(actor.role) === "tenant_admin") {
+    return getAssignableEditorsForTenant(getTenantIdFromUser(actor), store);
+  }
+  if (canManageAssignedAuthors(actor)) {
+    const actorRecord = findUserById(actor.id, store) || actor;
+    return actorRecord && getRoleId(actorRecord.role) === "editor" && !actorRecord.disabled
+      ? [actorRecord]
+      : [];
+  }
+  return [];
+}
+
+function normalizeAuthorManagerUserId(managerUserId, tenantId, store = ensureUserStore()) {
+  const cleanManagerUserId = String(managerUserId || "").trim();
+  if (!cleanManagerUserId) {
+    return "";
+  }
+  const manager = findUserById(cleanManagerUserId, store);
+  if (!manager ||
+      getRoleId(manager.role) !== "editor" ||
+      manager.disabled ||
+      getTenantIdFromUser(manager) !== normalizeTenantId(tenantId || DEFAULT_TENANT_ID)) {
+    throw new Error("Manager editor must be an active editor in the same tenant.");
+  }
+  return manager.id;
+}
+
 function canActorManageUser(actor, targetUser) {
-  if (!canManageTenantUsers(actor) || !targetUser) {
+  if (!targetUser) {
     return false;
   }
-  if (isPlatformAdmin(targetUser) && !isPlatformAdmin(actor)) {
-    return false;
+  if (canManageTenantUsers(actor)) {
+    if (isPlatformAdmin(targetUser) && !isPlatformAdmin(actor)) {
+      return false;
+    }
+    return canActorAccessTenant(actor, getTenantIdFromUser(targetUser));
   }
-  return canActorAccessTenant(actor, getTenantIdFromUser(targetUser));
+  return canManageAssignedAuthors(actor) &&
+    getRoleId(targetUser.role) === "author" &&
+    String(targetUser.managerUserId || "") === String(actor?.id || "") &&
+    getTenantIdFromUser(targetUser) === getTenantIdFromUser(actor);
 }
 
 function getVisibleUsersForActor(actor, store = ensureUserStore()) {
@@ -471,6 +570,13 @@ function getVisibleUsersForActor(actor, store = ensureUserStore()) {
   }
   if (isPlatformAdmin(actor)) {
     return store.users || [];
+  }
+  if (canManageAssignedAuthors(actor)) {
+    return (store.users || []).filter((user) =>
+      getTenantIdFromUser(user) === getTenantIdFromUser(actor) &&
+      getRoleId(user.role) === "author" &&
+      String(user.managerUserId || "") === String(actor?.id || "")
+    );
   }
   const tenantId = getTenantIdFromUser(actor);
   return (store.users || []).filter((user) => getTenantIdFromUser(user) === tenantId && !isPlatformAdmin(user));
@@ -495,25 +601,27 @@ function validateUsername(username) {
   return normalized;
 }
 
-function createUserAccount({ username, password, displayName = "", role = "user", initialCredits = DEFAULT_INITIAL_CREDITS, tenantId = "", tenantName = "", actor = null }) {
+function createUserAccount({ username, password, displayName = "", role = "user", initialCredits = DEFAULT_INITIAL_CREDITS, tenantId = "", tenantName = "", managerUserId = "", actor = null }) {
   const normalized = validateUsername(username);
   if (!password || String(password).length < 8) {
     throw new Error("password must be at least 8 characters.");
   }
   const currentActor = actor || getCurrentUserContext();
-  if (!canManageTenantUsers(currentActor)) {
-    throw new Error("Admin permission is required.");
+  if (!canUseUserManagement(currentActor)) {
+    throw new Error("User management permission is required.");
   }
-  const nextRole = getRoleId(role);
+  const nextRole = canManageAssignedAuthors(currentActor) ? "author" : getRoleId(role);
   if (!canAssignRole(currentActor, nextRole)) {
     throw new Error("You cannot assign that role.");
   }
-  const nextInitialCredits = roundBillingNumber(initialCredits);
+  const nextInitialCredits = canManageTenantUsers(currentActor)
+    ? roundBillingNumber(initialCredits)
+    : DEFAULT_INITIAL_CREDITS;
   if (nextInitialCredits < 0) {
     throw new Error("initialCredits cannot be negative.");
   }
   const store = ensureUserStore() || {
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     tenants: [],
     users: []
@@ -524,13 +632,18 @@ function createUserAccount({ username, password, displayName = "", role = "user"
   const targetTenantId = isPlatformAdmin(currentActor)
     ? normalizeTenantId(tenantId || tenantName || getTenantIdFromUser(currentActor))
     : getTenantIdFromUser(currentActor);
-  if (!isPlatformAdmin(currentActor) && tenantId && normalizeTenantId(tenantId) !== targetTenantId) {
-    throw new Error("Tenant admins can only create users in their own tenant.");
+  if (!isPlatformAdmin(currentActor) && !canManageAssignedAuthors(currentActor) && tenantId && normalizeTenantId(tenantId) !== targetTenantId) {
+    throw new Error("You can only create users in your own tenant.");
   }
   const targetTenant = ensureTenantInStore(store, {
     tenantId: targetTenantId,
     tenantName: isPlatformAdmin(currentActor) ? tenantName : ""
   });
+  const nextManagerUserId = nextRole === "author"
+    ? (canManageAssignedAuthors(currentActor)
+      ? currentActor.id
+      : normalizeAuthorManagerUserId(managerUserId, targetTenant.id, store))
+    : "";
   const now = new Date().toISOString();
   const user = {
     id: makeUserId(normalized),
@@ -538,6 +651,7 @@ function createUserAccount({ username, password, displayName = "", role = "user"
     displayName: String(displayName || username).trim() || normalized,
     role: nextRole,
     tenantId: targetTenant.id,
+    managerUserId: nextManagerUserId,
     disabled: false,
     billing: createInitialBillingRecord(nextInitialCredits),
     password: hashPassword(password),
@@ -573,11 +687,18 @@ function updateUserAccount(userId, updates = {}, actor = getCurrentUserContext()
     throw new Error("User not found.");
   }
 
+  const actorManagesAssignedAuthors = canManageAssignedAuthors(actor);
   const nextRole = Object.hasOwn(updates, "role")
     ? getRoleId(updates.role || "user")
     : (user.role || "user");
+  if (actorManagesAssignedAuthors && nextRole !== "author") {
+    throw new Error("Editors can only manage author accounts.");
+  }
   if (!canAssignRole(actor, nextRole)) {
     throw new Error("You cannot assign that role.");
+  }
+  if (actorManagesAssignedAuthors && (Object.hasOwn(updates, "tenantId") || Object.hasOwn(updates, "managerUserId"))) {
+    throw new Error("Editors cannot move authors between tenants or editors.");
   }
 
   const nextDisabled = Object.hasOwn(updates, "disabled")
@@ -586,15 +707,32 @@ function updateUserAccount(userId, updates = {}, actor = getCurrentUserContext()
 
   assertActiveAdminRemains(store, user, nextRole, nextDisabled);
 
-  user.role = nextRole;
-  user.disabled = nextDisabled;
+  let nextTenantId = getTenantIdFromUser(user);
   if (Object.hasOwn(updates, "tenantId") && isPlatformAdmin(actor)) {
     const nextTenant = ensureTenantInStore(store, {
       tenantId: updates.tenantId,
       tenantName: updates.tenantName || ""
     });
-    user.tenantId = nextTenant.id;
+    nextTenantId = nextTenant.id;
   }
+  const currentTenantId = getTenantIdFromUser(user);
+  const requestedManagerUserId = Object.hasOwn(updates, "managerUserId")
+    ? updates.managerUserId
+    : (nextTenantId === currentTenantId ? user.managerUserId : "");
+  const nextManagerUserId = nextRole === "author"
+    ? (actorManagesAssignedAuthors
+      ? actor.id
+      : normalizeAuthorManagerUserId(
+        requestedManagerUserId,
+        nextTenantId,
+        store
+      ))
+    : "";
+
+  user.role = nextRole;
+  user.disabled = nextDisabled;
+  user.tenantId = nextTenantId;
+  user.managerUserId = nextManagerUserId;
   user.updatedAt = new Date().toISOString();
   writeUserStore(store);
   return getUserPublic(user);
@@ -1022,6 +1160,18 @@ function assertCurrentUserIsAdmin() {
     throw new Error("Admin permission is required.");
   }
   return user;
+}
+
+function assertCurrentUserCanUseUserManagement() {
+  const user = getCurrentUserContext();
+  if (!user || !canUseUserManagement(user)) {
+    throw new Error("User management permission is required.");
+  }
+  return user;
+}
+
+function getPermissionErrorStatus(error, fallback = 400) {
+  return /permission is required/i.test(error?.message || "") ? 403 : fallback;
 }
 
 function parseCookies(req) {
@@ -5577,13 +5727,17 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      const adminUser = assertCurrentUserIsAdmin();
+      const managerUser = assertCurrentUserCanUseUserManagement();
       const store = ensureUserStore();
       sendJson(res, 200, {
-        users: getVisibleUsersForActor(adminUser, store).map(getUserPublic),
-        tenants: getVisibleTenantsForUser(adminUser, store),
-        canManageTenants: isPlatformAdmin(adminUser),
-        currentTenantId: getTenantIdFromUser(adminUser)
+        users: getVisibleUsersForActor(managerUser, store).map((user) => getUserPublic(user)),
+        tenants: getVisibleTenantsForUser(managerUser, store),
+        assignableEditors: getAssignableEditorsForActor(managerUser, store).map((user) => getUserPublic(user)),
+        canManageTenants: isPlatformAdmin(managerUser),
+        canManageUsers: canManageTenantUsers(managerUser),
+        canManageAuthors: canManageAssignedAuthors(managerUser),
+        canAdjustBilling: canManageTenantUsers(managerUser),
+        currentTenantId: getTenantIdFromUser(managerUser)
       });
     } catch (error) {
       sendJson(res, 403, { error: error.message });
@@ -5622,7 +5776,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      const adminUser = assertCurrentUserIsAdmin();
+      const managerUser = assertCurrentUserCanUseUserManagement();
       const body = await readJsonBody(req, 100_000);
       const user = createUserAccount({
         username: body.username,
@@ -5632,23 +5786,25 @@ const server = http.createServer(async (req, res) => {
         initialCredits: body.initialCredits,
         tenantId: body.tenantId,
         tenantName: body.tenantName,
-        actor: adminUser
+        managerUserId: body.managerUserId,
+        actor: managerUser
       });
       recordAuditEvent("user.create", {
         req,
-        actor: adminUser,
+        actor: managerUser,
         targetUser: user,
         status: "success",
         message: `Created user ${user.username}.`,
         data: {
           role: user.role,
           tenantId: user.tenantId || "",
+          managerUserId: user.managerUserId || "",
           initialCredits: user.billing?.initialCredits || 0
         }
       });
       sendJson(res, 201, { user });
     } catch (error) {
-      sendJson(res, error.message === "Admin permission is required." ? 403 : 400, { error: error.message });
+      sendJson(res, getPermissionErrorStatus(error), { error: error.message });
     }
     return;
   }
@@ -5660,10 +5816,10 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      const adminUser = assertCurrentUserIsAdmin();
+      const managerUser = assertCurrentUserCanUseUserManagement();
       const userId = decodeURIComponent(userBillingMatch[1]);
       const store = ensureUserStore();
-      const user = getManageableUserById(adminUser, userId, store);
+      const user = getManageableUserById(managerUser, userId, store);
       if (!user) {
         sendJson(res, 404, { error: "User not found." });
         return;
@@ -5675,7 +5831,7 @@ const server = http.createServer(async (req, res) => {
         events: getUserBillingEvents(user.id, limit)
       });
     } catch (error) {
-      sendJson(res, error.message === "Admin permission is required." ? 403 : 400, { error: error.message });
+      sendJson(res, getPermissionErrorStatus(error), { error: error.message });
     }
     return;
   }
@@ -5731,20 +5887,20 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      const adminUser = assertCurrentUserIsAdmin();
+      const managerUser = assertCurrentUserCanUseUserManagement();
       const body = await readJsonBody(req, 100_000);
-      const user = resetUserPassword(decodeURIComponent(userPasswordMatch[1]), body.password, adminUser);
+      const user = resetUserPassword(decodeURIComponent(userPasswordMatch[1]), body.password, managerUser);
       deleteSessionsForUser(user.id, parseCookies(req)[SESSION_COOKIE]);
       recordAuditEvent("user.password.reset", {
         req,
-        actor: adminUser,
+        actor: managerUser,
         targetUser: user,
         status: "success",
         message: `Reset password for ${user.username}.`
       });
       sendJson(res, 200, { user });
     } catch (error) {
-      sendJson(res, 400, { error: error.message });
+      sendJson(res, getPermissionErrorStatus(error), { error: error.message });
     }
     return;
   }
@@ -5756,7 +5912,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "User account mode is not enabled." });
         return;
       }
-      const adminUser = assertCurrentUserIsAdmin();
+      const managerUser = assertCurrentUserCanUseUserManagement();
       const body = await readJsonBody(req, 100_000);
       const updates = {};
       if (Object.hasOwn(body, "role")) {
@@ -5771,16 +5927,19 @@ const server = http.createServer(async (req, res) => {
         updates.tenantId = body.tenantId;
         updates.tenantName = body.tenantName;
       }
+      if (Object.hasOwn(body, "managerUserId")) {
+        updates.managerUserId = body.managerUserId;
+      }
       if (!Object.keys(updates).length) {
         throw new Error("No user updates were provided.");
       }
-      const user = updateUserAccount(decodeURIComponent(userAccountMatch[1]), updates, adminUser);
+      const user = updateUserAccount(decodeURIComponent(userAccountMatch[1]), updates, managerUser);
       if (user.disabled) {
         deleteSessionsForUser(user.id);
       }
       recordAuditEvent("user.update", {
         req,
-        actor: adminUser,
+        actor: managerUser,
         targetUser: user,
         status: "success",
         message: `Updated user ${user.username}.`,
@@ -5788,7 +5947,7 @@ const server = http.createServer(async (req, res) => {
       });
       sendJson(res, 200, { user });
     } catch (error) {
-      sendJson(res, 400, { error: error.message });
+      sendJson(res, getPermissionErrorStatus(error), { error: error.message });
     }
     return;
   }

@@ -27,7 +27,11 @@ const state = {
   publishSelectedCategories: {},
   users: [],
   tenants: [],
+  assignableEditors: [],
   canManageTenants: false,
+  canManageUsers: false,
+  canManageAuthors: false,
+  canAdjustBilling: false,
   currentTenantId: "",
   userBillingEvents: {},
   userFilterNegative: false,
@@ -6323,6 +6327,11 @@ function isAdminUser(user) {
   return ["platform_admin", "tenant_admin"].includes(user?.roleId || getRoleId(user?.role));
 }
 
+function canUseUserManagementPanel(user = state.currentUser || {}) {
+  const permissions = user?.permissions || getRolePermissionsForUser(user || {});
+  return Boolean(permissions.manageUsers || permissions.manageAuthors);
+}
+
 function getRoleLabel(role) {
   return {
     platform_admin: "平台管理员",
@@ -6343,8 +6352,11 @@ function getUserTenantLabel(user) {
   return tenantName || tenantId || "-";
 }
 
-function getRoleOptions(selectedRole, { includePlatformAdmin = false } = {}) {
+function getRoleOptions(selectedRole, { includePlatformAdmin = false, editorAuthorOnly = false } = {}) {
   const selected = getRoleId(selectedRole);
+  if (editorAuthorOnly) {
+    return `<option value="author"${selected === "author" ? " selected" : ""}>${escapeHtml(getRoleLabel("author"))}</option>`;
+  }
   const roles = [
     ...(includePlatformAdmin ? [["platform_admin", "平台管理员"]] : []),
     ["tenant_admin", "公司管理员"],
@@ -6356,6 +6368,47 @@ function getRoleOptions(selectedRole, { includePlatformAdmin = false } = {}) {
   return roles.map(([value, label]) =>
     `<option value="${escapeHtml(value)}"${selected === value ? " selected" : ""}>${escapeHtml(label)}</option>`
   ).join("");
+}
+
+function getAssignableEditorOptions(selectedManagerUserId = "", { includeEmpty = true } = {}) {
+  const selected = String(selectedManagerUserId || "");
+  const options = (state.assignableEditors || []).map((editor) => {
+    const label = `${editor.displayName || editor.username || editor.id} (${editor.username || editor.id})`;
+    return `<option value="${escapeHtml(editor.id || "")}"${selected === editor.id ? " selected" : ""}>${escapeHtml(label)}</option>`;
+  });
+  return [
+    ...(includeEmpty ? ['<option value="">未分配</option>'] : []),
+    ...options
+  ].join("");
+}
+
+function getUserManagerLabel(user) {
+  if (user?.managerName || user?.managerUsername || user?.managerUserId) {
+    return user.managerName || user.managerUsername || user.managerUserId;
+  }
+  return getRoleId(user?.role) === "author" ? "未分配" : "-";
+}
+
+function syncCreateUserManagementFields() {
+  const permissions = getCurrentPermissions();
+  const canManageUsers = Boolean(permissions.manageUsers);
+  const canManageAuthorsOnly = Boolean(permissions.manageAuthors && !permissions.manageUsers);
+  const roleSelect = document.querySelector('#create-user-form select[name="role"]');
+  const selectedRole = getRoleId(roleSelect?.value || (canManageAuthorsOnly ? "author" : ""));
+
+  document.querySelectorAll("[data-manager-create-field]").forEach((field) => {
+    const show = canManageUsers && selectedRole === "author";
+    field.hidden = !show;
+    field.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !show;
+    });
+  });
+  document.querySelectorAll("[data-billing-create-field]").forEach((field) => {
+    field.hidden = !canManageUsers;
+    field.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !canManageUsers;
+    });
+  });
 }
 
 function getTenantOptions(selectedTenantId = "") {
@@ -6376,8 +6429,10 @@ function getRolePermissionsForUser(user) {
     readProject: true,
     manageTenants: role === "platform_admin",
     manageUsers: admin,
+    manageAuthors: role === "editor",
     viewAudit: admin,
     adjustBilling: admin,
+    viewManagedAuthorBilling: admin || role === "editor",
     writeProject: admin || editor,
     writeChapters: admin || editor || author,
     runAll: admin || editor,
@@ -6395,8 +6450,10 @@ function getCurrentPermissions() {
       readProject: true,
       manageTenants: true,
       manageUsers: true,
+      manageAuthors: false,
       viewAudit: true,
       adjustBilling: true,
+      viewManagedAuthorBilling: true,
       writeProject: true,
       writeChapters: true,
       runAll: true,
@@ -6427,6 +6484,9 @@ function getPermissionSummary(user) {
   }
   if (permissions.manageUsers) {
     return "公司用户管理、积分管理、完整工作流";
+  }
+  if (permissions.manageAuthors) {
+    return "管理自己作者、完整项目工作流";
   }
   if (permissions.runAll) {
     return "完整项目工作流";
@@ -6913,7 +6973,11 @@ function renderUserAdminPanel() {
   }
 
   const currentUser = state.currentUser || {};
-  const isAdmin = isAdminUser(currentUser);
+  const permissions = getCurrentPermissions();
+  const canManagePanel = canUseUserManagementPanel(currentUser);
+  const canManageUsers = Boolean(permissions.manageUsers);
+  const canManageAuthors = Boolean(permissions.manageAuthors);
+  const canAdjustBilling = Boolean(permissions.adjustBilling || state.canAdjustBilling);
   const summary = $("#user-admin-summary");
   const note = $("#user-admin-note");
   const list = $("#user-list");
@@ -6921,19 +6985,39 @@ function renderUserAdminPanel() {
   const refreshButton = $("#refresh-users");
   const filterNegative = $("#filter-negative-users");
 
+  if (navItem) {
+    navItem.hidden = !canManagePanel;
+    const navTitle = navItem.querySelector("strong");
+    if (navTitle) {
+      navTitle.textContent = canManageAuthors && !canManageUsers ? "作者管理" : "用户/审计";
+    }
+  }
+  panel.hidden = !canManagePanel;
+  syncCreateUserManagementFields();
+
+  if (!canManagePanel) {
+    renderAdminAuditPanel();
+    return;
+  }
+
+  const panelHeading = panel.querySelector(".panel-header h2");
+  if (panelHeading) {
+    panelHeading.textContent = canManageAuthors && !canManageUsers ? "作者管理" : "用户管理";
+  }
+
   if (summary) {
-    summary.textContent = isAdmin
+    summary.textContent = canManageUsers
       ? `当前管理员：${currentUser.username || currentUser.displayName || ""} · ${getUserTenantLabel(currentUser)}`
-      : `当前用户：${currentUser.username || currentUser.displayName || ""} · ${getUserTenantLabel(currentUser)}`;
+      : `当前编辑：${currentUser.username || currentUser.displayName || ""} · ${getUserTenantLabel(currentUser)}`;
   }
   if (form) {
-    form.hidden = !isAdmin;
+    form.hidden = !canManagePanel;
   }
   if (refreshButton) {
-    refreshButton.disabled = !isAdmin;
+    refreshButton.disabled = !canManagePanel;
   }
   if (filterNegative) {
-    filterNegative.disabled = !isAdmin;
+    filterNegative.disabled = !canManagePanel;
     filterNegative.checked = Boolean(state.userFilterNegative);
   }
   const tenantFields = document.querySelectorAll("[data-tenant-create-field]");
@@ -6953,26 +7037,40 @@ function renderUserAdminPanel() {
   }
   const createRoleSelect = document.querySelector('#create-user-form select[name="role"]');
   if (createRoleSelect) {
-    const selectedRole = createRoleSelect.value || "tenant_admin";
-    createRoleSelect.innerHTML = getRoleOptions(selectedRole, { includePlatformAdmin: state.canManageTenants });
+    const selectedRole = createRoleSelect.value || (canManageAuthors ? "author" : "tenant_admin");
+    createRoleSelect.innerHTML = getRoleOptions(selectedRole, {
+      includePlatformAdmin: state.canManageTenants,
+      editorAuthorOnly: canManageAuthors && !canManageUsers
+    });
+    createRoleSelect.disabled = canManageAuthors && !canManageUsers;
   }
+  const managerFields = document.querySelectorAll("[data-manager-create-field]");
+  managerFields.forEach((field) => {
+    field.hidden = !canManageUsers;
+    field.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !canManageUsers;
+    });
+  });
+  const createManagerSelect = document.querySelector('#create-user-form select[name="managerUserId"]');
+  if (createManagerSelect) {
+    createManagerSelect.innerHTML = getAssignableEditorOptions(createManagerSelect.value || "");
+  }
+  const billingCreateFields = document.querySelectorAll("[data-billing-create-field]");
+  billingCreateFields.forEach((field) => {
+    field.hidden = !canManageUsers;
+    field.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !canManageUsers;
+    });
+  });
 
-  if (!isAdmin) {
-    if (note) {
-      note.textContent = "当前账号不是管理员，不能管理用户。";
-    }
-    if (list) {
-      list.innerHTML = "";
-    }
-    setUserAdminFeedback("");
-    renderAdminAuditPanel();
-    return;
-  }
+  syncCreateUserManagementFields();
 
   const negativeUsers = state.users.filter((user) => Number(user?.billing?.balanceCredits) < 0);
   const visibleUsers = state.userFilterNegative ? negativeUsers : state.users;
   if (note) {
-    note.textContent = state.userAdminError || `用户库已加载：${state.users.length} 个用户，负余额 ${negativeUsers.length} 个。`;
+    note.textContent = state.userAdminError || (canManageAuthors && !canManageUsers
+      ? `我的作者已加载：${state.users.length} 个作者，负余额 ${negativeUsers.length} 个。`
+      : `用户库已加载：${state.users.length} 个用户，负余额 ${negativeUsers.length} 个。`);
   }
   if (!list) {
     renderAdminAuditPanel();
@@ -7010,18 +7108,26 @@ function renderUserAdminPanel() {
       <span>用户名：${escapeHtml(user.username || "")}</span>
       <span>用户 ID：${escapeHtml(user.id || "")}</span>
       <span>公司：${escapeHtml(getUserTenantLabel(user))}</span>
+      <span>负责编辑：${escapeHtml(getUserManagerLabel(user))}</span>
       <span>创建时间：${escapeHtml(formatUserDate(user.createdAt))}</span>
       <span>更新时间：${escapeHtml(formatUserDate(user.updatedAt))}</span>
       <span>计费：${escapeHtml(formatUserBillingLine(user))}</span>
       <span>工作区：${escapeHtml(user.workspaceRoot || "")}</span>
       <div class="user-actions">
-        <label class="field user-action-field">
+        ${canManageUsers ? `<label class="field user-action-field">
           <span>角色</span>
           <select class="user-role-select" data-user-role>
             ${getRoleOptions(user.roleId || user.role, { includePlatformAdmin: state.canManageTenants })}
           </select>
         </label>
-        <button class="ghost-button user-update-role" type="button" data-user-id="${escapeHtml(userId)}">修改角色</button>
+        <button class="ghost-button user-update-role" type="button" data-user-id="${escapeHtml(userId)}">修改角色</button>` : ""}
+        ${canManageUsers && getRoleId(user.roleId || user.role) === "author" ? `<label class="field user-action-field">
+          <span>负责编辑</span>
+          <select class="user-manager-select" data-user-manager>
+            ${getAssignableEditorOptions(user.managerUserId || "")}
+          </select>
+        </label>
+        <button class="ghost-button user-update-manager" type="button" data-user-id="${escapeHtml(userId)}">分配编辑</button>` : ""}
         <button class="ghost-button user-toggle-disabled" type="button" data-user-id="${escapeHtml(userId)}" data-disabled="${disabled ? "false" : "true"}">${disabled ? "启用用户" : "禁用用户"}</button>
       </div>
       <form class="user-reset-password-form" data-user-id="${escapeHtml(userId)}">
@@ -7031,7 +7137,7 @@ function renderUserAdminPanel() {
         </label>
         <button class="ghost-button" type="submit">重置密码</button>
       </form>
-      <form class="user-billing-adjust-form" data-user-id="${escapeHtml(userId)}">
+      ${canAdjustBilling ? `<form class="user-billing-adjust-form" data-user-id="${escapeHtml(userId)}">
         <label class="field user-credit-field">
           <span>积分调整</span>
           <input name="creditDelta" type="number" step="0.001" placeholder="+100 或 -25" required>
@@ -7042,7 +7148,9 @@ function renderUserAdminPanel() {
         </label>
         <button class="ghost-button" type="submit">保存积分调整</button>
         <button class="ghost-button user-view-billing" type="button" data-user-id="${escapeHtml(userId)}">查看流水</button>
-      </form>
+      </form>` : `<div class="user-billing-view-actions">
+        <button class="ghost-button user-view-billing" type="button" data-user-id="${escapeHtml(userId)}">查看流水</button>
+      </div>`}
       ${renderAdminUserBillingEvents(userId)}
     </div>
   `;
@@ -7054,7 +7162,11 @@ async function refreshUsers({ quiet = false } = {}) {
   if (state.authMode !== "users") {
     state.users = [];
     state.tenants = [];
+    state.assignableEditors = [];
     state.canManageTenants = false;
+    state.canManageUsers = false;
+    state.canManageAuthors = false;
+    state.canAdjustBilling = false;
     state.currentTenantId = "";
     state.userAdminError = "";
     renderUserAdminPanel();
@@ -7065,7 +7177,11 @@ async function refreshUsers({ quiet = false } = {}) {
     const result = await api("/api/users");
     state.users = result?.users || [];
     state.tenants = result?.tenants || [];
+    state.assignableEditors = result?.assignableEditors || [];
     state.canManageTenants = Boolean(result?.canManageTenants);
+    state.canManageUsers = Boolean(result?.canManageUsers);
+    state.canManageAuthors = Boolean(result?.canManageAuthors);
+    state.canAdjustBilling = Boolean(result?.canAdjustBilling);
     state.currentTenantId = result?.currentTenantId || state.currentUser?.tenantId || "";
     state.userAdminError = "";
     renderUserAdminPanel();
@@ -7074,6 +7190,10 @@ async function refreshUsers({ quiet = false } = {}) {
     }
   } catch (error) {
     state.users = [];
+    state.assignableEditors = [];
+    state.canManageUsers = false;
+    state.canManageAuthors = false;
+    state.canAdjustBilling = false;
     state.userAdminError = error.message || "用户列表读取失败。";
     renderUserAdminPanel();
     if (!quiet) {
@@ -7179,15 +7299,25 @@ async function changeOwnPasswordFromForm(form) {
 
 async function createUserFromForm(form) {
   const data = formToObject(form);
+  const permissions = getCurrentPermissions();
+  const canManageAuthorsOnly = Boolean(permissions.manageAuthors && !permissions.manageUsers);
   const payload = {
     username: String(data.username || "").trim(),
     displayName: String(data.displayName || "").trim(),
-    role: String(data.role || "user"),
+    role: String(data.role || (canManageAuthorsOnly ? "author" : "user")),
     password: String(data.password || ""),
     initialCredits: Number(data.initialCredits || state.billingConfig?.defaultInitialCredits || 1000),
     tenantId: String(data.tenantId || state.currentTenantId || "").trim(),
-    tenantName: String(data.tenantName || "").trim()
+    tenantName: String(data.tenantName || "").trim(),
+    managerUserId: String(data.managerUserId || "").trim()
   };
+  if (canManageAuthorsOnly) {
+    payload.role = "author";
+    payload.initialCredits = Number(state.billingConfig?.defaultInitialCredits || 1000);
+    payload.tenantId = state.currentTenantId || "";
+    payload.tenantName = "";
+    payload.managerUserId = "";
+  }
   const result = await api("/api/users", {
     method: "POST",
     body: JSON.stringify(payload)
@@ -7202,6 +7332,10 @@ async function createUserFromForm(form) {
   if (tenantIdField) {
     tenantIdField.value = state.currentTenantId || "";
     delete tenantIdField.dataset.touched;
+  }
+  const managerField = form.querySelector('select[name="managerUserId"]');
+  if (managerField) {
+    managerField.value = "";
   }
   setUserAdminFeedback(`已创建用户：${result?.user?.username || payload.username}`, "success");
   await refreshUsers({ quiet: true });
@@ -8835,6 +8969,10 @@ function setupForms() {
     event.currentTarget.dataset.touched = "true";
   });
 
+  document.querySelector('#create-user-form select[name="role"]')?.addEventListener("change", () => {
+    syncCreateUserManagementFields();
+  });
+
   $("#filter-negative-users")?.addEventListener("change", (event) => {
     state.userFilterNegative = Boolean(event.currentTarget.checked);
     renderUserAdminPanel();
@@ -8844,7 +8982,8 @@ function setupForms() {
     const roleButton = event.target.closest(".user-update-role");
     const toggleButton = event.target.closest(".user-toggle-disabled");
     const billingButton = event.target.closest(".user-view-billing");
-    if (!roleButton && !toggleButton && !billingButton) {
+    const managerButton = event.target.closest(".user-update-manager");
+    if (!roleButton && !toggleButton && !billingButton && !managerButton) {
       return;
     }
 
@@ -8862,6 +9001,19 @@ function setupForms() {
         const userId = roleButton.dataset.userId || "";
         await updateUserFromPanel(userId, { role }, `已修改角色：${getRoleLabel(role)}`);
         setStatusBadge("角色已修改", "success");
+        return;
+      }
+
+      if (managerButton) {
+        const item = managerButton.closest(".user-item");
+        const managerUserId = item?.querySelector("[data-user-manager]")?.value || "";
+        const userId = managerButton.dataset.userId || "";
+        const manager = (state.assignableEditors || []).find((editor) => editor.id === managerUserId);
+        const managerName = managerUserId
+          ? (manager?.displayName || manager?.username || managerUserId)
+          : "未分配";
+        await updateUserFromPanel(userId, { managerUserId }, `已分配负责编辑：${managerName}`);
+        setStatusBadge("负责编辑已更新", "success");
         return;
       }
 
