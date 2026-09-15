@@ -1,7 +1,8 @@
 ﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
-    [switch]$Strict
+    [switch]$Strict,
+    [switch]$NormalizeSubheadings
 )
 
 $ErrorActionPreference = "Stop"
@@ -134,6 +135,9 @@ function Get-LocalizedCheckName {
         "12. Token-limit truncation check" { return "12. $(Get-LocText 'check12')" }
         "13. TODO marker check" { return "13. $(Get-LocText 'check13')" }
         "14. Whole-document fenced markdown check" { return "14. æ•´ç«  Markdown ä»£ç å—åŒ…è£¹æ£€æŸ¥" }
+        "15. TOC chapter structure check" { return "15. 目录大章结构检查" }
+        "16. Chapter-to-TOC mapping check" { return "16. 正文小节与目录大章映射检查" }
+        "17. Subheading numbering normalization" { return "17. 小标题编号规范化" }
         default { return $Name }
     }
 }
@@ -233,6 +237,27 @@ function Get-LocalizedCheckDetail {
     if ($Detail -eq "No chapters were wrapped in whole-document markdown fences.") {
         return "未发现整章被 Markdown 代码块整体包裹的章节。"
     }
+    if ($Detail -match '^TOC chapter structure found:\s+(\d+)\s+chapter\(s\),\s+(\d+)\s+section\(s\)\.$') {
+        return "已在 toc.md 中检测到 $($Matches[1]) 个大章、$($Matches[2]) 个写作小节。"
+    }
+    if ($Detail -eq "TOC file is missing; chapter headings will not be injected during build.") {
+        return "未找到 toc.md，05 合并时无法自动补入大章标题。"
+    }
+    if ($Detail -eq "No TOC parent chapter structure was found.") {
+        return "toc.md 中未检测到可用于成书的大章与小节映射结构。"
+    }
+    if ($Detail -eq "All buildable chapter files are mapped to TOC parent chapters.") {
+        return "所有可构建正文文件都能映射到 toc.md 中的所属大章。"
+    }
+    if ($Detail -match '^Chapter files not mapped to TOC parent chapters:\s+(.+)$') {
+        return "以下正文文件无法映射到 toc.md 中的所属大章：$($Matches[1])"
+    }
+    if ($Detail -match '^Normalized subheading numbering in\s+(\d+)\s+file\(s\),\s+(\d+)\s+heading\(s\)\.\s+Backed up\s+(\d+)\s+file\(s\)\s+to:\s+(.+)$') {
+        return "已规范 $($Matches[1]) 个文件中的 $($Matches[2]) 个小标题编号；已备份 $($Matches[3]) 个原始文件到：$($Matches[4])"
+    }
+    if ($Detail -match '^No subheading numbering changes were needed\.\s+Backup:\s+(.+)$') {
+        return "未发现需要调整的小标题编号；备份位置：$($Matches[1])"
+    }
 
     return $Detail
 }
@@ -258,6 +283,11 @@ function Get-LocalizedIssueMessage {
         "Chapter output tokens reached max_tokens and may be truncated." { return (Get-LocText 'issue_token_hit') }
         "Found TODO marker." { return (Get-LocText 'issue_todo') }
         "Chapter body is wrapped in a whole-document markdown code fence." { return "章节正文被整章 Markdown 代码块包裹，标题可能无法进入目录。" }
+        "TOC file is missing; 05-build.ps1 cannot inject parent chapter headings." { return "未找到 toc.md，05 无法自动补入第1章、第2章这类大章标题。" }
+        "No parent chapter structure found in toc.md." { return "toc.md 中没有检测到 `##` 大章与 `###` 小节的映射结构。" }
+        "Chapter file heading is missing; cannot map it to TOC." { return "正文文件缺少 Markdown 标题，无法映射到 toc.md 的所属大章。" }
+        "Chapter file heading is not mapped to a parent chapter in toc.md." { return "正文文件的小节标题没有映射到 toc.md 的所属大章。" }
+        "Subheading found before a numbered section heading during normalization." { return "规范小标题编号时，发现有小标题出现在编号小节标题之前。" }
         default { return $Message }
     }
 }
@@ -265,11 +295,13 @@ $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $B
 Initialize-SageObservability -Context $Context
 Set-SageCurrentStep -Context $Context -Step "edit" -Data @{
     strict = [bool]$Strict
+    normalize_subheadings = [bool]$NormalizeSubheadings
 }
 
 $WorkspaceRoot = $Context.WorkspaceRoot
 $BookRoot = $Context.BookRoot
 $ChapterRoot = Join-Path $BookRoot "02_chapters"
+$TocPath = Join-Path $BookRoot "01_outline\toc.md"
 $OutputRoot = Join-Path $BookRoot "04_output"
 $LogRoot = $Context.LogRoot
 
@@ -359,6 +391,90 @@ function Get-FrontMatterValue {
     return $ValueMatch.Groups[1].Value.Trim().Trim('"')
 }
 
+function Get-BookStructureFromToc {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
+    $SectionToChapter = @{}
+    $ChapterCount = 0
+    $SectionCount = 0
+    $CurrentChapter = $null
+
+    if (!(Test-Path $Path)) {
+        return [PSCustomObject]@{
+            Available = $false
+            SectionToChapter = $SectionToChapter
+            ChapterCount = 0
+            SectionCount = 0
+        }
+    }
+
+    foreach ($Line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -match '^##\s+(.+?)\s*$') {
+            $CurrentChapter = $Matches[1].Trim()
+            $ChapterCount++
+            continue
+        }
+
+        if ($Trimmed -match '^###\s+(.+?)\s*$' -and -not [string]::IsNullOrWhiteSpace($CurrentChapter)) {
+            $SectionTitle = $Matches[1].Trim()
+            $SectionToChapter[$SectionTitle] = $CurrentChapter
+            if ($SectionTitle -match '^(\d+(?:\.\d+)*)\b') {
+                $SectionToChapter[$Matches[1]] = $CurrentChapter
+            }
+            $SectionCount++
+        }
+    }
+
+    return [PSCustomObject]@{
+        Available = $true
+        SectionToChapter = $SectionToChapter
+        ChapterCount = $ChapterCount
+        SectionCount = $SectionCount
+    }
+}
+
+function Get-FirstMarkdownHeadingTitle {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $Match = [regex]::Match($Content, '(?m)^\s*#{1,6}\s+(.+?)\s*$')
+    if ($Match.Success) {
+        return $Match.Groups[1].Value.Trim()
+    }
+
+    return $null
+}
+
+function Test-HeadingMappedToToc {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$HeadingTitle,
+
+        [Parameter(Mandatory=$true)]
+        [object]$BookStructure
+    )
+
+    if (-not $BookStructure.Available -or $BookStructure.SectionCount -le 0) {
+        return $false
+    }
+
+    if ($BookStructure.SectionToChapter.ContainsKey($HeadingTitle)) {
+        return $true
+    }
+
+    if ($HeadingTitle -match '^(\d+(?:\.\d+)*)\b' -and $BookStructure.SectionToChapter.ContainsKey($Matches[1])) {
+        return $true
+    }
+
+    return $false
+}
+
 function Test-WholeDocumentMarkdownFence {
     param(
         [Parameter(Mandatory=$true)]
@@ -367,6 +483,103 @@ function Test-WholeDocumentMarkdownFence {
 
     $Normalized = $Content -replace "`r", ""
     return [regex]::IsMatch($Normalized.Trim(), '^(?:```markdown|```md|```)\s*\n[\s\S]*\n```$')
+}
+
+function Remove-ExistingSubheadingNumbering {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Title
+    )
+
+    $Clean = $Title.Trim()
+    $Patterns = @(
+        '^\d+(?:\.\d+){2,}[、.．:：]?\s*',
+        '^\d+\.\d+[、.．:：]\s*',
+        '^\d+[、.．]\s*',
+        '^[一二三四五六七八九十百千万]+[、.．]\s*',
+        '^[（(][一二三四五六七八九十百千万]+[）)]\s*',
+        '^[（(]\d+[）)]\s*',
+        '^第[一二三四五六七八九十百千万\d]+[节部分点、.．:：]?\s*'
+    )
+
+    foreach ($Pattern in $Patterns) {
+        $Clean = [regex]::Replace($Clean, $Pattern, "")
+    }
+
+    return $Clean.Trim()
+}
+
+function Convert-SubheadingNumbering {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $LineBreak = if ($Content.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $Normalized = $Content -replace "`r`n", "`n"
+    $Normalized = $Normalized -replace "`r", "`n"
+    $Lines = [regex]::Split($Normalized, "`n")
+
+    $CurrentSectionNumber = $null
+    $SubheadingIndex = 0
+    $ChangedCount = 0
+    $UnmappedHeadingCount = 0
+    $InFence = $false
+    $FenceMarker = $null
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $Line = $Lines[$i]
+
+        if ($Line -match '^\s*(```|~~~)') {
+            $Marker = $Matches[1]
+            if (-not $InFence) {
+                $InFence = $true
+                $FenceMarker = $Marker
+            }
+            elseif ($Marker -eq $FenceMarker) {
+                $InFence = $false
+                $FenceMarker = $null
+            }
+            continue
+        }
+
+        if ($InFence) {
+            continue
+        }
+
+        if ($Line -match '^\s*###\s+(\d+\.\d+)\b') {
+            $CurrentSectionNumber = $Matches[1]
+            $SubheadingIndex = 0
+            continue
+        }
+
+        if ($Line -match '^\s*####\s+(.+?)\s*$') {
+            if ([string]::IsNullOrWhiteSpace($CurrentSectionNumber)) {
+                $UnmappedHeadingCount++
+                continue
+            }
+
+            $SubheadingIndex++
+            $OriginalTitle = $Matches[1].Trim()
+            $CleanTitle = Remove-ExistingSubheadingNumbering -Title $OriginalTitle
+            if ([string]::IsNullOrWhiteSpace($CleanTitle)) {
+                $CleanTitle = $OriginalTitle
+            }
+
+            $NewLine = "#### $CurrentSectionNumber.$SubheadingIndex $CleanTitle"
+            if ($NewLine -ne $Line) {
+                $Lines[$i] = $NewLine
+                $ChangedCount++
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Content = ($Lines -join $LineBreak)
+        Changed = ($ChangedCount -gt 0)
+        ChangedCount = $ChangedCount
+        UnmappedHeadingCount = $UnmappedHeadingCount
+    }
 }
 
 if (!(Test-Path $WorkspaceRoot)) {
@@ -533,6 +746,92 @@ if ($numberedFiles.Count -gt 0) {
 elseif ($buildFiles.Count -gt 0) {
     Add-CheckResult -Name "8. Chapter continuity check" -Status "Warning" -Detail "No numeric chapter files available for continuity validation."
     Add-CheckResult -Name "9. File sort-order check" -Status "Warning" -Detail "No numeric chapter files available for sort-order validation."
+}
+
+$BookStructure = Get-BookStructureFromToc -Path $TocPath
+if (-not $BookStructure.Available) {
+    Add-Issue -Type "Warning" -Message "TOC file is missing; 05-build.ps1 cannot inject parent chapter headings." -File $TocPath
+    Add-CheckResult -Name "15. TOC chapter structure check" -Status "Warning" -Detail "TOC file is missing; chapter headings will not be injected during build."
+}
+elseif ($BookStructure.ChapterCount -le 0 -or $BookStructure.SectionCount -le 0) {
+    Add-Issue -Type "Warning" -Message "No parent chapter structure found in toc.md." -File $TocPath
+    Add-CheckResult -Name "15. TOC chapter structure check" -Status "Warning" -Detail "No TOC parent chapter structure was found."
+}
+else {
+    Add-CheckResult -Name "15. TOC chapter structure check" -Status "Pass" -Detail "TOC chapter structure found: $($BookStructure.ChapterCount) chapter(s), $($BookStructure.SectionCount) section(s)."
+}
+
+$unmappedToTocFiles = @()
+if ($buildFiles.Count -gt 0 -and $BookStructure.Available -and $BookStructure.SectionCount -gt 0) {
+    foreach ($file in $buildFiles) {
+        $raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
+        $body = Get-MarkdownBodyText -Content $raw
+        $headingTitle = Get-FirstMarkdownHeadingTitle -Content $body
+
+        if ([string]::IsNullOrWhiteSpace($headingTitle)) {
+            Add-Issue -Type "Warning" -Message "Chapter file heading is missing; cannot map it to TOC." -File $file.Name
+            $unmappedToTocFiles += $file.Name
+            continue
+        }
+
+        if (-not (Test-HeadingMappedToToc -HeadingTitle $headingTitle -BookStructure $BookStructure)) {
+            Add-Issue -Type "Warning" -Message "Chapter file heading is not mapped to a parent chapter in toc.md." -File $file.Name
+            $unmappedToTocFiles += $file.Name
+        }
+    }
+}
+
+if ($unmappedToTocFiles.Count -gt 0) {
+    Add-CheckResult -Name "16. Chapter-to-TOC mapping check" -Status "Warning" -Detail ("Chapter files not mapped to TOC parent chapters: " + ($unmappedToTocFiles -join ", "))
+}
+elseif ($buildFiles.Count -gt 0 -and $BookStructure.Available -and $BookStructure.SectionCount -gt 0) {
+    Add-CheckResult -Name "16. Chapter-to-TOC mapping check" -Status "Pass" -Detail "All buildable chapter files are mapped to TOC parent chapters."
+}
+
+if ($NormalizeSubheadings -and $buildFiles.Count -gt 0) {
+    $NormalizationStamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $NormalizationBackupRoot = Join-Path $ChapterRoot "back"
+    $NormalizationRunBackupRoot = Join-Path $NormalizationBackupRoot ("subheading-numbering_{0}" -f $NormalizationStamp)
+    $NormalizedFileCount = 0
+    $NormalizedHeadingCount = 0
+    $NormalizationUnmappedCount = 0
+
+    if (!(Test-Path $NormalizationBackupRoot)) {
+        New-Item -ItemType Directory -Path $NormalizationBackupRoot -Force | Out-Null
+    }
+    New-Item -ItemType Directory -Path $NormalizationRunBackupRoot -Force | Out-Null
+
+    foreach ($file in $buildFiles) {
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $NormalizationRunBackupRoot $file.Name) -Force
+    }
+
+    foreach ($file in $buildFiles) {
+        $raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
+        $normalization = Convert-SubheadingNumbering -Content $raw
+        $NormalizationUnmappedCount += $normalization.UnmappedHeadingCount
+
+        if (-not $normalization.Changed) {
+            continue
+        }
+
+        [System.IO.File]::WriteAllText(
+            $file.FullName,
+            $normalization.Content,
+            [System.Text.UTF8Encoding]::new($true)
+        )
+        $NormalizedFileCount++
+        $NormalizedHeadingCount += $normalization.ChangedCount
+    }
+
+    $NormalizationDetail = "Normalized subheading numbering in $NormalizedFileCount file(s), $NormalizedHeadingCount heading(s). Backed up $($buildFiles.Count) file(s) to: $NormalizationRunBackupRoot"
+    if ($NormalizationUnmappedCount -gt 0) {
+        Add-Issue -Type "Warning" -Message "Subheading found before a numbered section heading during normalization." -File $ChapterRoot
+        $NormalizationDetail += " Unmapped subheadings: $NormalizationUnmappedCount."
+        Add-CheckResult -Name "17. Subheading numbering normalization" -Status "Warning" -Detail $NormalizationDetail
+    }
+    else {
+        Add-CheckResult -Name "17. Subheading numbering normalization" -Status "Pass" -Detail $NormalizationDetail
+    }
 }
 
 $emptyFiles = @()

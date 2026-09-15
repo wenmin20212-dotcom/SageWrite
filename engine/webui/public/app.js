@@ -259,7 +259,12 @@ function clearRememberedCurrentJob(jobId = "") {
 }
 
 function getStoredDefaultModelName() {
-  return String(localStorage.getItem(DEFAULT_MODEL_STORAGE_KEY) || "gpt-5.2").trim() || "gpt-5.2";
+  const stored = String(localStorage.getItem(DEFAULT_MODEL_STORAGE_KEY) || "").trim();
+  if (!stored || stored === "gpt-5.2") {
+    localStorage.setItem(DEFAULT_MODEL_STORAGE_KEY, "gpt-5.5");
+    return "gpt-5.5";
+  }
+  return stored;
 }
 
 function getDefaultModelName() {
@@ -268,7 +273,7 @@ function getDefaultModelName() {
 }
 
 function setDefaultModelName(value) {
-  const normalized = String(value || "").trim() || "gpt-5.2";
+  const normalized = String(value || "").trim() || "gpt-5.5";
   localStorage.setItem(DEFAULT_MODEL_STORAGE_KEY, normalized);
 
   const heroField = $("#default-model-name");
@@ -8559,7 +8564,7 @@ function setupForms() {
   });
 
   $("#default-model-name")?.addEventListener("change", (event) => {
-    setDefaultModelName(event.currentTarget?.value || "gpt-5.2");
+    setDefaultModelName(event.currentTarget?.value || "gpt-5.5");
     setStatusBadge("已保存", "success");
     setLog(`默认模型已切换为 ${getDefaultModelName()}。`);
   });
@@ -8572,7 +8577,7 @@ function setupForms() {
   });
 
   $("#default-model-name")?.addEventListener("blur", (event) => {
-    setDefaultModelName(event.currentTarget?.value || "gpt-5.2");
+    setDefaultModelName(event.currentTarget?.value || "gpt-5.5");
   });
 
   $("#edit-form").addEventListener("submit", async (event) => {

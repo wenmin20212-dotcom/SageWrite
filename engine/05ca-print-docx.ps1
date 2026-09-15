@@ -35,6 +35,7 @@ $SourceRoot = if ($LanguageCode -eq "zh") {
     Join-Path $BookRoot ("03_translation\" + $LanguageCode)
 }
 $ObjectivePath = Join-Path $SourceRoot "00_brief\objective.md"
+$TocPath = Join-Path $SourceRoot "01_outline\toc.md"
 $ChapterRoot = Join-Path $SourceRoot "02_chapters"
 $OutputRoot = Join-Path $BookRoot ("04_output\" + $LanguageCode)
 $LogRoot = $Context.LogRoot
@@ -127,6 +128,121 @@ function Get-MarkdownBodyText {
     }
 
     return $Normalized.Trim()
+}
+
+function Get-BookStructureFromToc {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
+    $SectionToChapter = @{}
+    $ChapterCount = 0
+    $SectionCount = 0
+    $CurrentChapter = $null
+
+    if (!(Test-Path $Path)) {
+        return [PSCustomObject]@{
+            Available = $false
+            SectionToChapter = $SectionToChapter
+            ChapterCount = 0
+            SectionCount = 0
+        }
+    }
+
+    foreach ($Line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -match '^##\s+(.+?)\s*$') {
+            $CurrentChapter = $Matches[1].Trim()
+            $ChapterCount++
+            continue
+        }
+
+        if ($Trimmed -match '^###\s+(.+?)\s*$' -and -not [string]::IsNullOrWhiteSpace($CurrentChapter)) {
+            $SectionTitle = $Matches[1].Trim()
+            $SectionToChapter[$SectionTitle] = $CurrentChapter
+            if ($SectionTitle -match '^(\d+(?:\.\d+)*)\b') {
+                $SectionToChapter[$Matches[1]] = $CurrentChapter
+            }
+            $SectionCount++
+        }
+    }
+
+    return [PSCustomObject]@{
+        Available = $true
+        SectionToChapter = $SectionToChapter
+        ChapterCount = $ChapterCount
+        SectionCount = $SectionCount
+    }
+}
+
+function Get-FirstMarkdownHeadingTitle {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $Match = [regex]::Match($Content, '(?m)^\s*#{1,6}\s+(.+?)\s*$')
+    if ($Match.Success) {
+        return $Match.Groups[1].Value.Trim()
+    }
+
+    return $null
+}
+
+function Convert-SectionHeadingsForBookBuild {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    return [regex]::Replace($Content, '(?m)^(#{3,6})(\s+)', {
+        param($Match)
+        $Level = [Math]::Max(1, $Match.Groups[1].Value.Length - 1)
+        return ("#" * $Level) + $Match.Groups[2].Value
+    })
+}
+
+function Convert-ToBookBuildMarkdown {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Body,
+
+        [Parameter(Mandatory=$true)]
+        [object]$BookStructure,
+
+        [System.Collections.Generic.HashSet[string]]$SeenChapterTitles
+    )
+
+    $Content = $Body.Trim()
+    if (-not $BookStructure.Available -or $BookStructure.SectionCount -le 0) {
+        return $Content
+    }
+
+    $SectionTitle = Get-FirstMarkdownHeadingTitle -Content $Content
+    if ([string]::IsNullOrWhiteSpace($SectionTitle)) {
+        return $Content
+    }
+
+    $ChapterTitle = $null
+    if ($BookStructure.SectionToChapter.ContainsKey($SectionTitle)) {
+        $ChapterTitle = $BookStructure.SectionToChapter[$SectionTitle]
+    }
+    elseif ($SectionTitle -match '^(\d+(?:\.\d+)*)\b' -and $BookStructure.SectionToChapter.ContainsKey($Matches[1])) {
+        $ChapterTitle = $BookStructure.SectionToChapter[$Matches[1]]
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ChapterTitle)) {
+        return $Content
+    }
+
+    $Content = Convert-SectionHeadingsForBookBuild -Content $Content
+    if (-not $SeenChapterTitles.Contains($ChapterTitle)) {
+        [void]$SeenChapterTitles.Add($ChapterTitle)
+        return "# $ChapterTitle`r`n`r`n$Content"
+    }
+
+    return $Content
 }
 
 function Get-TitlePageTitle {
@@ -444,6 +560,85 @@ function Set-SectionBreakType {
     [void]$TypeNode.SetAttribute("val", $DocNs.LookupNamespace("w"), $TypeValue)
 }
 
+function Get-BodyChildIndex {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$BodyNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$TargetNode
+    )
+
+    for ($i = 0; $i -lt $BodyNode.ChildNodes.Count; $i++) {
+        if ([object]::ReferenceEquals($BodyNode.ChildNodes.Item($i), $TargetNode)) {
+            return $i
+        }
+    }
+
+    return -1
+}
+
+function Get-LastContentControlParagraph {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$ContentControlNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $ContentNode = $ContentControlNode.SelectSingleNode("w:sdtContent", $DocNs)
+    if ($null -eq $ContentNode) {
+        return $null
+    }
+
+    $Paragraphs = @($ContentNode.SelectNodes(".//w:p", $DocNs))
+    if ($Paragraphs.Count -eq 0) {
+        return $null
+    }
+
+    return [System.Xml.XmlElement]$Paragraphs[$Paragraphs.Count - 1]
+}
+
+function Get-PrecedingSectionBreakParagraph {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$BodyNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$HeadingParagraph,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $HeadingChildIndex = Get-BodyChildIndex -BodyNode $BodyNode -TargetNode $HeadingParagraph
+    if ($HeadingChildIndex -le 0) {
+        return $null
+    }
+
+    $WordNamespace = $DocNs.LookupNamespace("w")
+    for ($i = $HeadingChildIndex - 1; $i -ge 0; $i--) {
+        $Candidate = $BodyNode.ChildNodes.Item($i)
+        if ($Candidate.NodeType -ne [System.Xml.XmlNodeType]::Element -or $Candidate.NamespaceURI -ne $WordNamespace) {
+            continue
+        }
+
+        if ($Candidate.LocalName -eq "p") {
+            return [System.Xml.XmlElement]$Candidate
+        }
+
+        if ($Candidate.LocalName -eq "sdt") {
+            $HostParagraph = Get-LastContentControlParagraph -ContentControlNode ([System.Xml.XmlElement]$Candidate) -DocNs $DocNs
+            if ($null -ne $HostParagraph) {
+                return $HostParagraph
+            }
+        }
+    }
+
+    return $null
+}
+
 function Set-SectionPageSize {
     param(
         [Parameter(Mandatory=$true)]
@@ -751,7 +946,6 @@ function Update-DocxFormatting {
     }
 
     $HeadingParagraphs = @($BodyNode.SelectNodes("w:p[w:pPr/w:pStyle[@w:val='Heading1']]", $DocNs))
-    $ParagraphNodes = @($BodyNode.SelectNodes("w:p", $DocNs))
 
     Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -FooterRelId $FooterRelId
     Set-SectionPageSize -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs
@@ -764,12 +958,11 @@ function Update-DocxFormatting {
 
     for ($HeadingNumber = 0; $HeadingNumber -lt $HeadingParagraphs.Count; $HeadingNumber++) {
         $HeadingParagraph = $HeadingParagraphs[$HeadingNumber]
-        $HeadingIndex = [Array]::IndexOf($ParagraphNodes, $HeadingParagraph)
-        if ($HeadingIndex -le 0) {
+        $PrevParagraph = Get-PrecedingSectionBreakParagraph -BodyNode $BodyNode -HeadingParagraph $HeadingParagraph -DocNs $DocNs
+        if ($null -eq $PrevParagraph) {
             continue
         }
 
-        $PrevParagraph = $ParagraphNodes[$HeadingIndex - 1]
         $PrevParagraphPPr = $PrevParagraph.SelectSingleNode("w:pPr", $DocNs)
         if ($null -eq $PrevParagraphPPr) {
             $PrevParagraphPPr = $DocumentDoc.CreateElement("w", "pPr", $DocNs.LookupNamespace("w"))
@@ -861,6 +1054,17 @@ foreach ($file in $mdFiles) {
     Write-Host "Adding: $($file.Name)"
 }
 
+$BookStructure = Get-BookStructureFromToc -Path $TocPath
+if ($BookStructure.Available -and $BookStructure.SectionCount -gt 0) {
+    Write-Host ""
+    Write-Host "Using TOC chapter structure:"
+    Write-Host $TocPath
+}
+else {
+    Write-Host ""
+    Write-Host "TOC chapter structure not found; building chapter files as-is."
+}
+
 $DocumentTitle = $BookName
 $DocumentAuthor = "Generated by SageWrite"
 if (Test-Path $ObjectivePath) {
@@ -891,9 +1095,11 @@ New-Item -ItemType Directory -Path $BuildTempRoot -Force | Out-Null
 
 $BuildFiles = @()
 
+$SeenChapterTitles = New-Object 'System.Collections.Generic.HashSet[string]'
 foreach ($file in $mdFiles) {
-    $Raw = Get-Content -LiteralPath $file.FullName -Raw
+    $Raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     $Body = Get-MarkdownBodyText -Content $Raw
+    $Body = Convert-ToBookBuildMarkdown -Body $Body -BookStructure $BookStructure -SeenChapterTitles $SeenChapterTitles
     $TempPath = Join-Path $BuildTempRoot $file.Name
     Set-Content -LiteralPath $TempPath -Encoding utf8 -Value $Body
     $BuildFiles += $TempPath

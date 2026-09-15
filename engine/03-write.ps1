@@ -2,14 +2,14 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
-    [string]$Model = "gpt-5.2",
+    [string]$Model = "gpt-5.5",
 
     [int]$Chapter,
 
     [int]$StartChapter,
     [int]$EndChapter,
 
-    [int]$MaxTokens = 6000,
+    [int]$MaxTokens = 7000,
 
     [string]$AdditionalInstructions,
 
@@ -291,7 +291,7 @@ Treat this as the authoritative style requirement for the chapter. Do not replac
     }
 
     $Prompt = @"
-You are writing a professional book chapter.
+You are writing one professional book section selected from the TOC.
 
 Book definition:
 $ObjectiveContent
@@ -302,21 +302,21 @@ $GlossaryBlock
 $StyleInstructionsBlock
 $AdditionalInstructionsBlock
 
-Current chapter:
-- chapter_index: $i
-- total_chapters: $TotalChapters
-- chapter_title: $ChapterTitle
+Current writing section:
+- section_index: $i
+- total_sections: $TotalChapters
+- section_title: $ChapterTitle
 
 Requirements:
-1. Target length: 3000-4000 words.
-2. Use a clear hierarchical structure with numbered sections.
-3. Include an introduction, multiple core sections, and a concluding section.
+1. Target length: follow the section-specific Chinese character count requirement written under the current ### TOC section. If the current section has no explicit requirement, write 2,100-2,400 Chinese characters of main body text, excluding front matter and markdown syntax.
+2. Write only the current section, not the whole parent chapter and not adjacent TOC sections.
+3. Use a clear section-level structure with a short opening, focused argument, evidence or examples, and a concise transition or mini-conclusion.
 4. $StyleRequirementLine
 5. Avoid repetition and filler content.
 6. Do not include meta commentary.
 7. Output in clean Markdown format only.
 
-Write the complete chapter now.
+Write the complete section now.
 "@
 
     $BodyObject = @{

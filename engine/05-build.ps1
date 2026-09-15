@@ -35,10 +35,12 @@ $SourceRoot = if ($LanguageCode -eq "zh") {
     Join-Path $BookRoot ("03_translation\" + $LanguageCode)
 }
 $ObjectivePath = Join-Path $SourceRoot "00_brief\objective.md"
+$TocPath = Join-Path $SourceRoot "01_outline\toc.md"
 $ChapterRoot = Join-Path $SourceRoot "02_chapters"
 $OutputRoot = Join-Path $BookRoot ("04_output\" + $LanguageCode)
 $LogRoot = $Context.LogRoot
-$BuildTempRoot = Join-Path $LogRoot ("_build_tmp_" + $LanguageCode)
+$BuildStamp = Get-Date -Format "yyyyMMdd_HHmmss_ffff"
+$BuildTempRoot = Join-Path $LogRoot ("_build_tmp_{0}_{1}_{2}" -f $LanguageCode, $PID, $BuildStamp)
 
 function Get-CoverImagePath {
     param(
@@ -129,6 +131,121 @@ function Get-MarkdownBodyText {
     return $Normalized.Trim()
 }
 
+function Get-BookStructureFromToc {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
+    $SectionToChapter = @{}
+    $ChapterCount = 0
+    $SectionCount = 0
+    $CurrentChapter = $null
+
+    if (!(Test-Path $Path)) {
+        return [PSCustomObject]@{
+            Available = $false
+            SectionToChapter = $SectionToChapter
+            ChapterCount = 0
+            SectionCount = 0
+        }
+    }
+
+    foreach ($Line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -match '^##\s+(.+?)\s*$') {
+            $CurrentChapter = $Matches[1].Trim()
+            $ChapterCount++
+            continue
+        }
+
+        if ($Trimmed -match '^###\s+(.+?)\s*$' -and -not [string]::IsNullOrWhiteSpace($CurrentChapter)) {
+            $SectionTitle = $Matches[1].Trim()
+            $SectionToChapter[$SectionTitle] = $CurrentChapter
+            if ($SectionTitle -match '^(\d+(?:\.\d+)*)\b') {
+                $SectionToChapter[$Matches[1]] = $CurrentChapter
+            }
+            $SectionCount++
+        }
+    }
+
+    return [PSCustomObject]@{
+        Available = $true
+        SectionToChapter = $SectionToChapter
+        ChapterCount = $ChapterCount
+        SectionCount = $SectionCount
+    }
+}
+
+function Get-FirstMarkdownHeadingTitle {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    $Match = [regex]::Match($Content, '(?m)^\s*#{1,6}\s+(.+?)\s*$')
+    if ($Match.Success) {
+        return $Match.Groups[1].Value.Trim()
+    }
+
+    return $null
+}
+
+function Convert-SectionHeadingsForBookBuild {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    return [regex]::Replace($Content, '(?m)^(#{3,6})(\s+)', {
+        param($Match)
+        $Level = [Math]::Max(1, $Match.Groups[1].Value.Length - 1)
+        return ("#" * $Level) + $Match.Groups[2].Value
+    })
+}
+
+function Convert-ToBookBuildMarkdown {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Body,
+
+        [Parameter(Mandatory=$true)]
+        [object]$BookStructure,
+
+        [System.Collections.Generic.HashSet[string]]$SeenChapterTitles
+    )
+
+    $Content = $Body.Trim()
+    if (-not $BookStructure.Available -or $BookStructure.SectionCount -le 0) {
+        return $Content
+    }
+
+    $SectionTitle = Get-FirstMarkdownHeadingTitle -Content $Content
+    if ([string]::IsNullOrWhiteSpace($SectionTitle)) {
+        return $Content
+    }
+
+    $ChapterTitle = $null
+    if ($BookStructure.SectionToChapter.ContainsKey($SectionTitle)) {
+        $ChapterTitle = $BookStructure.SectionToChapter[$SectionTitle]
+    }
+    elseif ($SectionTitle -match '^(\d+(?:\.\d+)*)\b' -and $BookStructure.SectionToChapter.ContainsKey($Matches[1])) {
+        $ChapterTitle = $BookStructure.SectionToChapter[$Matches[1]]
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ChapterTitle)) {
+        return $Content
+    }
+
+    $Content = Convert-SectionHeadingsForBookBuild -Content $Content
+    if (-not $SeenChapterTitles.Contains($ChapterTitle)) {
+        [void]$SeenChapterTitles.Add($ChapterTitle)
+        return "# $ChapterTitle`r`n`r`n$Content"
+    }
+
+    return $Content
+}
+
 function Get-TitlePageTitle {
     param(
         [Parameter(Mandatory=$true)]
@@ -196,6 +313,33 @@ function Write-Utf8Text {
     [System.IO.File]::WriteAllText($Path, $Content, $Utf8NoBom)
 }
 
+function Copy-SageAssetsToBuildTemp {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$BookRoot,
+
+        [Parameter(Mandatory=$true)]
+        [string]$BuildTempRoot
+    )
+
+    $AssetRoot = Join-Path $BookRoot "03_assets"
+    if (!(Test-Path -LiteralPath $AssetRoot)) {
+        return $null
+    }
+
+    Copy-Item -LiteralPath $AssetRoot -Destination $BuildTempRoot -Recurse -Force
+    return $AssetRoot
+}
+
+function Convert-SageAssetReferencesForBuild {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Content
+    )
+
+    return [regex]::Replace($Content, '\.\.[/\\]03_assets[/\\]', '03_assets/')
+}
+
 function Set-SectionHeaderFooter {
     param(
         [Parameter(Mandatory=$true)]
@@ -214,7 +358,10 @@ function Set-SectionHeaderFooter {
         [string]$FirstHeaderRelId,
 
         [Parameter(Mandatory=$true)]
-        [string]$FooterRelId
+        [string]$DefaultFooterRelId,
+
+        [Parameter(Mandatory=$true)]
+        [string]$FirstFooterRelId
     )
 
     @($SectPrNode.SelectNodes("w:headerReference", $DocNs)) | ForEach-Object { [void]$SectPrNode.RemoveChild($_) }
@@ -238,13 +385,14 @@ function Set-SectionHeaderFooter {
 
     $FirstFooterRef = $DocumentDoc.CreateElement("w", "footerReference", $DocNs.LookupNamespace("w"))
     [void]$FirstFooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "first")
-    [void]$FirstFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
+    [void]$FirstFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FirstFooterRelId)
     [void]$SectPrNode.InsertAfter($FirstFooterRef, $DefaultHeaderRef)
 
     $DefaultFooterRef = $DocumentDoc.CreateElement("w", "footerReference", $DocNs.LookupNamespace("w"))
     [void]$DefaultFooterRef.SetAttribute("type", $DocNs.LookupNamespace("w"), "default")
-    [void]$DefaultFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $FooterRelId)
+    [void]$DefaultFooterRef.SetAttribute("id", $DocNs.LookupNamespace("r"), $DefaultFooterRelId)
     [void]$SectPrNode.InsertAfter($DefaultFooterRef, $FirstFooterRef)
+
 }
 
 function Set-TitleParagraphText {
@@ -444,6 +592,83 @@ function Set-SectionBreakType {
     [void]$TypeNode.SetAttribute("val", $DocNs.LookupNamespace("w"), $TypeValue)
 }
 
+function Get-BodyChildIndex {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$BodyNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$TargetNode
+    )
+
+    for ($i = 0; $i -lt $BodyNode.ChildNodes.Count; $i++) {
+        if ([object]::ReferenceEquals($BodyNode.ChildNodes.Item($i), $TargetNode)) {
+            return $i
+        }
+    }
+
+    return -1
+}
+
+function Get-LastContentControlParagraph {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$ContentControlNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $ContentNode = $ContentControlNode.SelectSingleNode("w:sdtContent", $DocNs)
+    if ($null -eq $ContentNode) {
+        return $null
+    }
+
+    $Paragraphs = @($ContentNode.SelectNodes(".//w:p", $DocNs))
+    if ($Paragraphs.Count -eq 0) {
+        return $null
+    }
+
+    return [System.Xml.XmlElement]$Paragraphs[$Paragraphs.Count - 1]
+}
+
+function Get-PrecedingSectionBreakParagraph {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$BodyNode,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlElement]$HeadingParagraph,
+
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlNamespaceManager]$DocNs
+    )
+
+    $WordNamespace = $DocNs.LookupNamespace("w")
+    $Candidate = $HeadingParagraph.PreviousSibling
+    while ($null -ne $Candidate) {
+        if ($Candidate.NodeType -ne [System.Xml.XmlNodeType]::Element -or $Candidate.NamespaceURI -ne $WordNamespace) {
+            $Candidate = $Candidate.PreviousSibling
+            continue
+        }
+
+        if ($Candidate.LocalName -eq "p") {
+            return [System.Xml.XmlElement]$Candidate
+        }
+
+        if ($Candidate.LocalName -eq "sdt") {
+            $HostParagraph = Get-LastContentControlParagraph -ContentControlNode ([System.Xml.XmlElement]$Candidate) -DocNs $DocNs
+            if ($null -ne $HostParagraph) {
+                return $HostParagraph
+            }
+        }
+
+        $Candidate = $Candidate.PreviousSibling
+    }
+
+    return $null
+}
+
 function Update-DocxFormatting {
     param(
         [Parameter(Mandatory=$true)]
@@ -476,6 +701,7 @@ function Update-DocxFormatting {
     $HeaderPath = Join-Path $ExtractRoot "word\header1.xml"
     $FirstHeaderPath = Join-Path $ExtractRoot "word\header2.xml"
     $FooterPath = Join-Path $ExtractRoot "word\footer1.xml"
+    $FirstFooterPath = Join-Path $ExtractRoot "word\footer3.xml"
     if (!(Test-Path -LiteralPath $StylesPath)) {
         throw "word/styles.xml not found in generated document."
     }
@@ -555,6 +781,11 @@ function Update-DocxFormatting {
     }
     [void]$UpdateFieldsNode.SetAttribute("val", $SettingsNs.LookupNamespace("w"), "true")
 
+    $EvenAndOddHeadersNode = $SettingsRoot.SelectSingleNode("w:evenAndOddHeaders", $SettingsNs)
+    if ($null -ne $EvenAndOddHeadersNode) {
+        [void]$SettingsRoot.RemoveChild($EvenAndOddHeadersNode)
+    }
+
     Save-XmlUtf8 -Document $SettingsDoc -Path $SettingsPath
 
     $EscapedTitle = [System.Security.SecurityElement]::Escape($DocumentTitle)
@@ -564,11 +795,39 @@ function Update-DocxFormatting {
   <w:p>
     <w:pPr>
       <w:pStyle w:val="Header" />
-      <w:jc w:val="center" />
+      <w:jc w:val="left" />
+      <w:tabs>
+        <w:tab w:val="right" w:pos="9360" />
+      </w:tabs>
+      <w:spacing w:after="0" />
+      <w:pBdr>
+        <w:bottom w:val="single" w:sz="4" w:space="4" w:color="D8E2EA" />
+      </w:pBdr>
     </w:pPr>
     <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei" />
+        <w:color w:val="557085" />
+        <w:sz w:val="16" />
+        <w:szCs w:val="16" />
+      </w:rPr>
       <w:t xml:space="preserve">$EscapedTitle</w:t>
     </w:r>
+    <w:r>
+      <w:tab />
+    </w:r>
+    <w:fldSimple w:instr=" STYLEREF &quot;Heading 1&quot; \* MERGEFORMAT ">
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei" />
+          <w:color w:val="557085" />
+          <w:sz w:val="16" />
+          <w:szCs w:val="16" />
+          <w:noProof />
+        </w:rPr>
+        <w:t>Chapter</w:t>
+      </w:r>
+    </w:fldSimple>
   </w:p>
 </w:hdr>
 "@
@@ -580,6 +839,7 @@ function Update-DocxFormatting {
     <w:pPr>
       <w:pStyle w:val="Header" />
       <w:jc w:val="center" />
+      <w:spacing w:after="0" />
     </w:pPr>
   </w:p>
 </w:hdr>
@@ -592,10 +852,40 @@ function Update-DocxFormatting {
     <w:pPr>
       <w:pStyle w:val="Footer" />
       <w:jc w:val="center" />
+      <w:spacing w:after="0" />
     </w:pPr>
     <w:fldSimple w:instr=" PAGE ">
       <w:r>
         <w:rPr>
+          <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei" />
+          <w:color w:val="557085" />
+          <w:sz w:val="18" />
+          <w:szCs w:val="18" />
+          <w:noProof />
+        </w:rPr>
+        <w:t>1</w:t>
+      </w:r>
+    </w:fldSimple>
+  </w:p>
+</w:ftr>
+"@
+
+    Write-Utf8Text -Path $FirstFooterPath -Content @"
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer" />
+      <w:jc w:val="center" />
+      <w:spacing w:after="0" />
+    </w:pPr>
+    <w:fldSimple w:instr=" PAGE ">
+      <w:r>
+        <w:rPr>
+          <w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="Microsoft YaHei" />
+          <w:color w:val="557085" />
+          <w:sz w:val="18" />
+          <w:szCs w:val="18" />
           <w:noProof />
         </w:rPr>
         <w:t>1</w:t>
@@ -634,6 +924,13 @@ function Update-DocxFormatting {
         [void]$TypesRoot.AppendChild($FooterOverride)
     }
 
+    if ($null -eq $ContentTypesDoc.SelectSingleNode("/ct:Types/ct:Override[@PartName='/word/footer3.xml']", $CtNs)) {
+        $FirstFooterOverride = $ContentTypesDoc.CreateElement("Override", $CtNs.LookupNamespace("ct"))
+        [void]$FirstFooterOverride.SetAttribute("PartName", "/word/footer3.xml")
+        [void]$FirstFooterOverride.SetAttribute("ContentType", "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml")
+        [void]$TypesRoot.AppendChild($FirstFooterOverride)
+    }
+
     Save-XmlUtf8 -Document $ContentTypesDoc -Path $ContentTypesPath
 
     [xml]$DocRelsDoc = Load-XmlDocument -Path $DocumentRelsPath
@@ -644,9 +941,10 @@ function Update-DocxFormatting {
         throw "document relationships root node not found in generated document."
     }
 
-    $HeaderRelId = "rIdSageHeader"
+    $HeaderRelId = "rIdSageHeaderDefault"
     $FirstHeaderRelId = "rIdSageHeaderFirst"
-    $FooterRelId = "rIdSageFooter"
+    $FooterRelId = "rIdSageFooterDefault"
+    $FirstFooterRelId = "rIdSageFooterFirst"
     $HeaderRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
     $FooterRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
 
@@ -689,6 +987,19 @@ function Update-DocxFormatting {
         [void]$FooterRel.SetAttribute("Target", "footer1.xml")
     }
 
+    $FirstFooterRel = $DocRelsDoc.SelectSingleNode("/pr:Relationships/pr:Relationship[@Id='$FirstFooterRelId']", $RelNs)
+    if ($null -eq $FirstFooterRel) {
+        $FirstFooterRel = $DocRelsDoc.CreateElement("Relationship", $RelNs.LookupNamespace("pr"))
+        [void]$FirstFooterRel.SetAttribute("Id", $FirstFooterRelId)
+        [void]$FirstFooterRel.SetAttribute("Type", $FooterRelType)
+        [void]$FirstFooterRel.SetAttribute("Target", "footer3.xml")
+        [void]$RelsRoot.AppendChild($FirstFooterRel)
+    }
+    else {
+        [void]$FirstFooterRel.SetAttribute("Type", $FooterRelType)
+        [void]$FirstFooterRel.SetAttribute("Target", "footer3.xml")
+    }
+
     Save-XmlUtf8 -Document $DocRelsDoc -Path $DocumentRelsPath
 
     [xml]$DocumentDoc = Load-XmlDocument -Path $DocumentPath
@@ -725,9 +1036,8 @@ function Update-DocxFormatting {
     }
 
     $HeadingParagraphs = @($BodyNode.SelectNodes("w:p[w:pPr/w:pStyle[@w:val='Heading1']]", $DocNs))
-    $ParagraphNodes = @($BodyNode.SelectNodes("w:p", $DocNs))
 
-    Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -FooterRelId $FooterRelId
+    Set-SectionHeaderFooter -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -DefaultHeaderRelId $HeaderRelId -FirstHeaderRelId $FirstHeaderRelId -DefaultFooterRelId $FooterRelId -FirstFooterRelId $FirstFooterRelId
     if ($HeadingParagraphs.Count -le 1) {
         Set-SectionPageNumberStart -DocumentDoc $DocumentDoc -SectPrNode $SectPrNode -DocNs $DocNs -StartAt 1
     }
@@ -737,12 +1047,11 @@ function Update-DocxFormatting {
 
     for ($HeadingNumber = 0; $HeadingNumber -lt $HeadingParagraphs.Count; $HeadingNumber++) {
         $HeadingParagraph = $HeadingParagraphs[$HeadingNumber]
-        $HeadingIndex = [Array]::IndexOf($ParagraphNodes, $HeadingParagraph)
-        if ($HeadingIndex -le 0) {
+        $PrevParagraph = Get-PrecedingSectionBreakParagraph -BodyNode $BodyNode -HeadingParagraph $HeadingParagraph -DocNs $DocNs
+        if ($null -eq $PrevParagraph) {
             continue
         }
 
-        $PrevParagraph = $ParagraphNodes[$HeadingIndex - 1]
         $PrevParagraphPPr = $PrevParagraph.SelectSingleNode("w:pPr", $DocNs)
         if ($null -eq $PrevParagraphPPr) {
             $PrevParagraphPPr = $DocumentDoc.CreateElement("w", "pPr", $DocNs.LookupNamespace("w"))
@@ -773,8 +1082,11 @@ function Update-DocxFormatting {
 
     Save-XmlUtf8 -Document $DocumentDoc -Path $DocumentPath
 
-    Remove-Item -Path $DocxPath -Force -ErrorAction Stop
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($ExtractRoot, $DocxPath)
+    $PatchedDocxPath = Join-Path $TempRoot ("patched_docx_" + [System.Guid]::NewGuid().ToString("N") + ".docx")
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($ExtractRoot, $PatchedDocxPath)
+
+    Remove-Item -LiteralPath $DocxPath -Force -ErrorAction Stop
+    Move-Item -LiteralPath $PatchedDocxPath -Destination $DocxPath -Force
 }
 
 if (!(Test-Path $WorkspaceRoot)) {
@@ -833,10 +1145,21 @@ foreach ($file in $mdFiles) {
     Write-Host "Adding: $($file.Name)"
 }
 
+$BookStructure = Get-BookStructureFromToc -Path $TocPath
+if ($BookStructure.Available -and $BookStructure.SectionCount -gt 0) {
+    Write-Host ""
+    Write-Host "Using TOC chapter structure:"
+    Write-Host $TocPath
+}
+else {
+    Write-Host ""
+    Write-Host "TOC chapter structure not found; building chapter files as-is."
+}
+
 $DocumentTitle = $BookName
 $DocumentAuthor = "Generated by SageWrite"
 if (Test-Path $ObjectivePath) {
-    $ObjectiveRaw = Get-Content -LiteralPath $ObjectivePath -Raw
+    $ObjectiveRaw = Get-Content -LiteralPath $ObjectivePath -Raw -Encoding UTF8
     $ObjectiveTitle = Get-FrontMatterValue -Content $ObjectiveRaw -Key "title"
     $ObjectiveAuthor = Get-FrontMatterValue -Content $ObjectiveRaw -Key "author"
     if (-not [string]::IsNullOrWhiteSpace($ObjectiveTitle)) {
@@ -878,9 +1201,49 @@ if ($CoverImagePath) {
     Write-Host $CoverImagePath
 }
 
+$AssetSourceRoot = Copy-SageAssetsToBuildTemp -BookRoot $BookRoot -BuildTempRoot $BuildTempRoot
+if ($AssetSourceRoot) {
+    Write-Host ""
+    Write-Host "Including asset directory:"
+    Write-Host $AssetSourceRoot
+}
+
+$SeenChapterTitles = New-Object 'System.Collections.Generic.HashSet[string]'
+$ReferenceLabels = @{}
+$ReferencesPath = Join-Path $ChapterRoot 'references.md'
+if (Test-Path -LiteralPath $ReferencesPath) {
+    $ReferencesRaw = Get-Content -LiteralPath $ReferencesPath -Raw -Encoding UTF8
+    foreach ($Match in [regex]::Matches($ReferencesRaw, '(?m)^\[(前-\d+|\d+-\d+)\] ')) {
+        $Label = $Match.Groups[1].Value
+        $ReferenceLabels[$Label] = 'ref-' + $Label.Replace('前', 'front')
+    }
+}
 foreach ($file in $mdFiles) {
-    $Raw = Get-Content -LiteralPath $file.FullName -Raw
+    $Raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     $Body = Get-MarkdownBodyText -Content $Raw
+    $Body = Convert-ToBookBuildMarkdown -Body $Body -BookStructure $BookStructure -SeenChapterTitles $SeenChapterTitles
+    $Body = Convert-SageAssetReferencesForBuild -Content $Body
+    # Resolve 04R labels only in the build copy; source hashes remain unchanged.
+    if ($file.Name -eq 'references.md') {
+        $Body = [regex]::Replace($Body, '(?m)^\[(前-\d+|\d+-\d+)\] ', {
+            param($m)
+            $Label = $m.Groups[1].Value
+            return '[\[' + $Label + '\]]{#' + $ReferenceLabels[$Label] + '} '
+        })
+        $Body = [regex]::Replace($Body, '\.\. (?=\(\d{4}\)|\(n\.d\.\))', '. ')
+        $Body = [regex]::Replace($Body, '(?m)(https?://\S+)\s*$', {
+            param($m)
+            return '<' + $m.Groups[1].Value + '>' + "`n"
+        })
+    }
+    elseif ($file.BaseName -match '^\d+$') {
+        $Body = [regex]::Replace($Body, '\[(前-\d+|\d+-\d+)\]', {
+            param($m)
+            $Label = $m.Groups[1].Value
+            if (!$ReferenceLabels.ContainsKey($Label)) { throw "Unresolved citation: $Label" }
+            return '[\[' + $Label + '\]](#' + $ReferenceLabels[$Label] + ')'
+        })
+    }
     $TempPath = Join-Path $BuildTempRoot $file.Name
     Set-Content -LiteralPath $TempPath -Encoding utf8 -Value $Body
     $BuildFiles += $TempPath

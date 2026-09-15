@@ -5654,11 +5654,11 @@ async function handleRun(route, body, res) {
         }
         job = runScript("03-write.ps1", [
           { flag: "-BookName", value: bookName },
-          { flag: "-Model", value: body.model || "gpt-5.2" },
+          { flag: "-Model", value: body.model || "gpt-5.5" },
           { flag: "-Chapter", value: body.mode === "chapter" ? body.chapter : undefined },
           { flag: "-StartChapter", value: body.mode === "range" ? body.startChapter : undefined },
           { flag: "-EndChapter", value: body.mode === "range" ? body.endChapter : undefined },
-          { flag: "-MaxTokens", value: body.maxTokens || 6000 },
+          { flag: "-MaxTokens", value: body.maxTokens || 7000 },
           { flag: "-AdditionalInstructions", value: body.additionalInstructions || undefined },
           { flag: "-ReferenceGlossary", type: "switch", enabled: Boolean(body.referenceGlossary) },
           { flag: "-Force", type: "switch", enabled: Boolean(body.force) }

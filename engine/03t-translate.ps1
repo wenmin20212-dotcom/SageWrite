@@ -7,6 +7,8 @@ param(
 
     [string]$Model = "gpt-5.2",
 
+    [int]$MaxOutputTokens = 16000,
+
     [Nullable[int]]$Chapter,
     [Nullable[int]]$StartChapter,
     [Nullable[int]]$EndChapter,
@@ -110,7 +112,10 @@ function Invoke-TranslatedMarkdown {
         [string]$RelativePath,
 
         [Parameter(Mandatory=$true)]
-        [string]$ModelName
+        [string]$ModelName,
+
+        [Parameter(Mandatory=$true)]
+        [int]$MaxOutputTokens
     )
 
     $Prompt = @"
@@ -136,7 +141,7 @@ $SourceText
     $BodyObject = @{
         model = $ModelName
         input = $Prompt
-        max_output_tokens = 8000
+        max_output_tokens = $MaxOutputTokens
     }
 
     $JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
@@ -212,6 +217,7 @@ $TargetLanguageName = $LanguageProfile.name
 Set-SageCurrentStep -Context $Context -Step "translate" -Data @{
     language = $TargetCode
     model = $Model
+    max_output_tokens = $MaxOutputTokens
     chapter = $Chapter
     start_chapter = $StartChapter
     end_chapter = $EndChapter
@@ -408,7 +414,7 @@ foreach ($item in $CommonSourceFiles) {
     Write-Output "Translating $($item.relative) -> $TargetCode"
     try {
         $SourceText = Get-Content -LiteralPath $item.source -Raw -Encoding UTF8
-        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole $item.role -RelativePath $item.relative -ModelName $Model
+        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole $item.role -RelativePath $item.relative -ModelName $Model -MaxOutputTokens $MaxOutputTokens
         Save-Utf8File -Path $item.target -Content $Result.content
 
         $TranslatedFiles += $item.relative
@@ -446,7 +452,7 @@ else {
 
         try {
             $SourceText = Get-Content -LiteralPath $ChapterFile.FullName -Raw -Encoding UTF8
-            $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole "chapter" -RelativePath $RelativePath -ModelName $Model
+            $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole "chapter" -RelativePath $RelativePath -ModelName $Model -MaxOutputTokens $MaxOutputTokens
             Save-Utf8File -Path $TargetChapterPath -Content $Result.content
 
             $TranslatedFiles += $RelativePath
@@ -486,6 +492,7 @@ $Manifest = [ordered]@{
         output_tokens = $TotalOutputTokens
         total_tokens = $TotalTokens
         model = $Model
+        max_output_tokens = $MaxOutputTokens
     }
 }
 
@@ -495,6 +502,7 @@ $Duration = [math]::Round(((Get-Date) - $StartTime).TotalSeconds, 2)
 Complete-SageStep -Context $Context -Step "translate" -State "success" -Message "Translation completed." -Data @{
     language = $TargetCode
     model = $Model
+    max_output_tokens = $MaxOutputTokens
     translated_file_count = $TranslatedFiles.Count
     skipped_file_count = $SkippedFiles.Count
     processed_range = "$StartIndex-$EndIndex"
