@@ -788,50 +788,13 @@ elseif ($buildFiles.Count -gt 0 -and $BookStructure.Available -and $BookStructur
     Add-CheckResult -Name "16. Chapter-to-TOC mapping check" -Status "Pass" -Detail "All buildable chapter files are mapped to TOC parent chapters."
 }
 
-if ($NormalizeSubheadings -and $buildFiles.Count -gt 0) {
-    $NormalizationStamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $NormalizationBackupRoot = Join-Path $ChapterRoot "back"
-    $NormalizationRunBackupRoot = Join-Path $NormalizationBackupRoot ("subheading-numbering_{0}" -f $NormalizationStamp)
-    $NormalizedFileCount = 0
-    $NormalizedHeadingCount = 0
-    $NormalizationUnmappedCount = 0
-
-    if (!(Test-Path $NormalizationBackupRoot)) {
-        New-Item -ItemType Directory -Path $NormalizationBackupRoot -Force | Out-Null
-    }
-    New-Item -ItemType Directory -Path $NormalizationRunBackupRoot -Force | Out-Null
-
-    foreach ($file in $buildFiles) {
-        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $NormalizationRunBackupRoot $file.Name) -Force
-    }
-
-    foreach ($file in $buildFiles) {
-        $raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
-        $normalization = Convert-SubheadingNumbering -Content $raw
-        $NormalizationUnmappedCount += $normalization.UnmappedHeadingCount
-
-        if (-not $normalization.Changed) {
-            continue
-        }
-
-        [System.IO.File]::WriteAllText(
-            $file.FullName,
-            $normalization.Content,
-            [System.Text.UTF8Encoding]::new($true)
-        )
-        $NormalizedFileCount++
-        $NormalizedHeadingCount += $normalization.ChangedCount
-    }
-
-    $NormalizationDetail = "Normalized subheading numbering in $NormalizedFileCount file(s), $NormalizedHeadingCount heading(s). Backed up $($buildFiles.Count) file(s) to: $NormalizationRunBackupRoot"
-    if ($NormalizationUnmappedCount -gt 0) {
-        Add-Issue -Type "Warning" -Message "Subheading found before a numbered section heading during normalization." -File $ChapterRoot
-        $NormalizationDetail += " Unmapped subheadings: $NormalizationUnmappedCount."
-        Add-CheckResult -Name "17. Subheading numbering normalization" -Status "Warning" -Detail $NormalizationDetail
-    }
-    else {
-        Add-CheckResult -Name "17. Subheading numbering normalization" -Status "Pass" -Detail $NormalizationDetail
-    }
+$FormatMode = if ($NormalizeSubheadings) { 'Normalize' } else { 'Check' }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $BookRoot -Mode $FormatMode
+if ($LASTEXITCODE -ne 0) {
+    Add-Issue -Type 'Error' -Message '04F format preflight failed; see 04_output/editorial_audits/format_preflight.json.' -File $ChapterRoot
+    Add-CheckResult -Name '17. Subheading numbering normalization' -Status 'Error' -Detail '04F format preflight failed.'
+} else {
+    Add-CheckResult -Name '17. Subheading numbering normalization' -Status 'Pass' -Detail '04F format preflight passed and current-input approval recorded.'
 }
 
 $emptyFiles = @()
@@ -926,6 +889,10 @@ else {
 }
 
 $errorCount = [int](($issues | Where-Object { $_.Type -eq "Error" }).Count)
+if ($errorCount -gt 0) {
+    $FormatApproval = Join-Path $BookRoot '00_brief/format_preflight.json'
+    if (Test-Path -LiteralPath $FormatApproval) { Remove-Item -LiteralPath $FormatApproval }
+}
 $warnCount = [int](($issues | Where-Object { $_.Type -eq "Warning" }).Count)
 $infoCount = [int](($issues | Where-Object { $_.Type -eq "Info" }).Count)
 

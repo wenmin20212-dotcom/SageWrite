@@ -16,6 +16,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+. (Join-Path $PSScriptRoot '00-layout.ps1')
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
@@ -35,6 +36,8 @@ $SourceRoot = if ($LanguageCode -eq "zh") {
 } else {
     Join-Path $BookRoot ("03_translation\" + $LanguageCode)
 }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $SourceRoot -Mode Verify
+if ($LASTEXITCODE -ne 0) { throw 'Build blocked by format preflight. Run 04F.ps1 -Mode Normalize or Check first.' }
 $ObjectivePath = Join-Path $SourceRoot "00_brief\objective.md"
 $TocPath = Join-Path $SourceRoot "01_outline\toc.md"
 $ChapterRoot = Join-Path $SourceRoot "02_chapters"
@@ -250,6 +253,12 @@ function Convert-ToBookBuildMarkdown {
         return $Content
     }
 
+    if ($ChapterTitle -eq '前言') {
+        $Content = Convert-SageFrontmatterHeadings -Content $Content -MaxDepth $FrontmatterHeadingDepth
+    }
+    if ($SingleSubheadingPolicy -eq 'body') {
+        $Content = Convert-SageSingleSubheading -Content $Content
+    }
     $Content = Convert-SectionHeadingsForBookBuild -Content $Content
     if (-not $SeenChapterTitles.Contains($ChapterTitle)) {
         [void]$SeenChapterTitles.Add($ChapterTitle)
@@ -435,6 +444,32 @@ if ($AssetSourceRoot) {
 }
 
 $SeenChapterTitles = New-Object 'System.Collections.Generic.HashSet[string]'
+$FrontmatterHeadingDepth = 3
+$TocDepth = 3
+$ReferencesTocDepth = 2
+$SingleSubheadingPolicy = 'keep'
+if (Test-Path -LiteralPath $TocPath) {
+    $DepthSetting = Get-FrontMatterValue -Content (Get-Content -LiteralPath $TocPath -Raw -Encoding UTF8) -Key 'frontmatter_heading_depth'
+    $TocDepthSetting = Get-FrontMatterValue -Content (Get-Content -LiteralPath $TocPath -Raw -Encoding UTF8) -Key 'toc_depth'
+    $ReferencesDepthSetting = Get-FrontMatterValue -Content (Get-Content -LiteralPath $TocPath -Raw -Encoding UTF8) -Key 'references_toc_depth'
+    if ($ReferencesDepthSetting) {
+        if ($ReferencesDepthSetting -notin @('1','2')) { throw 'references_toc_depth must be 1 or 2.' }
+        $ReferencesTocDepth = [int]$ReferencesDepthSetting
+    }
+    if ($TocDepthSetting) {
+        if ($TocDepthSetting -notin @('2','3')) { throw 'toc_depth must be 2 or 3.' }
+        $TocDepth = [int]$TocDepthSetting
+    }
+    $SingleSetting = Get-FrontMatterValue -Content (Get-Content -LiteralPath $TocPath -Raw -Encoding UTF8) -Key 'single_subheading_policy'
+    if ($SingleSetting) {
+        if ($SingleSetting -notin @('body','keep')) { throw 'single_subheading_policy must be body or keep.' }
+        $SingleSubheadingPolicy = $SingleSetting
+    }
+    if ($DepthSetting) {
+        if ($DepthSetting -notin @('2','3')) { throw 'frontmatter_heading_depth must be 2 or 3.' }
+        $FrontmatterHeadingDepth = [int]$DepthSetting
+    }
+}
 $ReferenceLabels = @{}
 $ReferencesPath = Join-Path $ChapterRoot 'references.md'
 if (Test-Path -LiteralPath $ReferencesPath) {
@@ -448,6 +483,9 @@ foreach ($file in $mdFiles) {
     $Raw = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     $Body = Get-MarkdownBodyText -Content $Raw
     $Body = Convert-ToBookBuildMarkdown -Body $Body -BookStructure $BookStructure -SeenChapterTitles $SeenChapterTitles
+    if ($file.Name -eq 'references.md' -and $ReferencesTocDepth -eq 1) {
+        $Body = Convert-SageReferenceGroupHeadings -Content $Body
+    }
     $Body = Convert-SageAssetReferencesForBuild -Content $Body
     # Resolve 04R labels only in the build copy; source hashes remain unchanged.
     if ($file.Name -eq 'references.md') {
@@ -513,6 +551,7 @@ $PandocArgs += "-o"
 $PandocArgs += $OutputFile
 $PandocArgs += "--resource-path=$BuildTempRoot"
 $PandocArgs += "--toc"
+$PandocArgs += "--toc-depth=$TocDepth"
 $PandocArgs += "--standalone"
 if ($CoverImagePath) {
     $PandocArgs += "--epub-cover-image=$CoverTempPath"

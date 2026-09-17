@@ -36,6 +36,10 @@ $PdfPath = Join-Path $OutputRoot "$BookName`_full.pdf"
 $BackupRoot = Join-Path $OutputRoot "back"
 $BackupFile = $null
 
+$CheckRoot = if ($LanguageCode -eq 'zh') { $BookRoot } else { Join-Path $BookRoot ("03_translation/" + $LanguageCode) }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
+if ($LASTEXITCODE -ne 0) { throw 'PDF blocked by format preflight. Run 04F.ps1 first.' }
+
 function Invoke-StableDocxBuild {
     param(
         [Parameter(Mandatory = $true)]
@@ -136,21 +140,7 @@ try {
     Invoke-StableDocxBuild -ScriptPath $BuildScriptPath -TargetBookName $BookName -EnableAutoNumber:$AutoNumber
 }
 catch {
-    if ((Test-Path $DocxPath) -and $_.Exception.Message -match "failed with exit code 1") {
-        Write-Host ""
-        Write-Host "DOCX rebuild is currently blocked. Falling back to the existing DOCX file:"
-        Write-Host $DocxPath
-        $UsingExistingDocx = $true
-    }
-    else {
-        Fail-SageStep -Context $Context -Step "build_pdf" -Message "DOCX build prerequisite failed." -Data @{
-            docx_output = $DocxPath
-            error = $_.Exception.Message
-            language = $LanguageCode
-        }
-        Write-Error "DOCX build prerequisite failed: $($_.Exception.Message)"
-        exit 1
-    }
+    throw "DOCX rebuild failed; exporting an older DOCX is not allowed: $($_.Exception.Message)"
 }
 
 if (!(Test-Path $DocxPath)) {
@@ -189,6 +179,8 @@ if (Test-Path $PdfPath) {
 try {
     Write-Host ""
     Write-Host "Converting DOCX to PDF via Microsoft Word..."
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
+    if ($LASTEXITCODE -ne 0) { throw 'Inputs changed during DOCX build; PDF export blocked.' }
     Convert-DocxToPdf -SourceDocx $DocxPath -TargetPdf $PdfPath
 
     if (!(Test-Path $PdfPath)) {
