@@ -31,6 +31,8 @@ Each stage can be run independently from scripts or from the local Web UI.
 
 ## 两种创作工作方式：网页操作与 AI Agent 对话
 
+**安装和操作本系统的 AI Agent 请先阅读 [Agent 调用手册](docs/AGENT-CALLING-GUIDE.md)。** 手册逐项说明00—09及辅助入口的用途、前置条件、输入输出、推荐顺序与人工确认点；具体参数见 [完整PS1参数附录](docs/AGENT-SCRIPT-PARAMETERS.md)。不要按文件编号依次运行全部脚本。
+
 SageWrite 支持两种使用方式。它们不是两套独立的写书系统，而是操作同一套 PowerShell 引擎和书籍工作区的两种入口：**网页模式由人操作界面，Agent 模式由人与 AI 对话，再由 AI 操作系统。** 作者始终负责决定书的思想、结构及修改方向。
 
 ### 方式一：网页工作台
