@@ -19,3 +19,4 @@ engine/webui/node_modules/
 engine/webui/.cache/
 engine/automation/node_modules/
 engine/automation/.cache/
+engine/mcp-server/node_modules/

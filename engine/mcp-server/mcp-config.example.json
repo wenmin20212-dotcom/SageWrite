@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "sagewrite": {
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "D:\\SageWrite\\engine\\mcp-server\\Start-SageWrite-Mcp.ps1",
+        "-WorkspaceRoot",
+        "D:\\SageWriteWorkspaces"
+      ],
+      "env": {
+        "SAGE_LLM_PROVIDER": "codex"
+      }
+    }
+  }
+}
