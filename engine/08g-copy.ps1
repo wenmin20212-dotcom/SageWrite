@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$BookName,
 
@@ -13,6 +13,8 @@ param(
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Ensure-Directory {
     param(
@@ -111,23 +113,6 @@ function Normalize-JsonResponseText {
     return $normalized
 }
 
-function Get-ResponseText {
-    param(
-        [Parameter(Mandatory = $true)]
-        $Response
-    )
-
-    $text = ""
-    foreach ($item in $Response.output) {
-        foreach ($content in $item.content) {
-            if ($content.type -eq "output_text") {
-                $text += $content.text
-            }
-        }
-    }
-    return $text.Trim()
-}
-
 $EnginePath       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SageRoot         = Split-Path -Parent $EnginePath
 $ClawRoot         = Split-Path -Parent $SageRoot
@@ -164,9 +149,8 @@ if ((Test-Path -LiteralPath $CopyJsonPath) -and (-not $Force)) {
     exit 0
 }
 
-if (-not $env:OPENAI_API_KEY) {
-    throw "OPENAI_API_KEY not set."
-}
+$LlmConfig = Get-SageLlmConfig
+$ResolvedModelLabel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 
 $ObjectiveContent = Get-Content -LiteralPath $ObjectivePath -Raw -Encoding UTF8
 $TocContent = Get-Content -LiteralPath $TocPath -Raw -Encoding UTF8
@@ -242,30 +226,13 @@ Requirements:
 10. The copy should reflect the actual content of the book, not generic AI hype.
 "@
 
-$BodyObject = @{
-    model = "gpt-5.2"
-    input = $Prompt
-    max_output_tokens = 2600
-}
-
-$JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-$Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
 try {
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
+    $ResponseText = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig -MaxOutputTokens 2600
 }
 catch {
-    throw "08g-copy API request failed: $($_.Exception.Message)"
+    throw "08g-copy LLM request failed: $($_.Exception.Message)"
 }
 
-$ResponseText = Get-ResponseText -Response $Response
 if ([string]::IsNullOrWhiteSpace($ResponseText)) {
     throw "08g-copy returned empty text."
 }
@@ -298,6 +265,11 @@ $CoverCopy = [ordered]@{
     generated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     book_name = $BookName
     mode = $Mode
+    llm = [ordered]@{
+        provider = $LlmConfig.Provider
+        model = $ResolvedModelLabel
+        api_style = $LlmConfig.ApiStyle
+    }
     source = [ordered]@{
         objective_file = Split-Path -Leaf $ObjectivePath
         toc_file = Split-Path -Leaf $TocPath

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName
 )
@@ -7,6 +7,8 @@ param(
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Get-FrontMatterValue {
     param(
@@ -53,9 +55,23 @@ function Get-MarkdownSectionBody {
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
+$LlmConfig = $null
+try {
+    $LlmConfig = Get-SageLlmConfig
+}
+catch {
+    Fail-SageStep -Context $Context -Step "structure" -Message "LLM configuration is invalid." -Data @{
+        error = $_.Exception.Message
+    }
+    Write-Output "ERROR: LLM configuration is invalid."
+    Write-Output $_.Exception.Message
+    exit 1
+}
 Set-SageCurrentStep -Context $Context -Step "structure" -Data @{
     script = "02-structure.ps1"
-    model = "gpt-5.2"
+    provider = $LlmConfig.Provider
+    model = $LlmConfig.Model
+    api_style = $LlmConfig.ApiStyle
 }
 
 $BookRoot = $Context.BookRoot
@@ -71,13 +87,7 @@ if (!(Test-Path $ObjectivePath)) {
     exit 1
 }
 
-if (-not $env:OPENAI_API_KEY) {
-    Fail-SageStep -Context $Context -Step "structure" -Message "OPENAI_API_KEY not set." -Data @{}
-    Write-Output "ERROR: OPENAI_API_KEY not set."
-    exit 1
-}
-
-$ObjectiveContent = Get-Content $ObjectivePath -Raw
+$ObjectiveContent = Get-Content $ObjectivePath -Raw -Encoding UTF8
 $StyleFromFrontMatter = Get-FrontMatterValue -Content $ObjectiveContent -Key "style"
 $StyleGuideBody = Get-MarkdownSectionBody -Content $ObjectiveContent -Heading "风格指南"
 $ResolvedStyleGuidance = if (-not [string]::IsNullOrWhiteSpace($StyleGuideBody)) {
@@ -146,40 +156,19 @@ Strict Constraints:
 - Do not use '####' or other heading levels
 "@
 
-$BodyObject = @{
-    model = "gpt-5.2"
-    input = $Prompt
-}
-
-$JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-$Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
 try {
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
+    $TocContent = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig
 }
 catch {
-    Fail-SageStep -Context $Context -Step "structure" -Message "OpenAI request failed." -Data @{
+    Fail-SageStep -Context $Context -Step "structure" -Message "LLM request failed." -Data @{
         error = $_.Exception.Message
+        provider = $LlmConfig.Provider
+        model = $LlmConfig.Model
     }
-    Write-Output "ERROR: OpenAI request failed."
-    Write-Output $_
+    Write-Output "ERROR: LLM request failed."
+    Write-Output $_.Exception.Message
     exit 1
 }
-
-if (-not $Response.output) {
-    Fail-SageStep -Context $Context -Step "structure" -Message "Invalid API response." -Data @{}
-    Write-Output "ERROR: Invalid API response."
-    exit 1
-}
-
-$TocContent = $Response.output[0].content[0].text
 
 if (-not $TocContent) {
     Fail-SageStep -Context $Context -Step "structure" -Message "No content returned." -Data @{}
@@ -201,7 +190,9 @@ $TocContent
 
 Complete-SageStep -Context $Context -Step "structure" -State "success" -Message "TOC generated." -Data @{
     toc = $TocPath
-    model = "gpt-5.2"
+    provider = $LlmConfig.Provider
+    model = $LlmConfig.Model
+    api_style = $LlmConfig.ApiStyle
     has_objective_style_guidance = $HasObjectiveStyleGuidance
 }
 

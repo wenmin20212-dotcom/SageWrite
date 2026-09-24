@@ -1,8 +1,8 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
-    [string]$Model = "gpt-5.5",
+    [string]$Model = "",
 
     [int]$Chapter,
 
@@ -23,6 +23,8 @@ $ErrorActionPreference = "Stop"
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Get-FrontMatterValue {
     param(
@@ -84,8 +86,20 @@ function Normalize-MarkdownOutput {
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
+try {
+    $LlmConfig = Get-SageLlmConfig
+    if (-not [string]::IsNullOrWhiteSpace($Model)) {
+        $LlmConfig.Model = $Model
+    }
+}
+catch {
+    Fail-SageStep -Context $Context -Step "write" -Message "LLM configuration is invalid." -Data @{ error = $_.Exception.Message }
+    Write-Output "ERROR: LLM configuration is invalid."
+    Write-Output $_.Exception.Message
+    exit 1
+}
+$ResolvedModelLabel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 Set-SageCurrentStep -Context $Context -Step "write" -Data @{
-    model = $Model
     chapter = $Chapter
     start_chapter = $StartChapter
     end_chapter = $EndChapter
@@ -93,6 +107,9 @@ Set-SageCurrentStep -Context $Context -Step "write" -Data @{
     has_additional_instructions = -not [string]::IsNullOrWhiteSpace($AdditionalInstructions)
     reference_glossary = [bool]$ReferenceGlossary
     force = [bool]$Force
+    provider = $LlmConfig.Provider
+    model = $ResolvedModelLabel
+    api_style = $LlmConfig.ApiStyle
 }
 
 $BookRoot = $Context.BookRoot
@@ -119,13 +136,6 @@ if ($ReferenceGlossary -and !(Test-Path $GlossaryPath)) {
     Write-Output "ERROR: glossary.md not found."
     exit 1
 }
-
-if (-not $env:OPENAI_API_KEY) {
-    Fail-SageStep -Context $Context -Step "write" -Message "OPENAI_API_KEY not set." -Data @{}
-    Write-Output "ERROR: OPENAI_API_KEY not set."
-    exit 1
-}
-
 if (!(Test-Path $ChapterRoot)) {
     New-Item -ItemType Directory -Path $ChapterRoot -Force | Out-Null
 }
@@ -134,10 +144,10 @@ if (!(Test-Path $RewriteNotesRoot)) {
     New-Item -ItemType Directory -Path $RewriteNotesRoot -Force | Out-Null
 }
 
-$TocContent = Get-Content $TocPath -Raw
-$ObjectiveContent = Get-Content $ObjectivePath -Raw
+$TocContent = Get-Content $TocPath -Raw -Encoding UTF8
+$ObjectiveContent = Get-Content $ObjectivePath -Raw -Encoding UTF8
 $GlossaryContent = if ($ReferenceGlossary) {
-    Get-Content $GlossaryPath -Raw
+    Get-Content $GlossaryPath -Raw -Encoding UTF8
 } else {
     ""
 }
@@ -163,7 +173,7 @@ $ResolvedStyleGuidance = if (-not [string]::IsNullOrWhiteSpace($StyleGuideBody))
 }
 $HasObjectiveStyleGuidance = -not [string]::IsNullOrWhiteSpace($ResolvedStyleGuidance)
 
-$ChapterMatches = [regex]::Matches($TocContent, "^###\s+(.+)", "Multiline")
+$ChapterMatches = [regex]::Matches($TocContent, "^##\s+(?!#)(.+)", "Multiline")
 $TotalChapters = $ChapterMatches.Count
 
 if ($TotalChapters -eq 0) {
@@ -319,63 +329,22 @@ Requirements:
 Write the complete section now.
 "@
 
-    $BodyObject = @{
-        model = $Model
-        input = $Prompt
-        max_output_tokens = $MaxTokens
-    }
-
-    $JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-    $Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
     try {
-        $Response = Invoke-RestMethod `
-            -Uri "https://api.openai.com/v1/responses" `
-            -Method Post `
-            -Headers @{
-                "Authorization" = "Bearer $env:OPENAI_API_KEY"
-                "Content-Type"  = "application/json; charset=utf-8"
-            } `
-            -Body $Utf8Bytes
+        $ChapterText = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig -MaxOutputTokens $MaxTokens
     }
     catch {
-        Fail-SageStep -Context $Context -Step "write" -Message "API request failed." -Data @{
+        Fail-SageStep -Context $Context -Step "write" -Message "LLM request failed." -Data @{
             chapter_index = $i
             chapter_title = $ChapterTitle
             error = $_.Exception.Message
         }
-        Write-Output "ERROR: API request failed."
+        Write-Output "ERROR: LLM request failed."
         exit 1
     }
 
     $ChapterInputTokens = 0
     $ChapterOutputTokens = 0
     $ChapterTotalTokens = 0
-
-    if ($Response.usage) {
-        if ($Response.usage.input_tokens)  {
-            $ChapterInputTokens = [int]$Response.usage.input_tokens
-            $TotalInputTokens += $ChapterInputTokens
-        }
-        if ($Response.usage.output_tokens) {
-            $ChapterOutputTokens = [int]$Response.usage.output_tokens
-            $TotalOutputTokens += $ChapterOutputTokens
-        }
-        if ($Response.usage.total_tokens)  {
-            $ChapterTotalTokens = [int]$Response.usage.total_tokens
-            $TotalTokens += $ChapterTotalTokens
-        }
-    }
-
-    $ChapterText = ""
-
-    foreach ($item in $Response.output) {
-        foreach ($content in $item.content) {
-            if ($content.type -eq "output_text") {
-                $ChapterText += $content.text
-            }
-        }
-    }
 
     if (-not $ChapterText) {
         Fail-SageStep -Context $Context -Step "write" -Message "Empty response." -Data @{
@@ -394,7 +363,9 @@ file_role: chapter
 chapter_index: $i
 title: "$ChapterTitle"
 generated_at: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-model: $Model
+provider: $($LlmConfig.Provider)
+model: $ResolvedModelLabel
+api_style: $($LlmConfig.ApiStyle)
 max_tokens: $MaxTokens
 input_tokens: $ChapterInputTokens
 output_tokens: $ChapterOutputTokens
@@ -419,7 +390,9 @@ Complete-SageStep -Context $Context -Step "write" -State "success" -Message "Cha
     input_tokens_total = $TotalInputTokens
     output_tokens_total = $TotalOutputTokens
     total_tokens_total = $TotalTokens
-    model = $Model
+    provider = $LlmConfig.Provider
+    model = $ResolvedModelLabel
+    api_style = $LlmConfig.ApiStyle
     has_objective_style_guidance = $HasObjectiveStyleGuidance
     has_additional_instructions = $HasAdditionalInstructions
     reference_glossary = [bool]$ReferenceGlossary
@@ -427,7 +400,7 @@ Complete-SageStep -Context $Context -Step "write" -State "success" -Message "Cha
 }
 
 Write-Output "SUCCESS: $GeneratedCount chapter(s) generated."
-Write-Output "Model: $Model"
+Write-Output "Model: $ResolvedModelLabel"
 if ($ReferenceGlossary) {
     Write-Output "Reference glossary: $GlossaryPath"
 }

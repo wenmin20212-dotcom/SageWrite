@@ -1,17 +1,22 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$BookName,
 
     [string]$Language = "zh",
 
-    [switch]$AutoNumber
+    [switch]$AutoNumber,
+
+    [string]$OutputPath
 )
 
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
-chcp 65001 | Out-Null
+$ChcpPath = Join-Path $env:SystemRoot "System32\chcp.com"
+if (Test-Path $ChcpPath) {
+    & $ChcpPath 65001 | Out-Null
+}
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
@@ -32,12 +37,19 @@ $BookRoot = $Context.BookRoot
 $OutputRoot = Join-Path $BookRoot ("04_output\" + $LanguageCode)
 $BuildScriptPath = Join-Path $Context.EnginePath "05-build.ps1"
 $DocxPath = Join-Path $OutputRoot "$BookName`_full.docx"
-$PdfPath = Join-Path $OutputRoot "$BookName`_full.pdf"
+$PdfPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    Join-Path $OutputRoot "$BookName`_full.pdf"
+}
+else {
+    [System.IO.Path]::GetFullPath($OutputPath)
+}
+$CoverPath = Join-Path $BookRoot "00_intake\cover.png"
 $BackupRoot = Join-Path $OutputRoot "back"
 $BackupFile = $null
 
 $CheckRoot = if ($LanguageCode -eq 'zh') { $BookRoot } else { Join-Path $BookRoot ("03_translation/" + $LanguageCode) }
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
+$PowerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+& $PowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
 if ($LASTEXITCODE -ne 0) { throw 'PDF blocked by format preflight. Run 04F.ps1 first.' }
 
 function Invoke-StableDocxBuild {
@@ -71,7 +83,8 @@ function Invoke-StableDocxBuild {
         $Args += "-AutoNumber"
     }
 
-    & powershell.exe @Args
+    $PowerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    & $PowerShellPath @Args
     $ExitCode = $LASTEXITCODE
     if ($ExitCode -ne 0) {
         throw "05-build.ps1 failed with exit code $ExitCode."
@@ -84,7 +97,9 @@ function Convert-DocxToPdf {
         [string]$SourceDocx,
 
         [Parameter(Mandatory = $true)]
-        [string]$TargetPdf
+        [string]$TargetPdf,
+
+        [string]$CoverImage
     )
 
     $Word = $null
@@ -95,6 +110,36 @@ function Convert-DocxToPdf {
         $Word.DisplayAlerts = 0
 
         $Document = $Word.Documents.Open($SourceDocx, $false, $true)
+        if (-not [string]::IsNullOrWhiteSpace($CoverImage) -and (Test-Path -LiteralPath $CoverImage)) {
+            $CoverRange = $Document.Range(0, 0)
+            $CoverShape = $Document.InlineShapes.AddPicture($CoverImage, $false, $true, $CoverRange)
+            $CoverShape.LockAspectRatio = -1
+
+            $Section = $Document.Sections.Item(1)
+            $Section.PageSetup.DifferentFirstPageHeaderFooter = -1
+            $Section.Headers.Item(2).Range.Text = ""
+            $Section.Footers.Item(2).Range.Text = ""
+            $AvailableWidth = $Section.PageSetup.PageWidth - $Section.PageSetup.LeftMargin - $Section.PageSetup.RightMargin
+            $AvailableHeight = $Section.PageSetup.PageHeight - $Section.PageSetup.TopMargin - $Section.PageSetup.BottomMargin
+            if (($CoverShape.Width / $CoverShape.Height) -gt ($AvailableWidth / $AvailableHeight)) {
+                $CoverShape.Width = $AvailableWidth
+            }
+            else {
+                $CoverShape.Height = $AvailableHeight
+            }
+
+            $CoverShape.Range.ParagraphFormat.Alignment = 1
+            $AfterCover = $Document.Range($CoverShape.Range.End, $CoverShape.Range.End)
+            $AfterCover.InsertBreak(7)
+        }
+        try {
+            [void]$Document.Fields.Update()
+            foreach ($Toc in @($Document.TablesOfContents)) {
+                [void]$Toc.Update()
+            }
+        }
+        catch {
+        }
         $wdFormatPDF = 17
         $Document.SaveAs([ref]$TargetPdf, [ref]$wdFormatPDF)
     }
@@ -179,9 +224,9 @@ if (Test-Path $PdfPath) {
 try {
     Write-Host ""
     Write-Host "Converting DOCX to PDF via Microsoft Word..."
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
+    & $PowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
     if ($LASTEXITCODE -ne 0) { throw 'Inputs changed during DOCX build; PDF export blocked.' }
-    Convert-DocxToPdf -SourceDocx $DocxPath -TargetPdf $PdfPath
+    Convert-DocxToPdf -SourceDocx $DocxPath -TargetPdf $PdfPath -CoverImage $CoverPath
 
     if (!(Test-Path $PdfPath)) {
         throw "PDF was not created."

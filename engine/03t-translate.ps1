@@ -1,11 +1,11 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
     [Parameter(Mandatory=$true)]
     [string]$Language,
 
-    [string]$Model = "gpt-5.2",
+    [string]$Model = "",
 
     [int]$MaxOutputTokens = 16000,
 
@@ -24,6 +24,8 @@ $ErrorActionPreference = "Stop"
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Get-LanguageProfile {
     param(
@@ -112,9 +114,6 @@ function Invoke-TranslatedMarkdown {
         [string]$RelativePath,
 
         [Parameter(Mandatory=$true)]
-        [string]$ModelName,
-
-        [Parameter(Mandatory=$true)]
         [int]$MaxOutputTokens
     )
 
@@ -138,32 +137,7 @@ Rules:
 $SourceText
 "@
 
-    $BodyObject = @{
-        model = $ModelName
-        input = $Prompt
-        max_output_tokens = $MaxOutputTokens
-    }
-
-    $JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-    $Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
-
-    $OutputText = ""
-    foreach ($item in $Response.output) {
-        foreach ($content in $item.content) {
-            if ($content.type -eq "output_text") {
-                $OutputText += $content.text
-            }
-        }
-    }
+    $OutputText = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig -MaxOutputTokens $MaxOutputTokens
 
     if ([string]::IsNullOrWhiteSpace($OutputText)) {
         throw "Empty translation response for $RelativePath"
@@ -172,18 +146,6 @@ $SourceText
     $InputTokens = 0
     $OutputTokens = 0
     $TotalTokens = 0
-    if ($Response.usage) {
-        if ($null -ne $Response.usage.input_tokens) {
-            $InputTokens = [int]$Response.usage.input_tokens
-        }
-        if ($null -ne $Response.usage.output_tokens) {
-            $OutputTokens = [int]$Response.usage.output_tokens
-        }
-        if ($null -ne $Response.usage.total_tokens) {
-            $TotalTokens = [int]$Response.usage.total_tokens
-        }
-    }
-
     return @{
         content = (Normalize-MarkdownOutput -Content $OutputText)
         usage = @{
@@ -209,6 +171,19 @@ function Save-Utf8File {
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
+try {
+    $LlmConfig = Get-SageLlmConfig
+    if (-not [string]::IsNullOrWhiteSpace($Model)) {
+        $LlmConfig.Model = $Model
+    }
+}
+catch {
+    Fail-SageStep -Context $Context -Step "translate" -Message "LLM configuration is invalid." -Data @{ error = $_.Exception.Message }
+    Write-Output "ERROR: LLM configuration is invalid."
+    Write-Output $_.Exception.Message
+    exit 1
+}
+$ResolvedModelLabel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 
 $LanguageProfile = Get-LanguageProfile -LanguageCode $Language
 $TargetCode = $LanguageProfile.code
@@ -216,13 +191,15 @@ $TargetLanguageName = $LanguageProfile.name
 
 Set-SageCurrentStep -Context $Context -Step "translate" -Data @{
     language = $TargetCode
-    model = $Model
     max_output_tokens = $MaxOutputTokens
     chapter = $Chapter
     start_chapter = $StartChapter
     end_chapter = $EndChapter
     all = [bool]$All
     force = [bool]$Force
+    provider = $LlmConfig.Provider
+    model = $ResolvedModelLabel
+    api_style = $LlmConfig.ApiStyle
 }
 
 $BookRoot = $Context.BookRoot
@@ -251,12 +228,6 @@ if (!(Test-Path $TocPath)) {
 if (!(Test-Path $ChapterRoot)) {
     Fail-SageStep -Context $Context -Step "translate" -Message "02_chapters not found." -Data @{ chapters = $ChapterRoot; language = $TargetCode }
     Write-Output "ERROR: 02_chapters not found."
-    exit 1
-}
-
-if (-not $env:OPENAI_API_KEY) {
-    Fail-SageStep -Context $Context -Step "translate" -Message "OPENAI_API_KEY not set." -Data @{ language = $TargetCode }
-    Write-Output "ERROR: OPENAI_API_KEY not set."
     exit 1
 }
 
@@ -414,7 +385,7 @@ foreach ($item in $CommonSourceFiles) {
     Write-Output "Translating $($item.relative) -> $TargetCode"
     try {
         $SourceText = Get-Content -LiteralPath $item.source -Raw -Encoding UTF8
-        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole $item.role -RelativePath $item.relative -ModelName $Model -MaxOutputTokens $MaxOutputTokens
+        $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole $item.role -RelativePath $item.relative -MaxOutputTokens $MaxOutputTokens
         Save-Utf8File -Path $item.target -Content $Result.content
 
         $TranslatedFiles += $item.relative
@@ -452,7 +423,7 @@ else {
 
         try {
             $SourceText = Get-Content -LiteralPath $ChapterFile.FullName -Raw -Encoding UTF8
-            $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole "chapter" -RelativePath $RelativePath -ModelName $Model -MaxOutputTokens $MaxOutputTokens
+            $Result = Invoke-TranslatedMarkdown -SourceText $SourceText -TargetLanguageName $TargetLanguageName -FileRole "chapter" -RelativePath $RelativePath -MaxOutputTokens $MaxOutputTokens
             Save-Utf8File -Path $TargetChapterPath -Content $Result.content
 
             $TranslatedFiles += $RelativePath
@@ -491,7 +462,9 @@ $Manifest = [ordered]@{
         input_tokens = $TotalInputTokens
         output_tokens = $TotalOutputTokens
         total_tokens = $TotalTokens
-        model = $Model
+        provider = $LlmConfig.Provider
+        model = $ResolvedModelLabel
+        api_style = $LlmConfig.ApiStyle
         max_output_tokens = $MaxOutputTokens
     }
 }
@@ -501,7 +474,6 @@ $Manifest | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $ManifestPath -Enco
 $Duration = [math]::Round(((Get-Date) - $StartTime).TotalSeconds, 2)
 Complete-SageStep -Context $Context -Step "translate" -State "success" -Message "Translation completed." -Data @{
     language = $TargetCode
-    model = $Model
     max_output_tokens = $MaxOutputTokens
     translated_file_count = $TranslatedFiles.Count
     skipped_file_count = $SkippedFiles.Count
@@ -511,9 +483,12 @@ Complete-SageStep -Context $Context -Step "translate" -State "success" -Message 
     input_tokens_total = $TotalInputTokens
     output_tokens_total = $TotalOutputTokens
     total_tokens_total = $TotalTokens
+    provider = $LlmConfig.Provider
+    model = $ResolvedModelLabel
+    api_style = $LlmConfig.ApiStyle
 }
 
 Write-Output "SUCCESS: Translation completed for $TargetCode."
-Write-Output "Model: $Model"
+Write-Output "Model: $ResolvedModelLabel"
 Write-Output "Token usage total: input=$TotalInputTokens, output=$TotalOutputTokens, total=$TotalTokens"
 Write-Output "Output root: $TranslationRoot"

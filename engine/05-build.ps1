@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
@@ -10,7 +10,10 @@ param(
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
-chcp 65001 | Out-Null
+$ChcpPath = Join-Path $env:SystemRoot "System32\chcp.com"
+if (Test-Path $ChcpPath) {
+    & $ChcpPath 65001 | Out-Null
+}
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
@@ -266,8 +269,9 @@ function Get-TitlePageTitle {
         return $Normalized
     }
 
-    if ($Normalized.Length -ge 18 -and $Normalized -match "^(.*?[:：])\s*(.+)$") {
-        return "$($Matches[1].Trim())`r`n$($Matches[2].Trim())"
+    $ColonIndex = $Normalized.IndexOf(':')
+    if ($Normalized.Length -ge 18 -and $ColonIndex -gt 0 -and $ColonIndex -lt ($Normalized.Length - 1)) {
+        return "$($Normalized.Substring(0, $ColonIndex + 1).Trim())`r`n$($Normalized.Substring($ColonIndex + 1).Trim())"
     }
 
     return $Normalized

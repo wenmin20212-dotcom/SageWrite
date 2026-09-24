@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
@@ -12,22 +12,38 @@ param(
     [int]$MinSubsections = 3,
     [int]$MaxSubsections = 5,
 
-    [string]$Model = "gpt-4o-mini"
+    [string]$Model = ""
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
+try {
+    $LlmConfig = Get-SageLlmConfig
+    if (-not [string]::IsNullOrWhiteSpace($Model)) {
+        $LlmConfig.Model = $Model
+    }
+}
+catch {
+    Fail-SageStep -Context $Context -Step "expand" -Message "LLM configuration is invalid." -Data @{ error = $_.Exception.Message }
+    Write-Output "ERROR: LLM configuration is invalid."
+    Write-Output $_.Exception.Message
+    exit 1
+}
 Set-SageCurrentStep -Context $Context -Step "expand" -Data @{
     mode = if ($All) { "all" } elseif ($Chapter) { "chapter" } else { "range" }
     chapter = $Chapter
     start_chapter = $StartChapter
     end_chapter = $EndChapter
-    model = $Model
+    provider = $LlmConfig.Provider
+    model = $LlmConfig.Model
+    api_style = $LlmConfig.ApiStyle
 }
 
 $BookRoot = $Context.BookRoot
@@ -48,35 +64,8 @@ if (!(Test-Path $TocPath)) {
     exit 1
 }
 
-if (-not $env:OPENAI_API_KEY) {
-    Fail-SageStep -Context $Context -Step "expand" -Message "OPENAI_API_KEY not set." -Data @{}
-    Write-Output "ERROR: OPENAI_API_KEY not set."
-    exit 1
-}
-
-function Invoke-OpenAIResponse($Prompt) {
-    $BodyObject = @{
-        model = $Model
-        input = $Prompt
-    }
-
-    $Json = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Json)
-
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Bytes
-
-    return $Response.output[0].content[0].text
-}
-
-$ObjectiveContent = Get-Content $ObjectivePath -Raw
-$TocContent       = Get-Content $TocPath -Raw
+$ObjectiveContent = Get-Content $ObjectivePath -Raw -Encoding UTF8
+$TocContent       = Get-Content $TocPath -Raw -Encoding UTF8
 
 $Lines = $TocContent -split "`n"
 $Chapters = @()
@@ -186,15 +175,15 @@ Output only titles, one per line.
 "@
 
         try {
-            $Result = Invoke-OpenAIResponse $Prompt
+            $Result = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig
         }
         catch {
-            Fail-SageStep -Context $Context -Step "expand" -Message "OpenAI request failed during subsection expansion." -Data @{
+            Fail-SageStep -Context $Context -Step "expand" -Message "LLM request failed during subsection expansion." -Data @{
                 chapter_index = $chIndex
                 section = $sec
                 error = $_.Exception.Message
             }
-            Write-Output "ERROR: OpenAI request failed."
+            Write-Output "ERROR: LLM request failed."
             exit 1
         }
 
@@ -221,7 +210,9 @@ Complete-SageStep -Context $Context -Step "expand" -State "success" -Message "Ex
     chapter_count = $ChapterList.Count
     min_subsections = $MinSubsections
     max_subsections = $MaxSubsections
-    model = $Model
+    provider = $LlmConfig.Provider
+    model = $LlmConfig.Model
+    api_style = $LlmConfig.ApiStyle
 }
 
 Write-Output "SUCCESS: toc2.md updated."
