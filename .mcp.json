@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "sagewrite": {
+      "type": "stdio",
+      "command": "C:\\Users\\1000\\AppData\\Local\\OpenAI\\Codex\\runtimes\\cua_node\\df473e5367fa2b42\\bin\\node.exe",
+      "args": [
+        "D:\\SageWrite\\engine\\mcp-server\\src\\index.mjs"
+      ],
+      "env": {
+        "SAGEWRITE_WORKSPACE_ROOT": "D:\\SageWriteWorkspaces",
+        "SAGEWRITE_POWERSHELL": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      },
+      "alwaysLoad": true,
+      "description": "SageWrite book planning, writing, editing, cover, EPUB and PDF tools"
+    }
+  }
+}

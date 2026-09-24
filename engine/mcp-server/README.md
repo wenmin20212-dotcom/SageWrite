@@ -22,6 +22,12 @@ Copy `mcp-config.example.json` into your MCP host configuration and adjust the a
 
 If `node.exe` is not on `PATH`, set `SAGEWRITE_NODE_PATH` to its absolute path in the host configuration.
 
+## CodeBuddy
+
+The repository root contains a machine-specific `.mcp.json` for CodeBuddy. Open `D:\SageWrite` as the CodeBuddy project, then open **CodeBuddy Settings > MCP**. The `sagewrite` server should appear and become green after **Try to Run**.
+
+CodeBuddy may request approval before enabling a project MCP server. Approve `sagewrite` for this project when prompted. The configuration uses `alwaysLoad: true`, so CodeBuddy connects before the first prompt and reports startup failures immediately.
+
 ## Tools
 
 - `sagewrite_project_status`
