@@ -31,6 +31,7 @@ CodeBuddy may request approval before enabling a project MCP server. Approve `sa
 ## Tools
 
 - `sagewrite_project_status`
+- `sagewrite_import_structure`
 - `sagewrite_initialize_book`
 - `sagewrite_generate_toc`
 - `sagewrite_expand_outline`
