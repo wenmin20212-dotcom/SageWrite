@@ -1,8 +1,8 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
-    [string]$Model = "gpt-5.5",
+    [string]$Model = "",
 
     [int]$Chapter,
 
@@ -36,6 +36,8 @@ $ErrorActionPreference = "Stop"
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Save-Utf8File {
     param(
@@ -148,38 +150,15 @@ function Invoke-SageTextGeneration {
         [string]$Prompt,
 
         [Parameter(Mandatory=$true)]
+        [AllowEmptyString()]
         [string]$ModelName,
 
         [Parameter(Mandatory=$true)]
         [int]$OutputTokenLimit
     )
 
-    $BodyObject = @{
-        model = $ModelName
-        input = $Prompt
-        max_output_tokens = $OutputTokenLimit
-    }
-
-    $JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-    $Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
-
-    $OutputText = ""
-    foreach ($Item in $Response.output) {
-        foreach ($Content in $Item.content) {
-            if ($Content.type -eq "output_text") {
-                $OutputText += $Content.text
-            }
-        }
-    }
+    $CallConfig = Copy-SageLlmConfig -Config (Get-SageLlmConfig) -ModelOverride $ModelName
+    $OutputText = Invoke-SageLlmText -Prompt $Prompt -Config $CallConfig -MaxOutputTokens $OutputTokenLimit
 
     if ([string]::IsNullOrWhiteSpace($OutputText)) {
         throw "AI response was empty."
@@ -188,17 +167,6 @@ function Invoke-SageTextGeneration {
     $InputTokens = 0
     $OutputTokens = 0
     $TotalTokens = 0
-    if ($Response.usage) {
-        if ($null -ne $Response.usage.input_tokens) {
-            $InputTokens = [int]$Response.usage.input_tokens
-        }
-        if ($null -ne $Response.usage.output_tokens) {
-            $OutputTokens = [int]$Response.usage.output_tokens
-        }
-        if ($null -ne $Response.usage.total_tokens) {
-            $TotalTokens = [int]$Response.usage.total_tokens
-        }
-    }
 
     return @{
         content = (Normalize-MarkdownOutput -Content $OutputText)
@@ -779,10 +747,6 @@ if (!(Test-Path -LiteralPath $TocPath)) {
 if (!(Test-Path -LiteralPath $ChapterRoot)) {
     throw "chapter root not found: $ChapterRoot"
 }
-if (-not $DryRun -and -not $env:OPENAI_API_KEY) {
-    throw "OPENAI_API_KEY not set. Use -DryRun for local validation without AI calls."
-}
-
 if ([string]::IsNullOrWhiteSpace($ExternalBriefPath)) {
     $Candidate = Join-Path $BriefRoot "external_editorial_brief.md"
     if (Test-Path -LiteralPath $Candidate) {

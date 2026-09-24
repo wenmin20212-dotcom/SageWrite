@@ -85,6 +85,24 @@ function Get-SageLlmConfig {
     }
 }
 
+function Copy-SageLlmConfig {
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Config,
+
+        [string]$ModelOverride = ""
+    )
+
+    $Copy = @{}
+    foreach ($Key in $Config.Keys) {
+        $Copy[$Key] = $Config[$Key]
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ModelOverride)) {
+        $Copy.Model = $ModelOverride.Trim()
+    }
+    return $Copy
+}
+
 function Invoke-SageCodexText {
     param(
         [Parameter(Mandatory=$true)]

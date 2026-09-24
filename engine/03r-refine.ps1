@@ -1,11 +1,11 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
     [Parameter(Mandatory=$true)]
     [string]$Language,
 
-    [string]$Model = "gpt-5.2",
+    [string]$Model = "",
 
     [int]$Chapter,
     [int]$StartChapter,
@@ -22,6 +22,8 @@ $ErrorActionPreference = "Stop"
 
 $CommonPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-common.ps1"
 . $CommonPath
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Get-LanguageProfile {
     param(
@@ -290,6 +292,7 @@ function Get-RefineResult {
         [string]$SourceText,
 
         [Parameter(Mandatory=$true)]
+        [AllowEmptyString()]
         [string]$ModelName,
 
         [Parameter(Mandatory=$true)]
@@ -353,32 +356,8 @@ Source markdown:
 $SourceText
 "@
 
-    $BodyObject = @{
-        model = $ModelName
-        input = $Prompt
-        max_output_tokens = 8000
-    }
-
-    $JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-    $Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
-
-    $OutputText = ""
-    foreach ($item in $Response.output) {
-        foreach ($content in $item.content) {
-            if ($content.type -eq "output_text") {
-                $OutputText += $content.text
-            }
-        }
-    }
+    $CallConfig = Copy-SageLlmConfig -Config $LlmConfig -ModelOverride $ModelName
+    $OutputText = Invoke-SageLlmText -Prompt $Prompt -Config $CallConfig -MaxOutputTokens 8000
 
     if ([string]::IsNullOrWhiteSpace($OutputText)) {
         throw "Empty refine response for $RelativePath"
@@ -387,17 +366,6 @@ $SourceText
     $InputTokens = 0
     $OutputTokens = 0
     $TotalTokens = 0
-    if ($Response.usage) {
-        if ($null -ne $Response.usage.input_tokens) {
-            $InputTokens = [int]$Response.usage.input_tokens
-        }
-        if ($null -ne $Response.usage.output_tokens) {
-            $OutputTokens = [int]$Response.usage.output_tokens
-        }
-        if ($null -ne $Response.usage.total_tokens) {
-            $TotalTokens = [int]$Response.usage.total_tokens
-        }
-    }
 
     return @{
         content = (Normalize-MarkdownOutput -Content $OutputText)
@@ -411,16 +379,17 @@ $SourceText
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
+$LlmConfig = Get-SageLlmConfig
+if (-not [string]::IsNullOrWhiteSpace($Model)) {
+    $LlmConfig.Model = $Model.Trim()
+}
 
 $LanguageProfile = Get-LanguageProfile -LanguageCode $Language
 $TargetCode = $LanguageProfile.code
 $TargetLanguageName = $LanguageProfile.name
 $RefinePolicyVersion = "2026-04-18-strict-minimal-v3"
 $NoChangeThreshold = 4
-$SelectedModel = $Model.Trim()
-if ([string]::IsNullOrWhiteSpace($SelectedModel)) {
-    $SelectedModel = "gpt-5.2"
-}
+$SelectedModel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 
 Set-SageCurrentStep -Context $Context -Step "refine_translation" -Data @{
     language = $TargetCode
@@ -449,12 +418,6 @@ if (!(Test-Path $TranslationRoot)) {
 if (!(Test-Path $TargetChapterRoot)) {
     Fail-SageStep -Context $Context -Step "refine_translation" -Message "Translated chapter folder not found." -Data @{ language = $TargetCode; chapter_root = $TargetChapterRoot }
     Write-Output "ERROR: Translated chapter folder not found."
-    exit 1
-}
-
-if (-not $env:OPENAI_API_KEY) {
-    Fail-SageStep -Context $Context -Step "refine_translation" -Message "OPENAI_API_KEY not set." -Data @{ language = $TargetCode }
-    Write-Output "ERROR: OPENAI_API_KEY not set."
     exit 1
 }
 

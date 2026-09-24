@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$BookName,
 
@@ -12,11 +12,13 @@ param(
     [ValidateSet("ebook", "print")]
     [string]$Edition = "ebook",
 
-    [string]$Model = "gpt-5.2"
+    [string]$Model = ""
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
+$LlmPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "00-llm.ps1"
+. $LlmPath
 
 function Ensure-Directory {
     param(
@@ -145,9 +147,11 @@ if ([string]::IsNullOrWhiteSpace($Request)) {
     throw "Request is required."
 }
 
-if (-not $env:OPENAI_API_KEY) {
-    throw "OPENAI_API_KEY not set."
+$LlmConfig = Get-SageLlmConfig
+if (-not [string]::IsNullOrWhiteSpace($Model)) {
+    $LlmConfig.Model = $Model.Trim()
 }
+$ResolvedModelLabel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 
 $Brief = Read-JsonUtf8Safe -Path $BriefJsonPath
 $Strategy = Read-JsonUtf8Safe -Path $StrategyJsonPath
@@ -206,30 +210,13 @@ User request:
 $Request
 "@
 
-$BodyObject = @{
-    model = $Model
-    input = $Prompt
-    max_output_tokens = 1600
-}
-
-$JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-$Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
-
 try {
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
+    $ResponseText = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig -MaxOutputTokens 1600
 }
 catch {
-    throw "07a-cover-assist API request failed: $($_.Exception.Message)"
+    throw "07a-cover-assist LLM request failed: $($_.Exception.Message)"
 }
 
-$ResponseText = Get-ResponseText -Response $Response
 if ([string]::IsNullOrWhiteSpace($ResponseText)) {
     throw "07a-cover-assist returned empty text."
 }
@@ -238,7 +225,9 @@ $AssistantResult = [ordered]@{
     generated_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     book_name    = $BookName
     edition      = $Edition
-    model        = $Model
+    provider     = $LlmConfig.Provider
+    model        = $ResolvedModelLabel
+    api_style    = $LlmConfig.ApiStyle
     request      = $Request
     response     = $ResponseText
     context = [ordered]@{

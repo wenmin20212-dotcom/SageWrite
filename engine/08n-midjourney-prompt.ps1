@@ -1,11 +1,11 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$BookName,
 
     [ValidateSet("ebook", "print")]
     [string]$Edition = "ebook",
 
-    [string]$Model = "gpt-5.2",
+    [string]$Model = "",
 
     [string]$Title,
     [string]$Subtitle,
@@ -15,6 +15,7 @@ param(
 )
 
 . "$PSScriptRoot\08n-common.ps1"
+. "$PSScriptRoot\00-llm.ps1"
 
 function Get-ResponseText {
     param(
@@ -65,9 +66,11 @@ if (-not $ChiefPath) {
 }
 Assert-FileExists -Path $TocPath -Description "toc.md"
 
-if (-not $env:OPENAI_API_KEY) {
-    throw "OPENAI_API_KEY not set."
+$LlmConfig = Get-SageLlmConfig
+if (-not [string]::IsNullOrWhiteSpace($Model)) {
+    $LlmConfig.Model = $Model.Trim()
 }
+$ResolvedModelLabel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 
 $ChiefContent = Get-Content -LiteralPath $ChiefPath -Raw -Encoding UTF8
 $TocContent = Get-Content -LiteralPath $TocPath -Raw -Encoding UTF8
@@ -114,28 +117,13 @@ TOC content:
 $TocContent
 "@
 
-$BodyObject = @{
-    model = $Model
-    input = $Prompt
-    max_output_tokens = $MaxTokens
-}
-
-$JsonString = $BodyObject | ConvertTo-Json -Depth 10 -Compress
-$Utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($JsonString)
 $StartedAt = Get-Date
 
 try {
-    $Response = Invoke-RestMethod `
-        -Uri "https://api.openai.com/v1/responses" `
-        -Method Post `
-        -Headers @{
-            "Authorization" = "Bearer $env:OPENAI_API_KEY"
-            "Content-Type"  = "application/json; charset=utf-8"
-        } `
-        -Body $Utf8Bytes
+    $ResponseText = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig -MaxOutputTokens $MaxTokens
 }
 catch {
-    throw "08n-midjourney-prompt API request failed: $($_.Exception.Message)"
+    throw "08n-midjourney-prompt LLM request failed: $($_.Exception.Message)"
 }
 
 $EndedAt = Get-Date
@@ -144,19 +132,6 @@ $DurationSeconds = [math]::Round(($EndedAt - $StartedAt).TotalSeconds, 2)
 $InputTokens = 0
 $OutputTokens = 0
 $TotalTokens = 0
-if ($Response.usage) {
-    if ($Response.usage.input_tokens) {
-        $InputTokens = [int]$Response.usage.input_tokens
-    }
-    if ($Response.usage.output_tokens) {
-        $OutputTokens = [int]$Response.usage.output_tokens
-    }
-    if ($Response.usage.total_tokens) {
-        $TotalTokens = [int]$Response.usage.total_tokens
-    }
-}
-
-$ResponseText = Get-ResponseText -Response $Response
 if ([string]::IsNullOrWhiteSpace($ResponseText)) {
     throw "08n-midjourney-prompt returned empty text."
 }
@@ -172,8 +147,10 @@ $Report = [ordered]@{
     book_name = $BookName
     edition = $Edition
     script = "08n-midjourney-prompt.ps1"
-    endpoint = "https://api.openai.com/v1/responses"
-    model = $Model
+    provider = $LlmConfig.Provider
+    endpoint = $LlmConfig.Endpoint
+    api_style = $LlmConfig.ApiStyle
+    model = $ResolvedModelLabel
     max_output_tokens = $MaxTokens
     duration_seconds = $DurationSeconds
     source_files = [ordered]@{

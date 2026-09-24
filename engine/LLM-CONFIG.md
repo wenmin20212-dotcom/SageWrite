@@ -6,9 +6,18 @@ All SageWrite scripts that generate text with an LLM read their model connection
 - `02b-expand.ps1`
 - `03-write.ps1`
 - `03t-translate.ps1`
+- `03r-refine.ps1`
+- `04b33-editorial-action-review.ps1`
+- `04c-editorial-loop.ps1`
+- `04c2-third-party-audit.ps1` (passes model selection to the shared writer)
+- `04c3-accepted-audit-rewrite.ps1`
+- `04c44-revision-executor.ps1`
+- `07a-cover-assist.ps1`
 - `08g-copy.ps1`
+- `08n-midjourney-prompt.ps1`
 
 Scripts that do not call an LLM are intentionally unchanged.
+Image editing scripts continue to use the Images API because their multipart request and binary response contract is different from text generation.
 
 ## OpenAI defaults
 

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$BookName,
 
@@ -15,7 +15,7 @@ param(
 
     [int]$EndChapter,
 
-    [string]$AuthorModel = "gpt-5.5",
+    [string]$AuthorModel = "",
 
     [int]$RewriteMaxTokens = 7000,
 
