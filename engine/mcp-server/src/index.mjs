@@ -58,17 +58,18 @@ function createServer() {
     }
   });
 
-  scriptTool(server, 'sagewrite_import_structure', 'Rewrite a structure-oriented source file into a summary, TOC, task list, and one Markdown card per chapter. Use Preview before Apply.', z.object({
+  scriptTool(server, 'sagewrite_import_structure', 'Split a large DOCX or Markdown manuscript into one unchanged Markdown file per chapter. No LLM is used. Use Preview before Apply.', z.object({
     bookName, workspaceRoot,
     sourcePath: z.string().min(1),
     mode: z.enum(['Preview', 'Apply']).default('Preview'),
-    language,
-    model: z.string().optional(),
-    maxOutputTokens: z.number().int().positive().default(16000),
+    chapterHeadingLevel: z.number().int().min(1).max(6).default(1),
+    chapterPattern: z.string().optional(),
+    skipFirstHeading: z.boolean().default(false),
     force: z.boolean().default(false)
   }), '01b-import-structure.ps1', (i) => ({
-    BookName: i.bookName, SourcePath: i.sourcePath, Mode: i.mode, Language: i.language,
-    Model: i.model, MaxOutputTokens: i.maxOutputTokens, Force: i.force
+    BookName: i.bookName, SourcePath: i.sourcePath, Mode: i.mode,
+    ChapterHeadingLevel: i.chapterHeadingLevel, ChapterPattern: i.chapterPattern,
+    SkipFirstHeading: i.skipFirstHeading, Force: i.force
   }));
 
   scriptTool(server, 'sagewrite_initialize_book', 'Create a SageWrite book workspace and objective brief.', z.object({

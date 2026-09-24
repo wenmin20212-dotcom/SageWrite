@@ -2,45 +2,15 @@ param(
     [Parameter(Mandatory=$true)][string]$BookName,
     [Parameter(Mandatory=$true)][string]$SourcePath,
     [ValidateSet('Preview','Apply')][string]$Mode = 'Preview',
-    [string]$Language = 'zh',
-    [string]$Model = '',
-    [int]$MaxOutputTokens = 16000,
+    [ValidateRange(1,6)][int]$ChapterHeadingLevel = 1,
+    [string]$ChapterPattern = '',
+    [switch]$SkipFirstHeading,
     [switch]$Force
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
-
 . (Join-Path $PSScriptRoot '00-common.ps1')
-. (Join-Path $PSScriptRoot '00-llm.ps1')
-
-function Read-StructureSource {
-    param([Parameter(Mandatory=$true)][string]$Path)
-
-    $Resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
-    $Extension = [System.IO.Path]::GetExtension($Resolved).ToLowerInvariant()
-    if ($Extension -in @('.md', '.txt', '.json', '.yaml', '.yml')) {
-        return [System.IO.File]::ReadAllText($Resolved, [System.Text.Encoding]::UTF8)
-    }
-    if ($Extension -eq '.docx') {
-        $Pandoc = Get-Command pandoc -ErrorAction SilentlyContinue
-        if ($null -eq $Pandoc) {
-            throw 'DOCX input requires pandoc on PATH.'
-        }
-        $Text = & $Pandoc.Source $Resolved '-t' 'gfm' 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "pandoc could not read DOCX: $($Text -join "`n")" }
-        return ($Text -join "`n")
-    }
-    throw "Unsupported source type '$Extension'. Use MD, TXT, JSON, YAML, or DOCX."
-}
-
-function ConvertFrom-LlmJson {
-    param([Parameter(Mandatory=$true)][string]$Text)
-    $Clean = $Text.Trim()
-    if ($Clean -match '(?s)^```(?:json)?\s*(.*?)\s*```$') { $Clean = $Matches[1].Trim() }
-    try { return $Clean | ConvertFrom-Json -ErrorAction Stop }
-    catch { throw "LLM output is not valid JSON: $($_.Exception.Message)" }
-}
 
 function Write-Utf8File {
     param([string]$Path, [string]$Content)
@@ -49,209 +19,144 @@ function Write-Utf8File {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($true))
 }
 
-function Backup-ExistingFile {
-    param([string]$Path, [string]$BackupRoot)
-    if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        if (-not (Test-Path -LiteralPath $BackupRoot)) { New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null }
-        Copy-Item -LiteralPath $Path -Destination (Join-Path $BackupRoot ([System.IO.Path]::GetFileName($Path))) -Force
+function Convert-SourceToMarkdown {
+    param([string]$Path, [string]$OutputRoot)
+    $Resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+    $Extension = [System.IO.Path]::GetExtension($Resolved).ToLowerInvariant()
+    if ($Extension -in @('.md', '.markdown', '.txt')) {
+        return [System.IO.File]::ReadAllText($Resolved, [System.Text.Encoding]::UTF8)
     }
+    if ($Extension -ne '.docx') { throw "Unsupported source type '$Extension'. Use DOCX, MD, MARKDOWN, or TXT." }
+    $PandocPath = $env:SAGEWRITE_PANDOC
+    if ([string]::IsNullOrWhiteSpace($PandocPath)) {
+        $Pandoc = Get-Command pandoc -ErrorAction SilentlyContinue
+        if ($null -ne $Pandoc) { $PandocPath = $Pandoc.Source }
+    }
+    if ([string]::IsNullOrWhiteSpace($PandocPath)) {
+        $Candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Pandoc\pandoc.exe'),
+            (Join-Path $env:ProgramFiles 'Pandoc\pandoc.exe')
+        )
+        $PandocPath = $Candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+    if ([string]::IsNullOrWhiteSpace($PandocPath) -or -not (Test-Path -LiteralPath $PandocPath -PathType Leaf)) {
+        throw 'DOCX input requires Pandoc. Install it or set SAGEWRITE_PANDOC to pandoc.exe.'
+    }
+    $MediaRoot = Join-Path $OutputRoot '03_assets\imported-document'
+    New-Item -ItemType Directory -Path $MediaRoot -Force | Out-Null
+    $TempMarkdown = Join-Path $OutputRoot '_converted-source.md'
+    $PandocOutput = & $PandocPath $Resolved '--from=docx' '--to=gfm+footnotes' '--wrap=none' "--extract-media=$MediaRoot" '--output' $TempMarkdown 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "pandoc could not convert DOCX: $($PandocOutput -join "`n")" }
+    $Markdown = [System.IO.File]::ReadAllText($TempMarkdown, [System.Text.Encoding]::UTF8)
+    Remove-Item -LiteralPath $TempMarkdown -Force
+    $ForwardMediaRoot = $MediaRoot -replace '\\', '/'
+    $Markdown = $Markdown.Replace($ForwardMediaRoot, '../03_assets/imported-document')
+    return $Markdown.Replace($MediaRoot, '../03_assets/imported-document')
 }
 
-function Get-SafeCardName {
-    param([int]$Index, [string]$Title)
-    $Safe = $Title -replace '[\\/:*?"<>|]', '-' -replace '\s+', '-'
-    $Safe = $Safe.Trim(' ', '.', '-')
-    if ($Safe.Length -gt 60) { $Safe = $Safe.Substring(0, 60).TrimEnd('-') }
-    if ([string]::IsNullOrWhiteSpace($Safe)) { $Safe = "chapter-$Index" }
-    return ('{0:D3}-{1}.md' -f $Index, $Safe)
+function Rebase-ChapterHeadings {
+    param([string]$Content, [int]$OriginalLevel, [string]$Title)
+    $Lines = ($Content -replace "`r", '') -split "`n"
+    $Result = @("# $Title")
+    for ($Index = 1; $Index -lt $Lines.Count; $Index++) {
+        $Line = $Lines[$Index]
+        if ($Line -match '^(#{1,6})\s+(.+?)\s*$') {
+            $OldLevel = $Matches[1].Length
+            $NewLevel = [Math]::Min(6, [Math]::Max(2, $OldLevel - $OriginalLevel + 1))
+            $Line = ('#' * $NewLevel) + ' ' + $Matches[2]
+        }
+        $Result += $Line
+    }
+    return (($Result -join "`r`n").Trim() + "`r`n")
+}
+
+function Backup-Path {
+    param([string]$Path, [string]$BackupRoot)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    if (-not (Test-Path -LiteralPath $BackupRoot)) { New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null }
+    Copy-Item -LiteralPath $Path -Destination (Join-Path $BackupRoot ([System.IO.Path]::GetFileName($Path))) -Recurse -Force
 }
 
 $Context = Get-SageContext -ScriptPath $MyInvocation.MyCommand.Path -BookName $BookName
 Initialize-SageObservability -Context $Context
 $ResolvedSource = (Resolve-Path -LiteralPath $SourcePath -ErrorAction Stop).Path
-$SourceContent = Read-StructureSource -Path $ResolvedSource
-if ([string]::IsNullOrWhiteSpace($SourceContent)) { throw 'The structure source file is empty.' }
-
-$LlmConfig = Get-SageLlmConfig
-if (-not [string]::IsNullOrWhiteSpace($Model)) { $LlmConfig.Model = $Model }
-Set-SageCurrentStep -Context $Context -Step 'structure-import' -Data @{
-    source = $ResolvedSource; mode = $Mode; language = $Language
-    provider = $LlmConfig.Provider; model = $LlmConfig.Model
+$Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$OutputRoot = if ($Mode -eq 'Apply') { $Context.BookRoot } else { Join-Path $Context.LogRoot "document-split-preview-$Stamp" }
+New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
+Set-SageCurrentStep -Context $Context -Step 'document-split' -Data @{
+    source = $ResolvedSource; mode = $Mode; chapter_heading_level = $ChapterHeadingLevel
+    chapter_pattern = $ChapterPattern; skip_first_heading = [bool]$SkipFirstHeading
 }
-
-$Prompt = @"
-You are a senior book architect. Transform the supplied structure document into a normalized SageWrite plan.
-
-Language for all generated prose: $Language
-
-SOURCE DOCUMENT (do not invent facts outside it):
---- SOURCE START ---
-$SourceContent
---- SOURCE END ---
-
-Return JSON only. Do not use Markdown fences. Use this exact shape:
-{
-  "title": "book title",
-  "subtitle": "optional subtitle",
-  "author": "optional author",
-  "summary": "a concise overview of the complete work",
-  "audience": "intended readers",
-  "type": "work type",
-  "core_thesis": "central thesis",
-  "scope": "included and excluded scope",
-  "style": "writing and organization style",
-  "chapters": [
-    {
-      "number": 1,
-      "title": "chapter title",
-      "purpose": "what this chapter must accomplish",
-      "source_basis": "which ideas from the source belong here",
-      "sections": [
-        { "number": "1.1", "title": "section title", "task": "specific writing task" }
-      ]
-    }
-  ]
-}
-
-Rules:
-- Preserve the source's intent, ordering, terminology, and boundaries.
-- Consolidate duplicates but do not silently discard unique requirements.
-- Every chapter needs at least one section.
-- Chapter and section numbering must be continuous.
-- Each task must be actionable enough for a writer or agent to execute.
-"@
 
 try {
-    $RawResult = Invoke-SageLlmText -Prompt $Prompt -Config $LlmConfig -MaxOutputTokens $MaxOutputTokens
-    $Plan = ConvertFrom-LlmJson -Text $RawResult
-    if ($null -eq $Plan.chapters -or @($Plan.chapters).Count -eq 0) { throw 'The generated plan contains no chapters.' }
+    $Markdown = (Convert-SourceToMarkdown -Path $ResolvedSource -OutputRoot $OutputRoot) -replace "`r", ''
+    if ([string]::IsNullOrWhiteSpace($Markdown)) { throw 'The converted document is empty.' }
+    $HeadingMarks = '#' * $ChapterHeadingLevel
+    $HeadingRegex = [regex]::new("(?m)^$([regex]::Escape($HeadingMarks))(?!#)\s+(.+?)\s*$")
+    $Candidates = @($HeadingRegex.Matches($Markdown))
+    if (-not [string]::IsNullOrWhiteSpace($ChapterPattern)) {
+        try { $TitleRegex = [regex]::new($ChapterPattern) }
+        catch { throw "ChapterPattern is not a valid regular expression: $($_.Exception.Message)" }
+        $Candidates = @($Candidates | Where-Object { $TitleRegex.IsMatch($_.Groups[1].Value.Trim()) })
+    }
+    if ($SkipFirstHeading -and $Candidates.Count -gt 0) { $Candidates = @($Candidates | Select-Object -Skip 1) }
+    if ($Candidates.Count -eq 0) { throw "No chapter headings found. Apply Word Heading $ChapterHeadingLevel to chapter titles, or adjust -ChapterHeadingLevel/-ChapterPattern." }
+
+    $Chapters = @()
+    for ($Index = 0; $Index -lt $Candidates.Count; $Index++) {
+        $Match = $Candidates[$Index]
+        $End = if ($Index + 1 -lt $Candidates.Count) { $Candidates[$Index + 1].Index } else { $Markdown.Length }
+        $Title = $Match.Groups[1].Value.Trim()
+        $Raw = $Markdown.Substring($Match.Index, $End - $Match.Index)
+        $Chapters += [pscustomobject]@{ Number = $Index + 1; Title = $Title; Content = (Rebase-ChapterHeadings -Content $Raw -OriginalLevel $ChapterHeadingLevel -Title $Title) }
+    }
+
+    $Preamble = $Markdown.Substring(0, $Candidates[0].Index).Trim()
+    $ChapterRoot = Join-Path $OutputRoot '02_chapters'
+    $OutlineRoot = Join-Path $OutputRoot '01_outline'
+    $BriefRoot = Join-Path $OutputRoot '00_brief'
+    $ExistingNumeric = if (Test-Path -LiteralPath $ChapterRoot) { @(Get-ChildItem -LiteralPath $ChapterRoot -File -Filter '*.md' | Where-Object { $_.BaseName -match '^\d+$' }) } else { @() }
+    if ($Mode -eq 'Apply' -and $ExistingNumeric.Count -gt 0 -and -not $Force) { throw "02_chapters already contains $($ExistingNumeric.Count) numeric chapter files. Rerun with -Force after reviewing Preview." }
+    if ($Mode -eq 'Apply' -and $Force) {
+        $BackupRoot = Join-Path $Context.BookRoot "back\document-split-$Stamp"
+        Backup-Path -Path $ChapterRoot -BackupRoot $BackupRoot
+        Backup-Path -Path (Join-Path $OutlineRoot 'toc.md') -BackupRoot $BackupRoot
+        Backup-Path -Path (Join-Path $OutlineRoot 'document_split_manifest.json') -BackupRoot $BackupRoot
+        foreach ($File in $ExistingNumeric) { Remove-Item -LiteralPath $File.FullName -Force }
+    }
+
+    New-Item -ItemType Directory -Path $ChapterRoot -Force | Out-Null
+    $Width = [Math]::Max(2, $Chapters.Count.ToString().Length)
+    $TocLines = @('---', 'file_role: toc', 'layer: structure', "generated_at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '---', '', '# Table of Contents', '')
+    $TaskLines = @('# Document Split Checklist', '')
+    foreach ($Chapter in $Chapters) {
+        $FileName = $Chapter.Number.ToString("D$Width") + '.md'
+        Write-Utf8File -Path (Join-Path $ChapterRoot $FileName) -Content $Chapter.Content
+        $TocLines += "## $($Chapter.Title)"
+        $SectionNumber = 0
+        foreach ($Line in (($Chapter.Content -replace "`r", '') -split "`n")) {
+            if ($Line -match '^##\s+(.+?)\s*$') { $SectionNumber++; $TocLines += "### $($Chapter.Number).$SectionNumber $($Matches[1])" }
+        }
+        $TocLines += ''
+        $TaskLines += "- [x] $FileName - $($Chapter.Title)"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Preamble)) { Write-Utf8File -Path (Join-Path $BriefRoot 'imported_frontmatter.md') -Content ($Preamble + "`r`n") }
+    $Summary = @('# Imported Document Summary', '', "- Source: $ResolvedSource", "- Chapters: $($Chapters.Count)", "- Split heading level: $ChapterHeadingLevel", "- Imported at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '', 'This was a format-only split. Chapter prose was not rewritten by an LLM.') -join "`r`n"
+    Write-Utf8File -Path (Join-Path $BriefRoot 'document_import_summary.md') -Content $Summary
+    Write-Utf8File -Path (Join-Path $OutlineRoot 'toc.md') -Content ($TocLines -join "`r`n")
+    Write-Utf8File -Path (Join-Path $OutlineRoot 'document_split_tasks.md') -Content ($TaskLines -join "`r`n")
+    $Manifest = [ordered]@{
+        mode = $Mode; source = $ResolvedSource; output_root = $OutputRoot; chapter_count = $Chapters.Count
+        chapter_heading_level = $ChapterHeadingLevel; chapter_pattern = $ChapterPattern; used_llm = $false
+        generated_at = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); files = @($Chapters | ForEach-Object { $_.Number.ToString("D$Width") + '.md' })
+    }
+    Write-Utf8File -Path (Join-Path $OutlineRoot 'document_split_manifest.json') -Content ($Manifest | ConvertTo-Json -Depth 8)
+    Complete-SageStep -Context $Context -Step 'document-split' -State 'success' -Message 'Document split into chapter Markdown files.' -Data $Manifest
+    Write-Output "SUCCESS: Document split into $($Chapters.Count) chapter Markdown files."
+    Write-Output "MODE: $Mode"
+    Write-Output "OUTPUT: $OutputRoot"
 } catch {
-    Fail-SageStep -Context $Context -Step 'structure-import' -Message 'Structure import failed.' -Data @{ error = $_.Exception.Message }
+    Fail-SageStep -Context $Context -Step 'document-split' -Message 'Document split failed.' -Data @{ error = $_.Exception.Message }
     throw
 }
-
-$ChapterLines = @()
-$TaskLines = @('# Structure Rewrite Tasks', '')
-$Cards = @()
-$ChapterIndex = 0
-foreach ($Chapter in @($Plan.chapters)) {
-    $ChapterIndex++
-    $ChapterTitle = [string]$Chapter.title
-    if ([string]::IsNullOrWhiteSpace($ChapterTitle)) { throw "Chapter $ChapterIndex has no title." }
-    $ChapterLines += "## $ChapterIndex $ChapterTitle"
-    $TaskLines += "## $ChapterIndex $ChapterTitle"
-    $TaskLines += "- [ ] Chapter purpose: $($Chapter.purpose)"
-    $SectionIndex = 0
-    $SectionLines = @()
-    foreach ($Section in @($Chapter.sections)) {
-        $SectionIndex++
-        $Number = "$ChapterIndex.$SectionIndex"
-        $SectionTitle = [string]$Section.title
-        $ChapterLines += "### $Number $SectionTitle"
-        $TaskLines += "- [ ] $Number $SectionTitle - $($Section.task)"
-        $SectionLines += @("## $Number $SectionTitle", '', "**Writing task:** $($Section.task)", '')
-    }
-    if ($SectionIndex -eq 0) { throw "Chapter $ChapterIndex has no sections." }
-    $ChapterLines += ''
-    $TaskLines += ''
-    $CardName = Get-SafeCardName -Index $ChapterIndex -Title $ChapterTitle
-    $CardContent = @(
-        '---', 'file_role: structure_card', "chapter: $ChapterIndex", "title: `"$ChapterTitle`"",
-        "source: `"$ResolvedSource`"", '---', '', "# $ChapterIndex $ChapterTitle", '',
-        '## Purpose', '', [string]$Chapter.purpose, '', '## Source Basis', '', [string]$Chapter.source_basis, ''
-    ) + $SectionLines
-    $Cards += [pscustomobject]@{ Name = $CardName; Content = ($CardContent -join "`r`n") }
-}
-
-$GeneratedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-$SummaryContent = @"
----
-file_role: imported_structure_summary
-layer: constitution
-source: "$ResolvedSource"
-generated_at: $GeneratedAt
----
-
-# $($Plan.title)
-
-## Overview
-
-$($Plan.summary)
-
-## Audience
-
-$($Plan.audience)
-
-## Core Thesis
-
-$($Plan.core_thesis)
-
-## Scope
-
-$($Plan.scope)
-
-## Style
-
-$($Plan.style)
-"@
-$ObjectiveContent = @"
----
-file_role: objective
-layer: constitution
-title: $($Plan.title)
-subtitle: $($Plan.subtitle)
-author: $($Plan.author)
-audience: $($Plan.audience)
-type: $($Plan.type)
-core_thesis: $($Plan.core_thesis)
-scope: $($Plan.scope)
-style: $($Plan.style)
-created_at: $GeneratedAt
-source: "$ResolvedSource"
----
-
-# Book Definition
-
-$($Plan.summary)
-"@
-$TocContent = @("---", 'file_role: toc', 'layer: structure', "generated_at: $GeneratedAt", '---', '', '# Table of Contents', '') + $ChapterLines
-
-$PreviewRoot = Join-Path $Context.LogRoot ('structure-import-preview-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-$OutputRoot = if ($Mode -eq 'Apply') { $Context.BookRoot } else { $PreviewRoot }
-$BriefRoot = Join-Path $OutputRoot '00_brief'
-$OutlineRoot = Join-Path $OutputRoot '01_outline'
-$CardRoot = Join-Path $OutlineRoot 'cards'
-
-if ($Mode -eq 'Apply') {
-    $Targets = @(
-        (Join-Path $BriefRoot 'objective.md'), (Join-Path $OutlineRoot 'toc.md'),
-        (Join-Path $OutlineRoot 'structure_summary.md'), (Join-Path $OutlineRoot 'structure_tasks.md')
-    )
-    $Conflicts = @($Targets | Where-Object { Test-Path -LiteralPath $_ })
-    if ($Conflicts.Count -gt 0 -and -not $Force) {
-        throw "Existing structure files found. Review Preview output, then rerun with -Mode Apply -Force."
-    }
-    $BackupRoot = Join-Path $Context.BookRoot ('back\structure-import-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    foreach ($Target in $Targets) { Backup-ExistingFile -Path $Target -BackupRoot $BackupRoot }
-    if ((Test-Path -LiteralPath $CardRoot) -and $Force) {
-        Copy-Item -LiteralPath $CardRoot -Destination (Join-Path $BackupRoot 'cards') -Recurse -Force
-    }
-}
-
-Write-Utf8File -Path (Join-Path $BriefRoot 'objective.md') -Content $ObjectiveContent
-Write-Utf8File -Path (Join-Path $OutlineRoot 'structure_summary.md') -Content $SummaryContent
-Write-Utf8File -Path (Join-Path $OutlineRoot 'toc.md') -Content ($TocContent -join "`r`n")
-Write-Utf8File -Path (Join-Path $OutlineRoot 'structure_tasks.md') -Content ($TaskLines -join "`r`n")
-foreach ($Card in $Cards) { Write-Utf8File -Path (Join-Path $CardRoot $Card.Name) -Content $Card.Content }
-
-$Manifest = [ordered]@{
-    mode = $Mode; source = $ResolvedSource; output_root = $OutputRoot
-    chapter_count = $ChapterIndex; card_count = $Cards.Count
-    provider = $LlmConfig.Provider; model = $LlmConfig.Model; generated_at = $GeneratedAt
-}
-Write-Utf8File -Path (Join-Path $OutlineRoot 'structure_import_manifest.json') -Content ($Manifest | ConvertTo-Json -Depth 8)
-Complete-SageStep -Context $Context -Step 'structure-import' -State 'success' -Message 'Structure source split successfully.' -Data $Manifest
-
-Write-Output "SUCCESS: Structure source split into $($Cards.Count) Markdown cards."
-Write-Output "MODE: $Mode"
-Write-Output "OUTPUT: $OutputRoot"
