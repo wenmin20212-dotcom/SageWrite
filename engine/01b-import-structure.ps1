@@ -4,6 +4,9 @@ param(
     [ValidateSet('Preview','Apply')][string]$Mode = 'Preview',
     [ValidateRange(1,6)][int]$ChapterHeadingLevel = 1,
     [string]$ChapterPattern = '',
+    [string]$Title = '',
+    [string]$Subtitle = '',
+    [string]$Author = '',
     [switch]$SkipFirstHeading,
     [switch]$Force
 )
@@ -106,9 +109,9 @@ try {
     for ($Index = 0; $Index -lt $Candidates.Count; $Index++) {
         $Match = $Candidates[$Index]
         $End = if ($Index + 1 -lt $Candidates.Count) { $Candidates[$Index + 1].Index } else { $Markdown.Length }
-        $Title = $Match.Groups[1].Value.Trim()
+        $ChapterTitle = $Match.Groups[1].Value.Trim()
         $Raw = $Markdown.Substring($Match.Index, $End - $Match.Index)
-        $Chapters += [pscustomobject]@{ Number = $Index + 1; Title = $Title; Content = (Rebase-ChapterHeadings -Content $Raw -OriginalLevel $ChapterHeadingLevel -Title $Title) }
+        $Chapters += [pscustomobject]@{ Number = $Index + 1; Title = $ChapterTitle; Content = (Rebase-ChapterHeadings -Content $Raw -OriginalLevel $ChapterHeadingLevel -Title $ChapterTitle) }
     }
 
     $Preamble = $Markdown.Substring(0, $Candidates[0].Index).Trim()
@@ -120,7 +123,9 @@ try {
     if ($Mode -eq 'Apply' -and $Force) {
         $BackupRoot = Join-Path $Context.BookRoot "back\document-split-$Stamp"
         Backup-Path -Path $ChapterRoot -BackupRoot $BackupRoot
+        Backup-Path -Path (Join-Path $BriefRoot 'objective.md') -BackupRoot $BackupRoot
         Backup-Path -Path (Join-Path $OutlineRoot 'toc.md') -BackupRoot $BackupRoot
+        Backup-Path -Path (Join-Path $OutlineRoot 'writing_outline.md') -BackupRoot $BackupRoot
         Backup-Path -Path (Join-Path $OutlineRoot 'document_split_manifest.json') -BackupRoot $BackupRoot
         foreach ($File in $ExistingNumeric) { Remove-Item -LiteralPath $File.FullName -Force }
     }
@@ -129,22 +134,52 @@ try {
     $Width = [Math]::Max(2, $Chapters.Count.ToString().Length)
     $TocLines = @('---', 'file_role: toc', 'layer: structure', "generated_at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '---', '', '# Table of Contents', '')
     $TaskLines = @('# Document Split Checklist', '')
+    $OutlineLines = @('---', 'file_role: writing_outline', 'layer: structure', "generated_at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '---', '', '# Writing Outline', '')
     foreach ($Chapter in $Chapters) {
         $FileName = $Chapter.Number.ToString("D$Width") + '.md'
         Write-Utf8File -Path (Join-Path $ChapterRoot $FileName) -Content $Chapter.Content
         $TocLines += "## $($Chapter.Title)"
+        $OutlineLines += "## $($Chapter.Title)"
+        $OutlineLines += ''
+        $OutlineLines += "- Chapter file: $FileName"
+        $OutlineLines += "- Character count: $($Chapter.Content.Length)"
         $SectionNumber = 0
         foreach ($Line in (($Chapter.Content -replace "`r", '') -split "`n")) {
-            if ($Line -match '^##\s+(.+?)\s*$') { $SectionNumber++; $TocLines += "### $($Chapter.Number).$SectionNumber $($Matches[1])" }
+            if ($Line -match '^##\s+(.+?)\s*$') {
+                $SectionNumber++
+                $TocLines += "### $($Chapter.Number).$SectionNumber $($Matches[1])"
+                $OutlineLines += "- Section $($Chapter.Number).${SectionNumber}: $($Matches[1])"
+            }
         }
+        if ($SectionNumber -eq 0) { $OutlineLines += '- Sections: no explicit subheadings detected in the source chapter' }
+        $OutlineLines += ''
         $TocLines += ''
         $TaskLines += "- [x] $FileName - $($Chapter.Title)"
     }
 
     if (-not [string]::IsNullOrWhiteSpace($Preamble)) { Write-Utf8File -Path (Join-Path $BriefRoot 'imported_frontmatter.md') -Content ($Preamble + "`r`n") }
+    $ResolvedTitle = if ([string]::IsNullOrWhiteSpace($Title)) { $BookName } else { $Title.Trim() }
+    $Objective = @(
+        '---', 'file_role: objective', 'layer: constitution', "title: `"$ResolvedTitle`"", "subtitle: `"$Subtitle`"",
+        "author: `"$Author`"", 'type: "imported complete manuscript"',
+        'core_thesis: "Preserve the original manuscript while supporting chapter-level editing and final recombination."',
+        "scope: `"Complete imported manuscript with $($Chapters.Count) chapters.`"",
+        'style: "Preserve the original narrative voice, plot, terminology, and chapter order unless an editor explicitly requests a change."',
+        "source: `"$ResolvedSource`"", "created_at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '---', '',
+        "# $ResolvedTitle", '', '## Import Purpose', '',
+        "This project contains a format-only chapter split of the supplied complete manuscript. The source prose was not rewritten during import.", '',
+        '## Editing Principles', '',
+        '- Preserve the original story, facts, names, chronology, and chapter order by default.',
+        '- Perform later revisions chapter by chapter and record intentional editorial changes.',
+        '- Rebuild the complete book from the numbered Markdown chapter files after review.', '',
+        '## Structure', '', "- Total chapters: $($Chapters.Count)", '- Chapter files: `02_chapters/*.md`',
+        '- Directory: `01_outline/toc.md`', '- Writing outline: `01_outline/writing_outline.md`'
+    ) -join "`r`n"
     $Summary = @('# Imported Document Summary', '', "- Source: $ResolvedSource", "- Chapters: $($Chapters.Count)", "- Split heading level: $ChapterHeadingLevel", "- Imported at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '', 'This was a format-only split. Chapter prose was not rewritten by an LLM.') -join "`r`n"
     Write-Utf8File -Path (Join-Path $BriefRoot 'document_import_summary.md') -Content $Summary
+    Write-Utf8File -Path (Join-Path $BriefRoot 'objective.md') -Content $Objective
     Write-Utf8File -Path (Join-Path $OutlineRoot 'toc.md') -Content ($TocLines -join "`r`n")
+    Write-Utf8File -Path (Join-Path $OutlineRoot 'writing_outline.md') -Content ($OutlineLines -join "`r`n")
     Write-Utf8File -Path (Join-Path $OutlineRoot 'document_split_tasks.md') -Content ($TaskLines -join "`r`n")
     $Manifest = [ordered]@{
         mode = $Mode; source = $ResolvedSource; output_root = $OutputRoot; chapter_count = $Chapters.Count

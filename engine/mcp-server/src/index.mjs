@@ -64,11 +64,13 @@ function createServer() {
     mode: z.enum(['Preview', 'Apply']).default('Preview'),
     chapterHeadingLevel: z.number().int().min(1).max(6).default(1),
     chapterPattern: z.string().optional(),
+    title: z.string().optional(), subtitle: z.string().optional(), author: z.string().optional(),
     skipFirstHeading: z.boolean().default(false),
     force: z.boolean().default(false)
   }), '01b-import-structure.ps1', (i) => ({
     BookName: i.bookName, SourcePath: i.sourcePath, Mode: i.mode,
     ChapterHeadingLevel: i.chapterHeadingLevel, ChapterPattern: i.chapterPattern,
+    Title: i.title, Subtitle: i.subtitle, Author: i.author,
     SkipFirstHeading: i.skipFirstHeading, Force: i.force
   }));
 

@@ -2,7 +2,12 @@
 
 `01b-import-structure.ps1` performs a format-only split of one large DOCX or Markdown document. It does not call an LLM and does not rewrite chapter prose.
 
-For a 36-chapter document, the primary output is `02_chapters/01.md` through `02_chapters/36.md`. It also creates `toc.md`, a split checklist, and a manifest so SageWrite can edit and merge the imported manuscript.
+For a 36-chapter document, the primary output is `02_chapters/01.md` through `02_chapters/36.md`. Every run also creates:
+
+- `00_brief/objective.md`: import purpose and writing/editing principles
+- `01_outline/toc.md`: the book directory
+- `01_outline/writing_outline.md`: chapter files, sizes, and detected sections
+- a split checklist and manifest
 
 Apply the Word **Heading 1** style to every chapter title. Use Heading 2 and lower for sections. Tables, footnotes, paragraphs, and image links are converted by Pandoc.
 
