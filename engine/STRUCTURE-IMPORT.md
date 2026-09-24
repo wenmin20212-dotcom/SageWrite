@@ -7,6 +7,7 @@ For a 36-chapter document, the primary output is `02_chapters/01.md` through `02
 - `00_brief/objective.md`: import purpose and writing/editing principles
 - `01_outline/toc.md`: the book directory
 - `01_outline/writing_outline.md`: chapter files, sizes, and detected sections
+- `01_outline/layout_spec.md`: default A4 typography, chapter-first-page, running-header, and page-number rules
 - a split checklist and manifest
 
 Apply the Word **Heading 1** style to every chapter title. Use Heading 2 and lower for sections. Tables, footnotes, paragraphs, and image links are converted by Pandoc.

@@ -126,6 +126,7 @@ try {
         Backup-Path -Path (Join-Path $BriefRoot 'objective.md') -BackupRoot $BackupRoot
         Backup-Path -Path (Join-Path $OutlineRoot 'toc.md') -BackupRoot $BackupRoot
         Backup-Path -Path (Join-Path $OutlineRoot 'writing_outline.md') -BackupRoot $BackupRoot
+        Backup-Path -Path (Join-Path $OutlineRoot 'layout_spec.md') -BackupRoot $BackupRoot
         Backup-Path -Path (Join-Path $OutlineRoot 'document_split_manifest.json') -BackupRoot $BackupRoot
         foreach ($File in $ExistingNumeric) { Remove-Item -LiteralPath $File.FullName -Force }
     }
@@ -175,11 +176,37 @@ try {
         '## Structure', '', "- Total chapters: $($Chapters.Count)", '- Chapter files: `02_chapters/*.md`',
         '- Directory: `01_outline/toc.md`', '- Writing outline: `01_outline/writing_outline.md`'
     ) -join "`r`n"
+    $LayoutSpec = @(
+        '---', 'file_role: layout_spec', 'layer: production', 'schema_version: 1',
+        'page_size: A4', 'margin_top_cm: 2.3', 'margin_bottom_cm: 2.3',
+        'margin_inner_cm: 2.5', 'margin_outer_cm: 2.2',
+        'body_font_zh: SimSun', 'body_font_western: Times New Roman',
+        'body_font_size_pt: 12', 'line_spacing: 1.5', 'first_line_indent_chars: 2',
+        'chapter_font_zh: SimHei', 'chapter_font_size_pt: 20',
+        'chapter_alignment: center', 'chapter_page_break_before: true',
+        'header_enabled: true', "header_left: `"$ResolvedTitle`"",
+        'header_right: "{chapter_title}"', 'header_chapter_first_page: false',
+        'footer_enabled: true', 'page_number_format: "Page {page} of {pages}"',
+        'page_number_cover: false', 'cover_path: 00_intake/cover.png', '---', '',
+        '# Default Layout Specification', '', '## Page', '',
+        '- Use A4 paper with the margins declared above.',
+        '- Start every chapter on a new page.', '', '## Body', '',
+        '- Use 12 pt SimSun for Chinese and Times New Roman for Western text.',
+        '- Use 1.5 line spacing, no extra paragraph spacing, and a two-character first-line indent.', '',
+        '## Chapters', '', '- Use 20 pt SimHei chapter titles, centered.',
+        '- Include chapter titles in a chapter-level table of contents.', '', '## Running Heads and Folios', '',
+        '- Do not show a running head, footer, or folio on the cover.',
+        '- Do not show a running head on the opening page of any chapter.',
+        "- On later chapter pages, show the book title `$ResolvedTitle` at left and the current Heading 1 chapter title at right.",
+        '- Center the current page and total page count in the footer.', '', '## Cover', '',
+        '- Use `00_intake/cover.png`, preserve its aspect ratio, and center it on the cover page.'
+    ) -join "`r`n"
     $Summary = @('# Imported Document Summary', '', "- Source: $ResolvedSource", "- Chapters: $($Chapters.Count)", "- Split heading level: $ChapterHeadingLevel", "- Imported at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')", '', 'This was a format-only split. Chapter prose was not rewritten by an LLM.') -join "`r`n"
     Write-Utf8File -Path (Join-Path $BriefRoot 'document_import_summary.md') -Content $Summary
     Write-Utf8File -Path (Join-Path $BriefRoot 'objective.md') -Content $Objective
     Write-Utf8File -Path (Join-Path $OutlineRoot 'toc.md') -Content ($TocLines -join "`r`n")
     Write-Utf8File -Path (Join-Path $OutlineRoot 'writing_outline.md') -Content ($OutlineLines -join "`r`n")
+    Write-Utf8File -Path (Join-Path $OutlineRoot 'layout_spec.md') -Content $LayoutSpec
     Write-Utf8File -Path (Join-Path $OutlineRoot 'document_split_tasks.md') -Content ($TaskLines -join "`r`n")
     $Manifest = [ordered]@{
         mode = $Mode; source = $ResolvedSource; output_root = $OutputRoot; chapter_count = $Chapters.Count
