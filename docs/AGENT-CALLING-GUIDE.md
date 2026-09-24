@@ -100,6 +100,10 @@ Web 的 `WorkspaceRoot` 与此环境变量应指向同一父目录。新进程�
 
 ## 5. 04：审稿、返修、参考文献与格式
 
+新增 `04Reference3.ps1 -BookName ... -PlanPath ... -Mode Preview/Apply` 承接04R2的modification_plan JSON，支持可选BookRoot及仅供预览的TaskId。Apply以approval.task_ids限定经用户批准范围，先检查版本、证据和原值，再备份、更新来源、重生成参考文献并执行04R Check；不修改正文。详见[执行器说明](../engine/04Reference3-README.md)及参数附录2026-09-24补充。
+
+新增 `04Reference2.ps1` 用于04R之后的独立复核记录：`-Mode Plan`建立任务与快照，Agent核验后用`-Mode Record -RunId ... -EvidencePath ...`逐条登记，`-Mode Report -RunId ...`汇总。必填BookName，可选BookRoot；不调用模型或改稿，不能替代04R Check。详见[专门说明](../engine/04Reference2-README.md)及参数附录2026-09-24补充。
+
 | 程序 | 输入与调用条件 | 输出与注意事项 |
 | --- | --- | --- |
 | `04-edit.ps1` | BookName；Strict可选；NormalizeSubheadings是写操作 | logs/edit_report.txt、json及历史报告；格式规范化委托04F；不是大模型内容审稿 |

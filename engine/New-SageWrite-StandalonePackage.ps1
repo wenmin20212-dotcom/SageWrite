@@ -39,7 +39,7 @@ if (Test-Path -LiteralPath $OutputPath) {
 }
 
 $Prefix = "SageWrite-$VersionName/"
-& git -c "safe.directory=$RepoRoot" -C $RepoRoot archive --format=zip "--output=$OutputPath" "--prefix=$Prefix" $Ref engine
+& git -c "safe.directory=$RepoRoot" -C $RepoRoot archive --format=zip "--output=$OutputPath" "--prefix=$Prefix" $Ref
 if ($LASTEXITCODE -ne 0) {
   throw "git archive failed."
 }

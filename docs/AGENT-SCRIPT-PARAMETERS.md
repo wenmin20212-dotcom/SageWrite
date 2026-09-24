@@ -1,5 +1,28 @@
 # PS1 参数附录
 
+## 2026-09-24 新增入口
+
+以下两项补充在原87个顶层脚本快照之外；原声明仍保留。参数详情与运行约束分别见04Reference2和04Reference3说明。
+
+```powershell
+# 04Reference2.ps1
+param(
+    [Parameter(Mandatory=$true)][string]$BookName,
+    [ValidateSet('Plan','Record','Report')][string]$Mode = 'Plan',
+    [string]$BookRoot,
+    [string]$RunId,
+    [string]$EvidencePath
+)
+# 04Reference3.ps1
+param(
+    [Parameter(Mandatory=$true)][string]$BookName,
+    [Parameter(Mandatory=$true)][string]$PlanPath,
+    [ValidateSet('Preview','Apply')][string]$Mode = 'Preview',
+    [string]$BookRoot,
+    [string[]]$TaskId
+)
+```
+
 提取日期：2026-09-18。基于 engine 顶层已跟踪的87个PS1文件，使用PowerShell AST只读提取顶层param声明；没有执行这些脚本。声明保留原始参数名、默认值、必填标记和验证集合。公共参数和脚本体内的数据约束不在此表中，实际调用仍需结合[Agent调用手册](AGENT-CALLING-GUIDE.md)与源码。
 
 转发入口04B33、04B34、04C44、04D、04Z1使用目标脚本参数；无param的公共库应点源而不是独立执行。参数声明可用于查询，不是可直接复制执行的业务命令。

@@ -1,5 +1,11 @@
 ﻿.codex/
 .DS_Store
+.env
+.venv/
+.env.*
+!.env.example
+engine/work/
+engine/webui/launchers/
 Thumbs.db
 *.log
 engine/.codex/

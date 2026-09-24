@@ -23,6 +23,8 @@ SageWrite 将 PowerShell 工作流脚本与本地浏览器控制台结合在一�
 
 ## Workflow
 
+中文快速开始：[Codex语音写书九步说明](docs/VOICE-WRITING-WORKFLOW.md)。新电脑恢复环境：[环境与安装清单](docs/ENVIRONMENT-RESTORE.md)。本次锁版：[2026-09-24发布说明](engine/RELEASE-20260924.md)。
+
 The main pipeline is:
 
 `01-intake -> 02-structure -> 02b-expand -> 03-write -> 04-edit -> 05-build`
@@ -112,6 +114,10 @@ SageWrite/
 - `pandoc` installed for the final document build step
 
 ## 大模型配置与服务商兼容性
+
+参考文献的二次核验与可追溯记录见 [04Reference2使用说明](engine/04Reference2-README.md)：由Agent逐条核查，程序保存证据、进度及报告，不将记录完整性误判为学术真实性。
+
+04Reference2会边审核边导出修改计划JSON；经用户确认后，由 [04Reference3执行器](engine/04Reference3-README.md)预览、备份并应用批准的来源字段修改，完成后重新检查。它不会自动重写正文或代替用户批准。
 
 SageWrite 的正文生成、部分编辑审稿等功能需要调用大模型 API；本地格式检查与排版不等同于模型调用。当前 `03-write.ps1` 和 `04b33-editorial-action-review.ps1` 默认模型为 `gpt-5.5`，支持的具体参数以各脚本为准，不能假定所有脚本的默认模型都相同。
 
