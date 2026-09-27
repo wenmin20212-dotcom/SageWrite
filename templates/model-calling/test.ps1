@@ -77,6 +77,8 @@ try {
     & $Shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root 'run.ps1') -OutputPath $Output 2>$null
     $ErrorActionPreference = 'Stop'
     Assert ($LASTEXITCODE -ne 0) 'Refuse accidental overwrite'
+    # GitHub's shell wrapper propagates the last native exit code.
+    $global:LASTEXITCODE = 0
     Write-Output 'PASS: offline handoff, validation, isolation, configuration and command replay'
 }
 finally {
