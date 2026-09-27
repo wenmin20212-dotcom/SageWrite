@@ -63,7 +63,7 @@ SageWrite 支持两种使用方式。它们不是两套独立的写书系统，�
 
 例如，用户可以说：“只调整第十三章目录，先不要写正文。”Agent 应只修改相关目录；用户说“按定稿目录写13.1”后，才进入正文生成。用户要求小修时，不得自行重写整章或重新编号全书。
 
-Agent 可以调用 `03-write.ps1` 等程序生成正文，也可以在用户要求逐段讨论、定点精修时直接编辑 MD。两种操作都必须遵守同一份目录和写作规范，并重新完成受影响的检查。**Agent 自身的模型会话不会自动成为 PS1 的模型配置**；脚本调用模型时仍需其自身的 API 密钥、模型权限和配额。
+Agent 可以调用 `03-write.ps1` 等程序生成正文，也可以在用户要求逐段讨论、定点精修时直接编辑 MD。两种操作都必须遵守同一份目录和写作规范，并重新完成受影响的检查。共享配置默认选择 `codex_agent`：脚本生成请求，由当前已获授权的助手完成，再重跑原命令验证并保存。该模式不调用 API、不启动另一个 Codex 进程，也不会自动唤醒聊天；只有选择 API 模式时才需要相应密钥、模型权限和配额。
 
 ### 给操作 Agent 的执行规则
 
@@ -119,21 +119,22 @@ SageWrite/
 
 04Reference2会边审核边导出修改计划JSON；经用户确认后，由 [04Reference3执行器](engine/04Reference3-README.md)预览、备份并应用批准的来源字段修改，完成后重新检查。它不会自动重写正文或代替用户批准。
 
-SageWrite 的正文生成、部分编辑审稿等功能需要调用大模型 API；本地格式检查与排版不等同于模型调用。当前 `03-write.ps1` 和 `04b33-editorial-action-review.ps1` 默认模型为 `gpt-5.5`，支持的具体参数以各脚本为准，不能假定所有脚本的默认模型都相同。
-
-这不是操作 ChatGPT 聊天窗口，而是程序直接请求 OpenAI API。目标用户需自行提供有相应模型访问权限及可用配额的 API 密钥。ChatGPT 账号登录或订阅不能代替程序需要的 API 配置。
+共享文本调用通过 `engine/00-llm.ps1` 读取 `engine/llm-config.json`，优先级为环境变量、共享文件、内置默认值。`SAGE_LLM_CONFIG` 可指定其他配置文件。完整配置与适用脚本见 [模型配置说明](engine/LLM-CONFIG.md)。本地格式检查、排版及图片 API 不受这次文本调用配置切换影响。
 
 | 配置 | 当前实现 |
 | --- | --- |
-| 身份认证 | 从环境变量 `OPENAI_API_KEY` 读取密钥 |
-| 模型选择 | 支持 `-Model` 的脚本可显式指定模型名称；不设置时使用该脚本默认值 |
-| 服务地址与协议 | 当前相关生成、审稿脚本直接请求 `https://api.openai.com/v1/responses`，使用 OpenAI Responses API |
+| 默认模式 | `codex_agent`：当前助手处理文件交接，不需要 API 密钥 |
+| 独立 CLI | `codex`：启动独立的 `codex exec`，需要已安装且已认证的 CLI |
+| API 模式 | `openai` 使用 Responses；`openai-compatible` 默认使用 Chat Completions 兼容协议 |
+| API 身份认证 | 环境变量 `SAGE_LLM_API_KEY`，兼容 `OPENAI_API_KEY` |
+| 模型选择 | `SAGE_LLM_MODEL` 及脚本支持的逐次覆盖；不能用它更换当前助手会话的模型 |
+| 服务地址 | `SAGE_LLM_BASE_URL` 或完整的 `SAGE_LLM_ENDPOINT` |
 
-用户应在目标电脑安全地配置 `OPENAI_API_KEY`，并确保启动 SageWrite 的终端或进程能够读取它。环境配置变动后，通常需要重启相关终端、Web 服务或任务进程。Agent 只检查变量是否存在，不打印密钥，不将其写入 Git 仓库。Web 安装器也能将密钥写入本地配置，相关风险见下面的安装说明。
+出现 `SAGE_AGENT_PENDING` 表示等待当前助手响应，不是正文已生成。助手读取请求，写入同目录的 `response.json`，然后重跑完全相同的命令。请求变化会产生新编号；原脚本负责继续验证及保存。网页或终端不能自行唤醒当前会话，部分旧界面仍可能把等待显示成通用错误。接入规则见 [AGENTS.md](AGENTS.md)。
 
-**目前不能仅替换密钥，就直接切换到豆包或其他服务商。** 更换模型名称也不会改变请求地址。支持其他服务商需要适配接口地址、认证方式、请求参数、响应解析、错误处理及相关脚本，再进行实际测试。服务商宣称“兼容 OpenAI”不一定意味着兼容本系统使用的 Responses API，不能未经验证就宣称可用。
+API 模式需自行提供可用密钥、模型权限和配额，不能以聊天订阅替代 API 配置。密钥不要写入 Git；Agent 不打印密钥。切换服务商时需同时核对地址、协议、模型及认证，不能仅替换密钥或未经测试就宣称兼容。不要假定 `OPENAI_BASE_URL` 已被适配器支持。
 
-安装 Agent 不应自行假定 `OPENAI_BASE_URL` 等环境变量已经生效；当前上述脚本的请求地址为固定值。如需多服务商支持，应作为单独的程序适配任务处理，而不是在安装过程中静默替换端点。操作 SageWrite 的外部 Agent 所使用的模型，也不会自动替换 PS1 内部调用的模型。
+该功能的可复用模板已纳入本项目，见 [模板导出与测试说明](templates/README.md)。导出器仅复制调用模块、示例、文档及测试，不包含书稿、私有配置或密钥。Work Buddy 等其他助手的集成尚未实现或验证。
 
 ## Quick Start
 
@@ -178,7 +179,7 @@ Set-Location .\SageWrite-PS1-20260917\engine
 | --- | --- |
 | 基础脚本 | Windows PowerShell，确认 `powershell.exe` 可用 |
 | Web 工作台 | Node.js，确认 `node --version` 可运行 |
-| AI 写作与审稿 | 网络连接、用户自己的 `OPENAI_API_KEY`、相应模型权限及可用 API 配额；ChatGPT 登录不能代替 API 配置 |
+| AI 写作与审稿 | 默认 `codex_agent` 需要活跃且已获授权的助手；API 模式另需密钥、模型权限和配额；独立 `codex` 模式需已认证 CLI |
 | 正式 DOCX / EPUB | Pandoc，确认 `pandoc --version` 可运行 |
 | 当前 PDF 导出 | 上述排版依赖及已安装、激活的桌面版 Microsoft Word；`05c-pdf.ps1` / `05cc-print-pdf.ps1` 使用 `Word.Application` COM，Word 网页版不能替代 |
 | 简版 DOCX 路线 | Python 和 `python-docx`；用 `python -c "import docx; print(docx.__version__)"` 检查实际调用的 Python 环境 |

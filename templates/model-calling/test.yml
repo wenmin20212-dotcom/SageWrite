@@ -1,0 +1,15 @@
+name: Offline adapter tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test without API credentials
+        shell: ${{ matrix.shell }}
+        run: ./tests/test.ps1

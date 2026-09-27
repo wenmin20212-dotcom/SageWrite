@@ -1,6 +1,6 @@
 # SageWrite LLM configuration
 
-All SageWrite scripts that generate text with an LLM read their model connection from environment variables through `00-llm.ps1`:
+All SageWrite scripts that generate text with an LLM read their model connection through `00-llm.ps1`. Settings are resolved from environment variables first, then `engine/llm-config.json`, then built-in defaults. `SAGE_LLM_CONFIG` can select a different JSON settings file. The shared file is read at call time by both CLI and UI-launched scripts:
 
 - `02-structure.ps1`
 - `02b-expand.ps1`
@@ -19,11 +19,52 @@ All SageWrite scripts that generate text with an LLM read their model connection
 Scripts that do not call an LLM are intentionally unchanged.
 Image editing scripts continue to use the Images API because their multipart request and binary response contract is different from text generation.
 
+## Current assistant (codex_agent)
+
+The installed shared configuration selects `SAGE_LLM_PROVIDER: "codex_agent"`.
+This is a writing execution mode, not a model ID. It uses the current assistant,
+without making an HTTP model request or starting another Codex process.
+Per-call model names (including UI defaults) do not select the current assistant's
+model; the current conversation controls that. Image APIs are separate.
+
+To switch all shared text calls, change `SAGE_LLM_PROVIDER` in `llm-config.json`.
+Existing environment overrides still win. For an API provider, also configure its
+model, endpoint and credentials as appropriate; do not store secrets in Git.
+
+Scripts persist the prompt as `logs/agent_requests/<sha256>/request.json` under
+the current book, emit `SAGE_AGENT_PENDING`, and stop without writing fabricated
+output. The recorded state is `waiting_for_agent`; legacy script/GUI wrappers
+may still display a nonzero exit or generic failure message. No background
+conversation is automatically started. The active assistant must read the task,
+write a sibling `response.json`, and rerun the original command:
+
+```json
+{
+  "request_id": "copy the request_id from request.json",
+  "provider": "codex_agent",
+  "status": "completed",
+  "text": "The completed text, or serialized JSON required by the task"
+}
+```
+
+The adapter checks ID, provider, completion state and nonempty text before
+returning it to the original script. Prompt, system instructions and output
+budget determine the ID. Identical requests reuse the answer; archive that
+specific response before requesting a fresh revision with identical inputs.
+The optional `SAGE_LLM_AGENT_REQUEST_ROOT` overrides the queue directory.
+Without a book context it defaults to ignored `engine/work/agent_requests`.
+This protocol does not certify factual accuracy; normal review still applies.
+
+Other assistants could implement this handoff pattern, but Work Buddy support
+has not been implemented or verified. The `codex` mode below is a separate CLI
+execution mode, not the current conversation.
+
 ## OpenAI defaults
 
-Only the API key is required. The default model is `gpt-5.6` and the default API style is Responses API.
+Select provider `openai` and supply an API key. The built-in model default is `gpt-5.6` and the default API style is Responses API.
 
 ```powershell
+$env:SAGE_LLM_PROVIDER = "openai"
 $env:SAGE_LLM_API_KEY = "your-api-key"
 ```
 

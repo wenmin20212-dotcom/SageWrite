@@ -369,5 +369,9 @@ function Fail-SageStep {
         [hashtable]$Data = @{}
     )
 
+    if ([string]$Data.error -like 'SAGE_AGENT_PENDING:*') {
+        Complete-SageStep -Context $Context -Step $Step -State 'waiting_for_agent' -Message 'Waiting for current assistant response.' -Data $Data
+        return
+    }
     Complete-SageStep -Context $Context -Step $Step -State "failed" -Message $Message -Data $Data
 }

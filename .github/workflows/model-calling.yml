@@ -1,0 +1,21 @@
+name: Model calling offline tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  handoff:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test SageWrite handoff
+        shell: powershell
+        run: ./engine/tests/test_agent_handoff.ps1
+      - name: Export reusable template
+        shell: powershell
+        run: ./engine/export-model-template.ps1
+      - name: Test template on Windows PowerShell
+        shell: powershell
+        run: ./engine/work/model-calling-template/tests/test.ps1
+      - name: Test template on PowerShell 7
+        shell: pwsh
+        run: ./engine/work/model-calling-template/tests/test.ps1

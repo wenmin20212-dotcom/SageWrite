@@ -98,7 +98,7 @@ catch {
     Write-Output $_.Exception.Message
     exit 1
 }
-$ResolvedModelLabel = if ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
+$ResolvedModelLabel = if ($LlmConfig.Provider -eq 'codex_agent') { 'current-session' } elseif ([string]::IsNullOrWhiteSpace($LlmConfig.Model)) { "codex-default" } else { $LlmConfig.Model }
 Set-SageCurrentStep -Context $Context -Step "write" -Data @{
     chapter = $Chapter
     start_chapter = $StartChapter
@@ -173,7 +173,11 @@ $ResolvedStyleGuidance = if (-not [string]::IsNullOrWhiteSpace($StyleGuideBody))
 }
 $HasObjectiveStyleGuidance = -not [string]::IsNullOrWhiteSpace($ResolvedStyleGuidance)
 
-$ChapterMatches = [regex]::Matches($TocContent, "^##\s+(?!#)(.+)", "Multiline")
+# Number files by TOC section; retain chapter-only outlines as a legacy fallback.
+$ChapterMatches = [regex]::Matches($TocContent, "^###[ \t]+(.+)", "Multiline")
+if ($ChapterMatches.Count -eq 0) {
+    $ChapterMatches = [regex]::Matches($TocContent, "^##[ \t]+(?!#)(.+)", "Multiline")
+}
 $TotalChapters = $ChapterMatches.Count
 
 if ($TotalChapters -eq 0) {
@@ -278,7 +282,7 @@ $AdditionalInstructions
         $AdditionalInstructionsBlock = @"
 
 Additional rewrite instructions:
-$RewriteNotesContent
+$AdditionalInstructions
 
 When these rewrite instructions conflict with generic defaults, prioritize these chapter-specific rewrite instructions while still respecting the book objective and TOC.
 "@
@@ -338,7 +342,11 @@ Write the complete section now.
             chapter_title = $ChapterTitle
             error = $_.Exception.Message
         }
-        Write-Output "ERROR: LLM request failed."
+        if ($_.Exception.Message -like 'SAGE_AGENT_PENDING:*') {
+            Write-Output "WAITING: Current assistant response required."
+        } else {
+            Write-Output "ERROR: LLM request failed."
+        }
         exit 1
     }
 

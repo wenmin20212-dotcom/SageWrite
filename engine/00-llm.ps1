@@ -8,7 +8,16 @@
 
     $Value = [Environment]::GetEnvironmentVariable($Name)
     if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $Default
+        $ConfigPath = [Environment]::GetEnvironmentVariable('SAGE_LLM_CONFIG')
+        if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+            $ConfigPath = Join-Path $PSScriptRoot 'llm-config.json'
+        }
+        if (Test-Path -LiteralPath $ConfigPath) {
+            $Settings = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            $Property = $Settings.PSObject.Properties[$Name]
+            if ($null -ne $Property) { $Value = [string]$Property.Value }
+        }
+        if ([string]::IsNullOrWhiteSpace($Value)) { return $Default }
     }
 
     return $Value.Trim()
@@ -24,6 +33,9 @@ function Get-SageLlmConfig {
     elseif ($Provider -eq "codex") {
         "codex-exec"
     }
+    elseif ($Provider -eq "codex_agent") {
+        "agent-handoff"
+    }
     else {
         "chat-completions"
     }
@@ -38,7 +50,12 @@ function Get-SageLlmConfig {
         $ApiKey = Get-SageLlmSetting -Name "OPENAI_API_KEY"
     }
 
-    if ($Provider -eq "codex") {
+    if ($Provider -eq "codex_agent") {
+        if ($ApiStyle -ne 'agent-handoff') {
+            throw "Provider 'codex_agent' requires SAGE_LLM_API_STYLE 'agent-handoff'."
+        }
+    }
+    elseif ($Provider -eq "codex") {
         if ($ApiStyle -ne "codex-exec") {
             throw "Provider 'codex' requires SAGE_LLM_API_STYLE 'codex-exec'."
         }
@@ -52,7 +69,7 @@ function Get-SageLlmConfig {
     elseif ($ApiStyle -notin @("responses", "chat-completions")) {
         throw "Unsupported SAGE_LLM_API_STYLE '$ApiStyle'. Use 'responses' or 'chat-completions'."
     }
-    if ($Provider -ne "codex" -and [string]::IsNullOrWhiteSpace($Endpoint)) {
+    if ($Provider -notin @('codex', 'codex_agent') -and [string]::IsNullOrWhiteSpace($Endpoint)) {
         if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
             throw "SAGE_LLM_BASE_URL or SAGE_LLM_ENDPOINT must be set for provider '$Provider'."
         }
@@ -63,7 +80,7 @@ function Get-SageLlmConfig {
             $BaseUrl.TrimEnd('/') + "/chat/completions"
         }
     }
-    if ($Provider -ne "codex" -and [string]::IsNullOrWhiteSpace($ApiKey)) {
+    if ($Provider -notin @('codex', 'codex_agent') -and [string]::IsNullOrWhiteSpace($ApiKey)) {
         throw "SAGE_LLM_API_KEY is not set. OPENAI_API_KEY is accepted as a compatibility fallback."
     }
 
@@ -214,6 +231,9 @@ function Invoke-SageLlmText {
     )
 
     $SystemPrompt = Get-SageLlmSetting -Name "SAGE_LLM_SYSTEM_PROMPT"
+    if ($Config.Provider -eq 'codex_agent') {
+        return Invoke-SageAgentText -Prompt $Prompt -SystemPrompt $SystemPrompt -MaxOutputTokens $MaxOutputTokens
+    }
     if ($Config.Provider -eq "codex") {
         $CodexPrompt = if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
             $Prompt
@@ -271,4 +291,52 @@ function Invoke-SageLlmText {
     }
 
     return $Text
+}
+
+function Invoke-SageAgentText {
+    param([string]$Prompt, [string]$SystemPrompt, [int]$MaxOutputTokens)
+
+    # Include all text constraints in the ID so an answer cannot cross prompts.
+    $Payload = [ordered]@{
+        schema_version = 1
+        provider = 'codex_agent'
+        system_prompt = $SystemPrompt
+        prompt = $Prompt
+        max_output_tokens = $MaxOutputTokens
+    }
+    $Serialized = $Payload | ConvertTo-Json -Depth 8 -Compress
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $RequestId = ([BitConverter]::ToString($Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Serialized)))).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $Hasher.Dispose() }
+
+    $Root = Get-SageLlmSetting -Name 'SAGE_LLM_AGENT_REQUEST_ROOT'
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        $CallerContext = Get-Variable -Name Context -ValueOnly -ErrorAction SilentlyContinue
+        $Root = if ($CallerContext -and $CallerContext.BookRoot) {
+            Join-Path $CallerContext.BookRoot 'logs\agent_requests'
+        } else {
+            Join-Path $PSScriptRoot 'work\agent_requests'
+        }
+    }
+    $Folder = Join-Path ([IO.Path]::GetFullPath($Root)) $RequestId
+    [IO.Directory]::CreateDirectory($Folder) | Out-Null
+    $RequestPath = Join-Path $Folder 'request.json'
+    $ResponsePath = Join-Path $Folder 'response.json'
+    $Payload.request_id = $RequestId
+    if (-not (Test-Path -LiteralPath $RequestPath)) {
+        [IO.File]::WriteAllText($RequestPath, ($Payload | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    }
+    if (Test-Path -LiteralPath $ResponsePath) {
+        $Response = Get-Content -LiteralPath $ResponsePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        if ($Response.request_id -ne $RequestId -or $Response.provider -ne 'codex_agent' -or
+            $Response.status -ne 'completed' -or [string]::IsNullOrWhiteSpace([string]$Response.text)) {
+            throw "Invalid agent response: $ResponsePath"
+        }
+        return [string]$Response.text
+    }
+    $Message = "SAGE_AGENT_PENDING: $RequestPath"
+    Write-Host $Message
+    throw $Message
 }

@@ -165,7 +165,11 @@ catch {
         provider = $LlmConfig.Provider
         model = $LlmConfig.Model
     }
-    Write-Output "ERROR: LLM request failed."
+    if ($_.Exception.Message -like 'SAGE_AGENT_PENDING:*') {
+        Write-Output "WAITING: Current assistant response required."
+    } else {
+        Write-Output "ERROR: LLM request failed."
+    }
     Write-Output $_.Exception.Message
     exit 1
 }

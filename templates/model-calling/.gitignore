@@ -1,0 +1,7 @@
+engine/work/
+output/
+.env
+.env.*
+*.local.json
+*.log
+.codex/
