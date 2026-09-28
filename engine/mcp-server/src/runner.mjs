@@ -34,7 +34,13 @@ export function buildPowerShellArgs(scriptName, parameters = {}) {
       throw new Error(`Invalid PowerShell parameter name: ${name}`);
     }
     args.push(`-${name}`);
-    if (value !== true) args.push(String(value));
+    if (value !== true) {
+      if (Array.isArray(value)) {
+        for (const item of value) args.push(String(item));
+      } else {
+        args.push(String(value));
+      }
+    }
   }
   return args;
 }

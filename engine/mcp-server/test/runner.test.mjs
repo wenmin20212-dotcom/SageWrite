@@ -22,6 +22,19 @@ test('false and empty optional values are omitted', () => {
   assert.equal(args.includes('-Language'), false);
 });
 
+test('array values are passed as separate PowerShell arguments', () => {
+  const args = buildPowerShellArgs('04Reference3.ps1', {
+    BookName: 'Demo',
+    PlanPath: 'review-plan.json',
+    TaskId: ['REF-001', 'REF-002']
+  });
+  assert.deepEqual(args.slice(-7), [
+    '-BookName', 'Demo',
+    '-PlanPath', 'review-plan.json',
+    '-TaskId', 'REF-001', 'REF-002'
+  ]);
+});
+
 test('book names cannot escape the workspace folder', () => {
   assert.throws(() => validateBookName('../outside'));
   assert.throws(() => validateBookName('bad\\name'));

@@ -2,7 +2,7 @@
   "mcpServers": {
     "sagewrite": {
       "type": "stdio",
-      "command": "C:\\Users\\1000\\AppData\\Local\\OpenAI\\Codex\\runtimes\\cua_node\\df473e5367fa2b42\\bin\\node.exe",
+      "command": "node",
       "args": [
         "D:\\SageWrite\\engine\\mcp-server\\src\\index.mjs"
       ],

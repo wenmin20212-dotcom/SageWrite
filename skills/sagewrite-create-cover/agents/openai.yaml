@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite 封面生成"
+  short_description: "生成、审核、排版并安装PDF、EPUB和印刷版封面"
+  default_prompt: "Use $sagewrite-create-cover to prepare a text-free cover concept, generate and review real image candidates, add accurate typography, and install only the approved final cover."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite 写作正文"
+  short_description: "依据已确认的TOC按单元、连续范围或全书生成正文草稿"
+  default_prompt: "Use $sagewrite-write-chapters to generate selected manuscript sections from my approved SageWrite TOC."

@@ -15,7 +15,7 @@ test('CodeBuddy project configuration connects to SageWrite', async () => {
   assert.equal(definition.alwaysLoad, true);
 
   const transport = new StdioClientTransport({
-    command: definition.command,
+    command: definition.command === 'node' ? process.execPath : definition.command,
     args: definition.args,
     env: { ...process.env, ...definition.env },
     stderr: 'pipe'
@@ -24,7 +24,7 @@ test('CodeBuddy project configuration connects to SageWrite', async () => {
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 15);
+    assert.equal(tools.length, 39);
     assert.ok(tools.some((tool) => tool.name === 'sagewrite_rewrite_chapters'));
   } finally {
     await client.close();

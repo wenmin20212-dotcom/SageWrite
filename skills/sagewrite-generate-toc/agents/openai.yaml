@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite 生成目录"
+  short_description: "依据新书定义生成、检查并交付可审阅的TOC目录文件"
+  default_prompt: "Use $sagewrite-generate-toc to generate and validate the TOC for my initialized SageWrite book."

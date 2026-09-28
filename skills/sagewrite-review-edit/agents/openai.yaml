@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite 审稿与编辑"
+  short_description: "按需选择04审稿、修订、引用核验、格式预检和结构编辑流程"
+  default_prompt: "Use $sagewrite-review-edit to choose the correct SageWrite stage-04 workflow, preview its scope, and perform only the review or explicitly authorized edit I requested."

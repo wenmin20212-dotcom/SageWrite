@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite 成书与导出"
+  short_description: "通过05流程生成并验收DOCX、PDF、EPUB和印刷版文件"
+  default_prompt: "Use $sagewrite-publish-book to choose the correct SageWrite stage-05 route, verify preflight, generate the requested publication files, and inspect the new artifacts."
