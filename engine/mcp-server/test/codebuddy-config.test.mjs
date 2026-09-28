@@ -24,7 +24,8 @@ test('CodeBuddy project configuration connects to SageWrite', async () => {
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 14);
+    assert.equal(tools.length, 15);
+    assert.ok(tools.some((tool) => tool.name === 'sagewrite_rewrite_chapters'));
   } finally {
     await client.close();
   }

@@ -107,6 +107,17 @@ function createServer() {
     ReferenceGlossary: i.referenceGlossary, Force: i.force, Model: i.model
   }));
 
+  scriptTool(server, 'sagewrite_rewrite_chapters', 'Revise existing chapters under the book writing specification without replacing the source manuscript. Select one chapter, a continuous range, all chapters, or validation only.', z.object({
+    bookName, workspaceRoot, ...chapterRange,
+    all: z.boolean().default(false), checkOnly: z.boolean().default(false), model: z.string().optional()
+  }).refine((i) => {
+    if (i.checkOnly || i.all || i.chapter !== undefined) return true;
+    return i.startChapter !== undefined && i.endChapter !== undefined && i.startChapter <= i.endChapter;
+  }, { message: 'Select chapter, a valid startChapter/endChapter range, all, or checkOnly.' }), '03RW.ps1', (i) => ({
+    BookName: i.bookName, Chapter: i.chapter, StartChapter: i.startChapter,
+    EndChapter: i.endChapter, All: i.all, CheckOnly: i.checkOnly, Model: i.model
+  }));
+
   scriptTool(server, 'sagewrite_refine_chapters', 'Refine existing chapters in a requested language.', z.object({
     bookName, workspaceRoot, language, ...chapterRange,
     all: z.boolean().default(false), force: z.boolean().default(false), model: z.string().optional()

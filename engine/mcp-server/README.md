@@ -36,6 +36,7 @@ CodeBuddy may request approval before enabling a project MCP server. Approve `sa
 - `sagewrite_generate_toc`
 - `sagewrite_expand_outline`
 - `sagewrite_write_chapters`
+- `sagewrite_rewrite_chapters` (runs `03RW.ps1`; preserves source chapters and writes a separate reviewed revision workspace)
 - `sagewrite_refine_chapters`
 - `sagewrite_translate_chapters`
 - `sagewrite_edit_book`
