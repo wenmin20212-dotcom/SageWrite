@@ -36,6 +36,10 @@ The main pipeline is:
 
 Each stage can be run independently from scripts or from the local Web UI.
 
+## Skills
+
+- [`sagewrite-new-book`](skills/sagewrite-new-book/SKILL.md)：讨论并确定书名、读者、类型、核心主旨、内容范围和写作风格，然后通过MCP的`sagewrite_initialize_book`或`01-intake.ps1`建立新书工作区。它只完成初始化，不自动生成目录或正文。
+
 ## 两种创作工作方式：网页操作与 AI Agent 对话
 
 **安装和操作本系统的 AI Agent 请先阅读 [Agent 调用手册](docs/AGENT-CALLING-GUIDE.md)。** 手册逐项说明00—09及辅助入口的用途、前置条件、输入输出、推荐顺序与人工确认点；具体参数见 [完整PS1参数附录](docs/AGENT-SCRIPT-PARAMETERS.md)。不要按文件编号依次运行全部脚本。

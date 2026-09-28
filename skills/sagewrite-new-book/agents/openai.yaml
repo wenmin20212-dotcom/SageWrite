@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite 新书定义"
+  short_description: "定义新书目标、读者、范围与风格并初始化SageWrite工作区"
+  default_prompt: "Use $sagewrite-new-book to define and initialize a new SageWrite book project."
