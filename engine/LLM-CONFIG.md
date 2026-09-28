@@ -5,6 +5,7 @@ All SageWrite scripts that generate text with an LLM read their model connection
 - `02-structure.ps1`
 - `02b-expand.ps1`
 - `03-write.ps1`
+- `03RW.ps1`
 - `03t-translate.ps1`
 - `03r-refine.ps1`
 - `04b33-editorial-action-review.ps1`

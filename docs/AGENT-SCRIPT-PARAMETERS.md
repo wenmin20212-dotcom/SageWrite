@@ -136,6 +136,28 @@ param(
 )
 ```
 
+## 03RW.ps1
+
+[查看源码](../engine/03RW.ps1) · [使用说明](../engine/03RW.README.md)
+
+用于按照统一写作规范修改已有书稿，只润色语言，不负责重新设计故事。支持单章、连续章节和全书；输出进入独立的`03_rewrite`目录，不自动覆盖原稿。
+
+```powershell
+param(
+    [string]$BookRoot = (Join-Path $PSScriptRoot '../book'),
+    [string]$BookName,
+    [string]$SpecPath,
+    [string]$Model = '',
+    [ValidateRange(1,9999)][int]$StartChapter = 1,
+    [ValidateRange(1,9999)][int]$EndChapter = 9999,
+    [ValidateRange(0,9999)][int]$Chapter = 0,
+    [switch]$All,
+    [switch]$CheckOnly
+)
+```
+
+典型调用：`-Chapter 1`处理单章，`-StartChapter 1 -EndChapter 3`处理连续章节，`-All`处理全书，`-CheckOnly`只校验输入且不调用模型。模型由统一的`00-llm.ps1`配置决定。
+
 ## 03r-refine.ps1
 
 [查看源码](../engine/03r-refine.ps1)

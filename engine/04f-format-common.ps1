@@ -96,7 +96,11 @@ function Test-FormatBook([string]$Root) {
             $expected += $sectionTitle
         }
     }
-    if (!$expected.Count) { throw 'TOC has no sections.' }
+    $chapterMode = !$expected.Count
+    if ($chapterMode) {
+        $expected = @([regex]::Matches($tocText, '(?m)^##\s+(.+?)\s*$') | ForEach-Object { $_.Groups[1].Value.Trim() })
+    }
+    if (!$expected.Count) { throw 'TOC has no chapters or sections.' }
     $files=@(Get-ChildItem -LiteralPath (Join-Path $Root '02_chapters') -Filter '*.md' -File | Where-Object {$_.Name -notmatch '^_'})
     $numeric=@($files | Where-Object {$_.BaseName -match '^\d+$'})
     if ($numeric.Count -ne $expected.Count) { $issues += [pscustomobject]@{file='toc.md';line=0;kind='file_count';message='TOC section and numeric file counts differ.'} }
@@ -106,8 +110,9 @@ function Test-FormatBook([string]$Root) {
         if (!(Test-Path -LiteralPath $path)) { $issues += [pscustomobject]@{file=$name;line=0;kind='missing_file';message='Missing section file.'}; continue }
         $t=Get-FormatText $path
         $body=[regex]::Replace($t,'\A---\n.*?\n---\n?','',[Text.RegularExpressions.RegexOptions]::Singleline)
-        $heading=[regex]::Match($body,'(?m)^###\s+(.+?)\s*$')
-        if (!$heading.Success -or $heading.Groups[1].Value.Trim() -cne $expected[$i] -or [regex]::Matches($body,'(?m)^###\s').Count -ne 1) {
+        $headingPattern = if ($chapterMode) { '(?m)^#\s+(.+?)\s*$' } else { '(?m)^###\s+(.+?)\s*$' }
+        $heading=[regex]::Match($body,$headingPattern)
+        if (!$heading.Success -or $heading.Groups[1].Value.Trim() -cne $expected[$i] -or [regex]::Matches($body,$headingPattern).Count -ne 1) {
             $issues += [pscustomobject]@{file=$name;line=0;kind='toc_mapping';message='Section heading differs from TOC or is duplicated.'}
         }
         $r=Convert-FormatSection $t

@@ -16,6 +16,7 @@ SageWrite 将 PowerShell 工作流脚本与本地浏览器控制台结合在一�
 - Generate and edit `toc.md`
 - Expand outline sections
 - Generate chapters one-by-one, by range, or all at once
+- Revise an existing book chapter-by-chapter under one writing specification with `03RW.ps1`
 - Add chapter-level rewrite instructions for targeted regeneration
 - Browse and edit chapters directly in the web interface
 - Run build preflight checks and view detailed bilingual reports
@@ -23,11 +24,15 @@ SageWrite 将 PowerShell 工作流脚本与本地浏览器控制台结合在一�
 
 ## Workflow
 
-中文快速开始：[Codex语音写书九步说明](docs/VOICE-WRITING-WORKFLOW.md)。新电脑恢复环境：[环境与安装清单](docs/ENVIRONMENT-RESTORE.md)。本次锁版：[2026-09-24发布说明](engine/RELEASE-20260924.md)。
+中文快速开始：[Codex语音写书九步说明](docs/VOICE-WRITING-WORKFLOW.md)。新电脑恢复环境：[环境与安装清单](docs/ENVIRONMENT-RESTORE.md)。当前改写功能版本：[2026-09-28发布说明](engine/RELEASE-20260928.md)。
 
 The main pipeline is:
 
-`01-intake -> 02-structure -> 02b-expand -> 03-write -> 04-edit -> 05-build`
+新书生成：`01-intake -> 02-structure -> 02b-expand -> 03-write -> 04-edit -> 05-build`
+
+已有书稿改写：`写作规范 + 目录 + 现有章节 -> 03RW -> 人工复核 -> 05-build`
+
+`03RW.ps1` 不重新设计故事。它按统一写作规范逐章润色已有章节，支持单章、连续范围和全书运行；原稿自动备份，修订稿单独保存，并为每章生成审校记录。详见 [03RW使用说明](engine/03RW.README.md)。
 
 Each stage can be run independently from scripts or from the local Web UI.
 
