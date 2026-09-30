@@ -45,6 +45,8 @@ Web 的 `WorkspaceRoot` 与此环境变量应指向同一父目录。新进程�
 
 ### 2.1 编号与范围
 
+工作流状态优先调用MCP `sagewrite_workflow_status`，或本地 `Get-SageWriteWorkflowStatus.ps1 -BookName <书名>`。默认只读且不调用模型；`-SaveReport` 保存JSON到书籍的 `logs/workflow_status`，`-Details` 返回逐单元及指纹信息。扫描成功不代表书稿通过审批。详见[工作流状态技能](../skills/sagewrite-workflow-status/SKILL.md)。当前需在一批任务后重新调用，不自动修改旧程序的收尾逻辑。
+
 调用03、04B33、04C44等之前，列出“文件序号 → 正文标题 → TOC写作单元”映射，并确认 StartChapter/EndChapter 范围。TOC 的 `###` 写作单元用于03分节；不要把书中“第八章”直接传成 `-Chapter 8`。
 
 04R例外：`StartChapter/EndChapter` 是参考文献的书中章节分组，0表示前言。04Z1的 `SectionIndex` 是要删除的写作单元序号。各脚本不能共享一个未经解释的“章节号”。
@@ -97,6 +99,10 @@ Web 的 `WorkspaceRoot` 与此环境变量应指向同一父目录。新进程�
 # 先审阅实际生成的TOC并确认第1个写作单元。
 .\03-write.ps1 -BookName $BookName -Chapter 1 -Model 'gpt-5.5'
 ```
+
+## 环境自检入口
+
+安装和迁移时先调用 `engine/Test-SageWriteEnvironment.ps1`，按需要选择 `-Profile Writing`、`Pdf`、`Epub`、`Web` 或 `Mcp`。`-Json` 输出结构化结果；`-ReportDirectory` 显式保存报告。默认只读，不安装、不联网、不调用模型、不显示密钥。退出码1只表示所选功能有静态阻塞，不能把All中的可选MCP缺失说成全部写作不可用。pass只证明该检查点，不代表端到端验收。详见[自检说明](../engine/ENVIRONMENT-CHECK.md)。
 
 ## 5. 04：审稿、返修、参考文献与格式
 

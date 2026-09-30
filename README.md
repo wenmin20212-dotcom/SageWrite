@@ -26,6 +26,8 @@ SageWrite 将 PowerShell 工作流脚本与本地浏览器控制台结合在一�
 
 ## Workflow
 
+安装或迁移前先运行 `engine/Test-SageWriteEnvironment.ps1`。支持按写作、网页、PDF、EPUB、MCP等用途输出检查结果及JSON报告，不显示密钥、不自动安装。详见[环境自检说明](engine/ENVIRONMENT-CHECK.md)。
+
 中文快速开始：[Codex语音写书九步说明](docs/VOICE-WRITING-WORKFLOW.md)。新电脑恢复环境：[环境与安装清单](docs/ENVIRONMENT-RESTORE.md)。当前改写功能版本：[2026-09-28发布说明](engine/RELEASE-20260928.md)。
 
 The main pipeline is:
@@ -40,7 +42,16 @@ Each stage can be run independently from scripts or from the local Web UI.
 
 ## Skills
 
+项目目前包含八个技能，统一存放在 `skills/` 下，每个技能以独立的 `SKILL.md` 为入口。Agent需要加载相应文件或通过其支持的技能安装方式发现这些技能；放入仓库不等于已经注册到所有Agent。
+
 - [`sagewrite-new-book`](skills/sagewrite-new-book/SKILL.md)：讨论并确定书名、读者、类型、核心主旨、内容范围和写作风格，然后通过MCP的`sagewrite_initialize_book`或`01-intake.ps1`建立新书工作区。它只完成初始化，不自动生成目录或正文。
+- [`sagewrite-generate-toc`](skills/sagewrite-generate-toc/SKILL.md)：生成并验证目录。
+- [`sagewrite-write-chapters`](skills/sagewrite-write-chapters/SKILL.md)：按已确认的目录撰写正文。
+- [`sagewrite-review-edit`](skills/sagewrite-review-edit/SKILL.md)：编辑审稿、修改、引用核验与格式检查。
+- [`sagewrite-create-cover`](skills/sagewrite-create-cover/SKILL.md)：制作和检查封面。
+- [`sagewrite-publish-book`](skills/sagewrite-publish-book/SKILL.md)：生成并检查出版文件。
+- [`sagewrite-manage-environment`](skills/sagewrite-manage-environment/SKILL.md)：环境自检、修复方案、经授权修复及复检。复用现有PS1，自检不会自动安装；修复后保留报告和操作记录，不代替书稿的04F检查。
+- [`sagewrite-workflow-status`](skills/sagewrite-workflow-status/SKILL.md)：通过MCP `sagewrite_workflow_status` 调用 `Get-SageWriteWorkflowStatus.ps1`，本地统计目录与正文进度、检查04F指纹并汇总证据。默认只读；`saveReport: true` 保存完整JSON。每批写作后再次调用可刷新，不会自动挂接旧程序，也不代替编辑判断或出版审批。
 
 ## 两种创作工作方式：网页操作与 AI Agent 对话
 

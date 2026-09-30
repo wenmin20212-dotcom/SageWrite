@@ -40,6 +40,7 @@ CodeBuddy may request approval before enabling a project MCP server. Approve `sa
 - `sagewrite_refine_chapters`
 - `sagewrite_translate_chapters`
 - `sagewrite_edit_book`
+- `sagewrite_workflow_status`: local no-LLM scan via `Get-SageWriteWorkflowStatus.ps1`. Inputs: `bookName`, optional `workspaceRoot`, `language` (zh), `saveReport` (false), `details` (false). Default read-only; saving creates an advisory JSON, never an approval. Call again after writing to refresh. Parse JSON from the script envelope's `stdout` after checking success/truncation.
 - `sagewrite_format_preflight`
 - `sagewrite_build_manuscript`
 - `sagewrite_export_epub`

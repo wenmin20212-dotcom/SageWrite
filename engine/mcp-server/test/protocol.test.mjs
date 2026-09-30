@@ -18,7 +18,8 @@ test('MCP client can initialize and discover SageWrite tools', async () => {
     await client.connect(transport);
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
-    assert.equal(tools.length, 39);
+    assert.equal(tools.length, 40);
+    assert.ok(names.includes('sagewrite_workflow_status'));
     assert.ok(names.includes('sagewrite_import_structure'));
     assert.ok(names.includes('sagewrite_generate_toc'));
     assert.ok(names.includes('sagewrite_rewrite_chapters'));

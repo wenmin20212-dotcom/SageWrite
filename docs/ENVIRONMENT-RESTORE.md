@@ -1,5 +1,7 @@
 # 环境恢复与安装清单
 
+先运行 `engine/Test-SageWriteEnvironment.ps1` 做只读环境自检，或使用 `-Profile Writing/Pdf/Epub/Mcp` 分别检查（实际参数选择其中一个名称）。检查不会安装软件或验证付费模型权限，详见[环境自检说明](../engine/ENVIRONMENT-CHECK.md)。
+
 本发布包是程序、说明、配置示例及依赖清单，不是整台Windows的镜像或离线一键环境。不得复制原电脑的API密钥、浏览器登录、Word许可证或用户配置。书籍工作区不在程序包内，需要单独迁移。
 
 ## 依赖与本机基线

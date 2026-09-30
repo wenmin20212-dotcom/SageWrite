@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite Workflow Status"
+  short_description: "Reconcile book progress, evidence, and next steps"
+  default_prompt: "Use $sagewrite-workflow-status to inspect this book's progress, identify stale evidence, and recommend the next step without modifying the manuscript."

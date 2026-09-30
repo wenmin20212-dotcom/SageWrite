@@ -34,6 +34,13 @@ function scriptTool(server, name, description, schema, scriptName, mapParameters
 function createServer() {
   const server = new McpServer({ name: 'sagewrite', version: '1.0.0' });
 
+  scriptTool(server, 'sagewrite_workflow_status', 'Inspect book progress locally without an LLM: map TOC units, identify missing drafts, inspect native format fingerprint freshness, and inventory review/reference/export evidence. Default read-only and compact. saveReport writes a unique advisory JSON only; it does not approve or modify manuscripts. Call again after a batch to refresh.', z.object({
+    bookName, workspaceRoot, language,
+    saveReport: z.boolean().default(false), details: z.boolean().default(false)
+  }), 'Get-SageWriteWorkflowStatus.ps1', (i) => ({
+    BookName: i.bookName, Language: i.language, SaveReport: i.saveReport, Details: i.details
+  }), 120_000);
+
   server.registerTool('sagewrite_project_status', {
     description: 'Inspect an existing SageWrite project without modifying it.',
     inputSchema: z.object({ bookName, workspaceRoot })

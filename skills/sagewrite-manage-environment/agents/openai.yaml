@@ -1,0 +1,4 @@
+interface:
+  display_name: "SageWrite Environment Management"
+  short_description: "Check prerequisites, plan repairs, and verify fixes"
+  default_prompt: "Use $sagewrite-manage-environment to check this SageWrite installation and propose repairs before making changes."
