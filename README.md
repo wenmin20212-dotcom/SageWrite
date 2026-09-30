@@ -4,6 +4,8 @@ SageWrite is a structured AI writing engine and local web workspace for planning
 
 SageWrite 是一套结构化的 AI 写作引擎与本地 Web 工作台，用于完成长篇书籍的规划、生成、检查、重写与构建。
 
+**SageWrite 由文军（Wenjun）发起、设计并主导开发，借助 AI 编程工具协作实现。项目采用 MIT 许可证开源。**
+
 ## Overview
 
 SageWrite combines PowerShell workflow scripts with a local browser-based control panel. It is designed for book-length writing projects that need clear structure, repeatable generation steps, editable intermediate files, and human-in-the-loop revision.
