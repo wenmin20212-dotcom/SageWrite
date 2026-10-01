@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "researched_on": "2026-10-01",
+  "bundle_type": "documentation_and_readonly_inventory",
+  "contains_installers": false,
+  "selection": "free_open_source_without_paid_commercial_license",
+  "all_candidates": "not_integrated_or_export_tested_in_sagewrite",
+  "tools": [
+    {"id":"libreoffice","category":"desktop_office","license":"MPL-2.0 plus bundled component licenses","download":"https://www.libreoffice.org/download/","license_url":"https://www.libreoffice.org/licenses/","automation_docs":"https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html","observed_download_page_version":"26.8.0","same_word_com_verified":false,"priority":"first_candidate_for_docx_to_pdf"},
+    {"id":"onlyoffice-desktop","category":"desktop_office","license":"AGPL-3.0 and upstream notices","download":"https://www.onlyoffice.com/desktop","license_url":"https://github.com/ONLYOFFICE/desktop-apps/blob/master/LICENSE","usage_docs":"https://helpcenter.onlyoffice.com/docs/userguides/document_editor/SavePrintDownload.aspx","same_word_com_verified":false,"batch_export_verified":false},
+    {"id":"apache-openoffice","category":"desktop_office","license":"Apache-2.0 plus bundled component licenses","download":"https://www.openoffice.org/download/","license_url":"https://www.openoffice.org/license.html","same_word_com_verified":false},
+    {"id":"chromium","category":"browser_html_pdf","license":"BSD-style plus bundled component licenses","download":"https://www.chromium.org/getting-involved/download-chromium/","license_url":"https://github.com/chromium/chromium/blob/main/LICENSE","automation_docs":"https://developer.chrome.com/docs/automation-and-testing/headless-cli","requires_new_html_template":true,"same_word_com_verified":false},
+    {"id":"typst-local","category":"local_typesetter","license":"Apache-2.0","download":"https://github.com/typst/typst/releases","license_url":"https://github.com/typst/typst/blob/main/LICENSE","usage_docs":"https://github.com/typst/typst","requires_new_typst_template":true,"same_word_com_verified":false}
+  ]
+}

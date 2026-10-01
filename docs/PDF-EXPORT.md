@@ -1,5 +1,7 @@
 # PDF导出路径、版本与排错
 
+免费开源替代工具的官方入口、比较与接入示例见[资料附件](attachments/free-pdf-tools/README.md)，[下载ZIP](attachments/sagewrite-free-pdf-tools.zip)。这些候选尚未接入或验收现有05C。
+
 ## 已成功的正式路径
 
 MCP工具 `sagewrite_export_pdf`（PDF导出工具）调用 `engine/05c-pdf.ps1`。该脚本验证04F格式标记，调用同一引擎目录中的 `05-build.ps1`，由 Pandoc（文档格式转换工具）生成最新完整版DOCX，再由 `Word.Application` COM（桌面组件对象模型自动化接口）导出PDF。当前05C没有不依赖桌面COM服务的正式导出分支。

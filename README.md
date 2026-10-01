@@ -294,6 +294,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-SageWrite-Web.ps
 
 阅读版 PDF 的完整流程为：`04F.ps1 -Mode Check` → `05c-pdf.ps1` → `05-build.ps1` 使用 Pandoc 生成最新完整版 DOCX → 桌面 `Word.Application` COM 导出 PDF。Pandoc 在这里负责 DOCX，不直接渲染 PDF。05c 会验证格式标记、重新构建正文并备份旧输出；构建失败不得改用旧 DOCX。构建已包含封面时不再重复插入封面，否则使用 `00_intake/cover.png`。
 
+免费开源的替代程序已整理为[选型附件说明](docs/attachments/free-pdf-tools/README.md)与[资料ZIP](docs/attachments/sagewrite-free-pdf-tools.zip)，包含三款桌面办公软件以及Chromium、Typst两条可另建路线的工具、官方入口、许可来源和只读检测脚本。候选尚未接入或验收现有05C；附件不包含第三方安装程序。
+
 2026-10-01 的本机实际验证：24个写作单元、封面和三张插图按此流程生成49页正式阅读版 PDF，中文正文、目录和插图抽检正常。沙箱内 COM 报错，宿主授权后在沙箱外成功；注册表确认服务由 WPS 提供。替代渲染器、图像兼容版 PDF 不属于此流程，不能作为正式05c成功的证据。详细排错与验收见[出版技能路由说明](skills/sagewrite-publish-book/references/export-routing.md)。
 6. 验收实际生成的文件，确认时间戳、目录层级、封面、插图和参考文献，而不只看退出码。分别报告“已通过”“未测试”“被依赖阻塞”的功能，不把本机已有依赖环境中的成功说成全新电脑验收通过。
 
