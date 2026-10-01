@@ -13,6 +13,8 @@
 
 Profile可选All、Core、Writing、Web、Pdf、Epub、Mcp、Images、SimpleDocx。每种选择均包含Core。WorkspaceRoot可显式指定工作区父目录，否则采用SAGEWRITE_WORKSPACE_ROOT或与00-common一致的默认父目录。
 
+PDF 自检只反映当前进程可见的 `Word.Application` 注册信息。沙箱内可能报缺少注册，而桌面进程能够正常导出；应检查用户/会话、权限和32/64位注册表，并通过宿主授权机制重试原始05c流程。Microsoft Word是基准服务，本机WPS兼容服务通过过阅读版导出，但其他版本和印刷版须各自验收。不要因一次受限探测就要求安装Office，也不要用替代渲染器冒充05c导出成功。
+
 ## 结果含义
 
 - pass：该项静态检查成立。例如命令在PATH上，不代表程序已经成功运行。

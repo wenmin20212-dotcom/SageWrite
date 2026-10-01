@@ -16,7 +16,7 @@
 | Python | 3.14.2 | 简版DOCX与测试 |
 | Python包 | requirements-docx.txt固定本机版本 | python-docx及其依赖 |
 | Pandoc | 3.9 | DOCX、EPUB构建 |
-| Microsoft Word | 桌面版，目标设备自行安装、激活 | 当前05c/05cc通过COM导出PDF |
+| PDF桌面服务 | Microsoft Word为基准，目标设备自行安装、激活；兼容服务须实测 | 当前05c/05cc通过Word.Application COM导出PDF；阅读版与印刷版分别验收，沙箱不可见不等于桌面未安装 |
 | Git | 2.53.0.windows.1 | 获取代码和版本管理 |
 | 中文字体 | 与书籍排版配置一致 | 字体替代会改变换行及页数 |
 | ImageMagick | 可选，magick命令 | 部分封面/图片辅助工具 |

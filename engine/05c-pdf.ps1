@@ -48,6 +48,16 @@ $BackupRoot = Join-Path $OutputRoot "back"
 $BackupFile = $null
 
 $CheckRoot = if ($LanguageCode -eq 'zh') { $BookRoot } else { Join-Path $BookRoot ("03_translation/" + $LanguageCode) }
+# Match the cover lookup used by 05-build, including translated editions.
+foreach ($CoverSearchRoot in @($CheckRoot, (Join-Path $CheckRoot '02_chapters'))) {
+    foreach ($CoverName in @('cover.png', 'cover.jpg', 'cover.jpeg', 'cover.webp')) {
+        if (Test-Path -LiteralPath (Join-Path $CoverSearchRoot $CoverName)) {
+            $CoverPath = $null
+            break
+        }
+    }
+    if ($null -eq $CoverPath) { break }
+}
 $PowerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 & $PowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '04F.ps1') -BookName $BookName -BookRoot $CheckRoot -Mode Verify
 if ($LASTEXITCODE -ne 0) { throw 'PDF blocked by format preflight. Run 04F.ps1 first.' }

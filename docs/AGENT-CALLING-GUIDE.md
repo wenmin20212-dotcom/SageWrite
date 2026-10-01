@@ -12,7 +12,7 @@
 
 ## 2. 环境、路径与状态
 
-安装条件见 [README](../README.md)。Windows PowerShell 为运行基础；Web 需要 Node.js，正式 DOCX/EPUB 需要 Pandoc，当前 PDF 需要桌面 Word。简版 DOCX 需要 Python 与 python-docx；部分图像修补需要 ImageMagick；发布自动化需要 automation 的 npm 依赖、浏览器及用户账号。
+安装条件见 [README](../README.md)。Windows PowerShell 为运行基础；Web 需要 Node.js，正式 DOCX/EPUB 需要 Pandoc，当前 PDF 需要可实际运行的桌面 Word.Application COM 服务，Microsoft Word 为基准依赖，兼容服务需实际验收。简版 DOCX 需要 Python 与 python-docx；部分图像修补需要 ImageMagick；发布自动化需要 automation 的 npm 依赖、浏览器及用户账号。
 
 脚本内的 API 调用与操作脚本的 Agent 会话是两回事。需要 `OPENAI_API_KEY` 和相应模型权限；不能只替换密钥接入另一家服务商。默认模型并不统一，应查附录。检查密钥只报告是否存在，不打印其内容。
 
@@ -155,9 +155,9 @@ $Plan = Join-Path $BookRoot '00_brief/sample_revision_actions.json'
 | `05a-simple-docx.ps1` | 正文、Python、python-docx；调用05a-simple-docx.py | 简版DOCX替代路线；不把它当正式05的检查或排版等价物 |
 | `05aa-simple-docx-toc.ps1` | 同上 | 含目录的简版路线；实际文件名以输出日志为准，防止覆盖其他路线产物 |
 | `05b-epub.ps1` | 有效04F标记、Pandoc、资源 | BookName_full.epub；检查目录、图片、封面及内部引用，不只检查ZIP可解压 |
-| `05c-pdf.ps1` | 有效04F标记、Pandoc及桌面Word | 调05-build后导出BookName_full.pdf；失败不得用旧DOCX冒充新输出 |
+| `05c-pdf.ps1` | 有效04F标记、Pandoc及可用桌面Word COM服务 | 调05-build生成最新完整版DOCX，再经COM导出BookName_full.pdf；失败不得用旧DOCX冒充新输出；沙箱COM错误需区分权限限制与服务缺失 |
 | `05ca-print-docx.ps1` | 有效04F标记、Pandoc、印刷排版要求 | BookName_print.docx；检查开本与章节起页 |
-| `05cc-print-pdf.ps1` | 有效04F标记、Pandoc、Word | 调05ca后生成BookName_print.pdf；需实际查看印刷版页面 |
+| `05cc-print-pdf.ps1` | 有效04F标记、Pandoc、经印刷路线验收的Word COM服务 | 调05ca后生成BookName_print.pdf；需实际查看印刷版页面 |
 | `06-web.ps1` | Node.js和本地配置；Port、HostName、WorkspaceRoot等见附录 | 转入Web启动逻辑，常驻服务，不生成一本书；API密钥仍需单独配置 |
 
 ```powershell

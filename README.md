@@ -254,7 +254,7 @@ Set-Location .\SageWrite-PS1-20260917\engine
 | Web 工作台 | Node.js，确认 `node --version` 可运行 |
 | AI 写作与审稿 | 默认 `codex_agent` 需要活跃且已获授权的助手；API 模式另需密钥、模型权限和配额；独立 `codex` 模式需已认证 CLI |
 | 正式 DOCX / EPUB | Pandoc，确认 `pandoc --version` 可运行 |
-| 当前 PDF 导出 | 上述排版依赖及已安装、激活的桌面版 Microsoft Word；`05c-pdf.ps1` / `05cc-print-pdf.ps1` 使用 `Word.Application` COM，Word 网页版不能替代 |
+| 当前 PDF 导出 | 上述排版依赖及可实际运行的桌面 `Word.Application` COM 服务；Microsoft Word 是基准依赖，兼容服务须单独完成导出验收。2026-10-01 本机 WPS 服务通过阅读版 PDF 流程，不代表所有 WPS 版本或印刷版均兼容；网页版不能替代 |
 | 简版 DOCX 路线 | Python 和 `python-docx`；用 `python -c "import docx; print(docx.__version__)"` 检查实际调用的 Python 环境 |
 | 部分图片工具 | ImageMagick，确认 `magick -version` 可运行 |
 | 可选发布自动化 | 按 `engine/automation/package.json` 安装依赖，并配置所需浏览器、平台账号及权限；不能以准备模式成功代替真实功能验收 |
@@ -290,7 +290,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-SageWrite-Web.ps
 2. 确认 Web 界面能打开，且看到的是预期工作区。端口冲突时更换端口，不终止不明进程。网页能打开不代表 API 已可用；联网生成会产生费用，应在用户授权范围内做小规模验证。
 3. 用内容完整的测试书稿检查排版；空项目不能验证导出能力。正式构建前运行 `04F.ps1 -BookName <测试书名> -Mode Check`，检查通过后分别验收 `05-build.ps1`、`05c-pdf.ps1` 和 `05b-epub.ps1`。参数说明见对应脚本及 [04F 说明](engine/04F-README.md)。
 4. 遇到 04F 标记缺失或过期，应读报告、修复问题并重新检查；采用 04R 的书稿还须满足参考文献完整性要求。不得伪造标记、删除检查逻辑或回退使用旧产物来宣称构建成功。
-5. PDF 报 `Word.Application` 错误时，检查桌面 Word 的安装、激活与首次启动状态；无交互会话的服务或 SYSTEM 任务不应视为已验证的 Word 导出环境。中文字体不同也可能改变换行、页数及版式，需实际打开 PDF 检查。
+5. PDF 报 `Word.Application` 或 `80040154` 错误时，先区分桌面 COM 服务缺失与沙箱访问限制，再检查当前用户、交互会话、32/64位注册表、安装与首次启动状态。不要凭沙箱内一次失败就断言未安装 Office。通过宿主授权机制，可在沙箱外重试同一脚本；无交互会话的服务或 SYSTEM 任务不能视为已验证的导出环境。中文字体不同也可能改变换行、页数及版式，需实际打开 PDF 检查。
+
+阅读版 PDF 的完整流程为：`04F.ps1 -Mode Check` → `05c-pdf.ps1` → `05-build.ps1` 使用 Pandoc 生成最新完整版 DOCX → 桌面 `Word.Application` COM 导出 PDF。Pandoc 在这里负责 DOCX，不直接渲染 PDF。05c 会验证格式标记、重新构建正文并备份旧输出；构建失败不得改用旧 DOCX。构建已包含封面时不再重复插入封面，否则使用 `00_intake/cover.png`。
+
+2026-10-01 的本机实际验证：24个写作单元、封面和三张插图按此流程生成49页正式阅读版 PDF，中文正文、目录和插图抽检正常。沙箱内 COM 报错，宿主授权后在沙箱外成功；注册表确认服务由 WPS 提供。替代渲染器、图像兼容版 PDF 不属于此流程，不能作为正式05c成功的证据。详细排错与验收见[出版技能路由说明](skills/sagewrite-publish-book/references/export-routing.md)。
 6. 验收实际生成的文件，确认时间戳、目录层级、封面、插图和参考文献，而不只看退出码。分别报告“已通过”“未测试”“被依赖阻塞”的功能，不把本机已有依赖环境中的成功说成全新电脑验收通过。
 
 2026-09-17 的迁移检查已从 GitHub 锁定标签克隆独立副本，并通过安装器 DryRun 和新工作区初始化；**这不是全新 Windows 系统上的完整安装验收**。本说明是锁版后的补充文档，不代表既有锁版标签中的 README 已被改写。

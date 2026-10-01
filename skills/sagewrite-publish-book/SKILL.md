@@ -25,9 +25,11 @@ Use `Normalize` only with explicit authorization because it can change formattin
 Confirm local dependencies for the chosen route:
 
 - formal DOCX and EPUB: Pandoc;
-- PDF routes: Pandoc plus installed and activated desktop Microsoft Word with an interactive user session;
+- PDF routes: Pandoc plus a working desktop `Word.Application` COM automation server in an interactive user session. Microsoft Word is the reference dependency; a compatible provider must pass an actual export and visual inspection. A local WPS provider passed the reading-PDF route on 2026-10-01; this does not certify every WPS version or the print route;
 - simple DOCX routes: Python and `python-docx`;
-- print routes: the approved print layout configuration and the same Word requirement for PDF.
+- print routes: the approved print layout configuration and a working Word COM provider for PDF, verified separately with the print route.
+
+COM registration checks are scoped to the calling process. A sandbox can return `80040154` or a missing ProgID even when the desktop provider works. Check sandbox permissions, the interactive user and 32/64-bit registry views before declaring the dependency absent. When authorized, retry the identical stage-05 command outside the sandbox; do not silently replace the PDF renderer. See `references/export-routing.md` for the tested route and failure handling.
 
 ## Choose one output route
 

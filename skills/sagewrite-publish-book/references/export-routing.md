@@ -28,6 +28,10 @@ Do not manually patch the stamp. Do not use `Normalize` as an automatic retry; i
 
 `sagewrite_export_pdf` verifies preflight, rebuilds the latest formal DOCX through `05-build.ps1`, verifies that inputs did not change during the build, and then uses Word COM to export PDF. It must not fall back to an older DOCX after a failed rebuild.
 
+The exact route is Markdown -> Pandoc -> latest full DOCX -> `Word.Application` COM -> PDF. Pandoc does not render this PDF directly. If 05-build embeds a cover from the source root or `02_chapters` (PNG/JPG/JPEG/WebP), 05c skips its additional `00_intake/cover.png` insertion to avoid duplicate covers; otherwise that intake image remains its fallback.
+
+On 2026-10-01, the Chinese reading-PDF route was tested on Windows with 24 manuscript units, a cover and three illustrations. The unmodified rendering route failed inside the agent sandbox with `80040154`, then succeeded outside it. The desktop `Word.Application` registration pointed to WPS `wps.exe /Automation` in the 32-bit registry view. After cover de-duplication, the exported PDF had 49 pages; representative Chinese body, cover, TOC and illustration pages were inspected. This is evidence for that provider and environment, not general WPS compatibility or print-PDF acceptance.
+
 Check at minimum:
 
 - expected cover and title metadata;
@@ -67,7 +71,8 @@ In addition to ordinary content checks, verify trim size, portrait/landscape int
 ## Failure handling
 
 - Missing/stale preflight: stop, run 04F Check, fix findings, and retry only after it passes.
-- Missing Pandoc/Python/Word: report the exact dependency; do not substitute another output and label it equivalent.
+- Missing Pandoc/Python/COM provider: report the exact dependency; do not substitute another output and label it equivalent.
+- `Word.Application` / `80040154`: distinguish a genuinely absent registration from sandbox restrictions and user/session or registry-view differences. Inspect the desktop registration in both registry views, and retry the identical command outside the sandbox only through the host's authorized permission mechanism. Never infer missing Office solely from one restricted-process probe. The MCP server's child process inherits its host restrictions and cannot grant itself access.
 - Locked output: ask the user to close the file or sync process, then rerun once.
 - Build fails after backing up the prior output: report the backup and failure; do not present the backup as newly generated.
 - Visual defect: retain the artifact as a failed preview, fix the relevant layout rule or source, repeat preflight, rebuild, and re-inspect.

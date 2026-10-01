@@ -49,6 +49,12 @@ CodeBuddy may request approval before enabling a project MCP server. Approve `sa
 
 Each write tool returns structured JSON containing the script name, success state, exit code, stdout, and stderr. Long-running calls default to a one-hour timeout. Override it with `SAGEWRITE_MCP_TIMEOUT_MS`.
 
+### PDF export
+
+`sagewrite_export_pdf` runs `05c-pdf.ps1`, which verifies 04F, invokes `05-build.ps1` to create a fresh full DOCX with Pandoc, then exports through desktop `Word.Application` COM. It does not ask Pandoc to render PDF. The COM provider must work in the server's interactive user context; Microsoft Word is the reference provider. A WPS provider passed an actual local reading-PDF export on 2026-10-01, but other versions and print export need their own validation.
+
+The MCP child inherits its host's restrictions. `80040154` inside a sandbox is not proof that Office is absent: inspect desktop COM registration and registry views and, when authorized by the host, retry the same script outside the sandbox. The tool cannot bypass permissions itself. Check the new PDF's Chinese text, cover count, TOC and illustrations before reporting success. See [export routing](../../skills/sagewrite-publish-book/references/export-routing.md).
+
 ## LLM modes
 
 The MCP wrapper does not choose a model itself. Existing SageWrite environment settings continue to control `00-llm.ps1`, including OpenAI-compatible providers and the `codex` command mode. See `../LLM-CONFIG.md`.

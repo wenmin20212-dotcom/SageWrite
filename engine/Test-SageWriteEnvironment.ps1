@@ -113,9 +113,9 @@ Add-Check 'python.docx' 'SimpleDocx' 'unverified' 'python-docx import was not ex
 Test-Tool 'magick' 'Images'
 try {
     $Word = [Type]::GetTypeFromProgID('Word.Application')
-    Add-Check 'word.registration' 'Pdf' $(if($Word){'pass'}else{'fail'}) 'Checks Word COM registration only; Word was not started.' 'Install desktop Microsoft Word if registration is missing.'
-} catch { Add-Check 'word.registration' 'Pdf' 'fail' 'Unable to inspect Word COM registration.' 'Check desktop Word installation on Windows.' }
-Add-Check 'word.export' 'Pdf' 'unverified' 'Word activation, fonts and actual export were not tested.' 'Open Word to finish activation/setup; render a disposable document and inspect its PDF.'
+    Add-Check 'word.registration' 'Pdf' $(if($Word){'pass'}else{'fail'}) 'Checks Word.Application COM registration visible to this process only; no desktop provider was started.' 'Check sandbox restrictions, user/session and both registry views before declaring the desktop COM provider missing.'
+} catch { Add-Check 'word.registration' 'Pdf' 'fail' 'Unable to inspect Word.Application COM registration in this process.' 'Check sandbox access and desktop COM registration on Windows; an actual export is required.' }
+Add-Check 'word.export' 'Pdf' 'unverified' 'Desktop COM provider startup, activation, fonts and actual export were not tested.' 'Run the original 05c route in an authorized interactive desktop context and inspect its PDF; compatible providers require actual validation.'
 Add-Check 'fonts' 'Pdf' 'unverified' 'No book selected; required fonts cannot be inferred.' 'Check the book layout specification and actual rendered PDF for font substitution.'
 
 Test-Tool 'node' 'Mcp'
