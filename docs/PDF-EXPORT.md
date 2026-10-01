@@ -1,6 +1,6 @@
 # PDF导出路径、版本与排错
 
-免费开源替代工具的官方入口、比较与接入示例见[资料附件](attachments/free-pdf-tools/README.md)，[下载ZIP](attachments/sagewrite-free-pdf-tools.zip)。这些候选尚未接入或验收现有05C。
+免费自动替代路线见[已实测附件](attachments/free-pdf-tools/README.md)，[下载可运行ZIP](attachments/sagewrite-free-pdf-tools.zip)。Typst和Chromium已下载并用完整24单元书稿自动导出，附验收记录。它们采用独立辅助版式，未接入现有05C或注册为MCP工具；人工导出候选和本次验收失败的工具不在可用包内。
 
 ## 已成功的正式路径
 
@@ -62,4 +62,4 @@ WPS服务的注册位置指向用户目录下的 `Kingsoft/WPS Office/<版本目
 
 不需要人工打开Word/WPS界面操作，与完全不依赖其桌面程序，是两回事：现有05C自动运行COM服务，仍依赖该服务程序。
 
-Pandoc本身可配合其他PDF引擎生成PDF，见[官方安装说明](https://pandoc.org/installing.html)。这属于可另行建设的导出路线，当前仓库05C没有实现或验收该路线。现有图像兼容版和此前PyMuPDF临时方案也不能描述为05C的无Office正式能力。新增路线需要独立处理中文字体、封面、目录、分页、表格和插图并实测，不能只替换文件后缀就宣称等价。
+Pandoc本身可配合其他PDF引擎生成PDF，见[官方安装说明](https://pandoc.org/installing.html)。2026-10-01新增的附件export.py已实际跑通Markdown→Pandoc→Typst或Chromium→PDF，分别37页和40页，核查章节、中文、封面、三张插图和目录链接。它是独立自动辅助路线，不是05C的无Office正式分支；版式不同，每本书仍需验收。此前图像兼容版或PyMuPDF临时方案不能作为这两条新路线的测试证据。

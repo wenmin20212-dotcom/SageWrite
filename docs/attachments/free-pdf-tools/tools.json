@@ -1,15 +1,11 @@
 {
-  "schema_version": 1,
-  "researched_on": "2026-10-01",
-  "bundle_type": "documentation_and_readonly_inventory",
-  "contains_installers": false,
-  "selection": "free_open_source_without_paid_commercial_license",
-  "all_candidates": "not_integrated_or_export_tested_in_sagewrite",
+  "schema_version": 2,
+  "validated_on": "2026-10-01",
+  "platform": "windows-x64",
+  "pandoc_tested": "3.11",
+  "source_structure": "section_based_sagewrite_markdown",
   "tools": [
-    {"id":"libreoffice","category":"desktop_office","license":"MPL-2.0 plus bundled component licenses","download":"https://www.libreoffice.org/download/","license_url":"https://www.libreoffice.org/licenses/","automation_docs":"https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html","observed_download_page_version":"26.8.0","same_word_com_verified":false,"priority":"first_candidate_for_docx_to_pdf"},
-    {"id":"onlyoffice-desktop","category":"desktop_office","license":"AGPL-3.0 and upstream notices","download":"https://www.onlyoffice.com/desktop","license_url":"https://github.com/ONLYOFFICE/desktop-apps/blob/master/LICENSE","usage_docs":"https://helpcenter.onlyoffice.com/docs/userguides/document_editor/SavePrintDownload.aspx","same_word_com_verified":false,"batch_export_verified":false},
-    {"id":"apache-openoffice","category":"desktop_office","license":"Apache-2.0 plus bundled component licenses","download":"https://www.openoffice.org/download/","license_url":"https://www.openoffice.org/license.html","same_word_com_verified":false},
-    {"id":"chromium","category":"browser_html_pdf","license":"BSD-style plus bundled component licenses","download":"https://www.chromium.org/getting-involved/download-chromium/","license_url":"https://github.com/chromium/chromium/blob/main/LICENSE","automation_docs":"https://developer.chrome.com/docs/automation-and-testing/headless-cli","requires_new_html_template":true,"same_word_com_verified":false},
-    {"id":"typst-local","category":"local_typesetter","license":"Apache-2.0","download":"https://github.com/typst/typst/releases","license_url":"https://github.com/typst/typst/blob/main/LICENSE","usage_docs":"https://github.com/typst/typst","requires_new_typst_template":true,"same_word_com_verified":false}
+    {"id":"typst","version":"0.15.1","license":"Apache-2.0","url":"https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-pc-windows-msvc.zip","archive":"typst-x86_64-pc-windows-msvc.zip","bytes":22463684,"sha256":"19ce3551153c2fe7ee9fa2f95208310c8f4d3209fedb699e0333faf8913f6736","hash_verification":"matched_official_github_asset_digest","executable":"typst-x86_64-pc-windows-msvc/typst.exe","acceptance":"local_complete_book_automatic_export_and_representative_visual_check_passed"},
+    {"id":"chromium","version":"snapshot-1708478","license":"BSD-style and bundled component licenses","url":"https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/1708478/chrome-win.zip","archive":"chromium-1708478.zip","bytes":359039367,"sha256":"0dbe69c3ac614191c439f20449764d2154f6ff681ae3662fa56fffe438293731","hash_verification":"computed_from_official_snapshot_download","executable":"chrome-win/chrome.exe","acceptance":"local_complete_book_automatic_export_and_representative_visual_check_passed"}
   ]
 }

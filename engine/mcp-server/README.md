@@ -53,7 +53,7 @@ Each write tool returns structured JSON containing the script name, success stat
 
 完整中文说明、已核实的组件版本、官方下载入口与此前误判的纠正，见 [PDF导出路径、版本与排错](../../docs/PDF-EXPORT.md)。使用前必须核实脚本绝对路径、工作区父目录、当前语言源目录及最终输出路径；MCP客户端与终端的工作区配置可能不同。
 
-免费开源候选工具见[中文附件说明](../../docs/attachments/free-pdf-tools/README.md)，可下载[资料附件ZIP](../../docs/attachments/sagewrite-free-pdf-tools.zip)。包含LibreOffice、ONLYOFFICE桌面版、OpenOffice及Chromium、Typst的官方入口与只读检测脚本；不含安装程序，尚未接入05C，不宣称可直接替代Word COM。
+无需Word/WPS的已实测辅助路线见[中文附件说明](../../docs/attachments/free-pdf-tools/README.md)和[自动导出附件ZIP](../../docs/attachments/sagewrite-free-pdf-tools.zip)。Typst 0.15.1与Chromium快照1708478已本地下载并自动导出完整书稿，附固定下载校验脚本、export.py和脱敏验收记录。人工导出候选已移除，未通过的LibreOffice不纳入。辅助版式与05C不同，尚未注册为本MCP工具；不可声称sagewrite_export_pdf已支持这些引擎。
 
 `sagewrite_export_pdf` runs `05c-pdf.ps1`, which verifies 04F, invokes `05-build.ps1` to create a fresh full DOCX with Pandoc, then exports through desktop `Word.Application` COM. It does not ask Pandoc to render PDF. The COM provider must work in the server's interactive user context; Microsoft Word is the reference provider. A WPS provider passed an actual local reading-PDF export on 2026-10-01, but other versions and print export need their own validation.
 

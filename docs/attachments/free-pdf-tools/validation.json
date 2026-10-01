@@ -1,0 +1,68 @@
+{
+  "validated_on": "2026-10-01",
+  "book_source": "complete_24_unit_chinese_manuscript",
+  "contains_manuscript_or_preview_images": false,
+  "tested_entrypoint": "export.py",
+  "manual_export": false,
+  "word_or_wps_used": false,
+  "accepted": [
+    {
+      "route": "typst",
+      "version": "0.15.1",
+      "pages": 37,
+      "all_24_headings_present": true,
+      "cover_and_three_illustrations_present": true,
+      "image_pages": [
+        1,
+        5,
+        11,
+        24
+      ],
+      "internal_links": 41,
+      "pdf_bytes": 1936235,
+      "representative_visual_inspection": "passed",
+      "layout": "auxiliary_not_05c_equivalent",
+      "substantial_chinese_paragraphs_matched": 210
+    },
+    {
+      "route": "chromium",
+      "version": "snapshot-1708478",
+      "pages": 40,
+      "all_24_headings_present": true,
+      "cover_and_three_illustrations_present": true,
+      "image_pages": [
+        1,
+        6,
+        13,
+        27
+      ],
+      "internal_links": 41,
+      "pdf_bytes": 2053315,
+      "representative_visual_inspection": "passed",
+      "toc": "clickable_without_per_chapter_page_numbers",
+      "layout": "auxiliary_not_05c_equivalent",
+      "substantial_chinese_paragraphs_matched": 210
+    }
+  ],
+  "rejected": [
+    {
+      "route": "libreoffice",
+      "version": "26.2.6.3",
+      "downloaded": true,
+      "msi_signature": "valid",
+      "official_sha256_matched": true,
+      "automatic_export_attempted": true,
+      "reason": "custom_05build_docx_failed_to_load; regenerated_docx_exported_but_toc_empty"
+    },
+    {
+      "route": "onlyoffice-desktop",
+      "reason": "manual_export_candidate_excluded_no_usable_automatic_route"
+    },
+    {
+      "route": "apache-openoffice",
+      "reason": "manual_export_candidate_excluded_no_usable_automatic_route"
+    }
+  ],
+  "limits": "Representative pages inspected; new books, fonts, platforms and versions require acceptance. No claim of print publication acceptance.",
+  "zip_roundtrip_test": "passed_using_unpacked_delivery_scripts_and_checksum_extracted_programs"
+}

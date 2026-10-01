@@ -5,7 +5,7 @@ import zipfile
 
 root = Path(__file__).resolve().parent
 source = root / "free-pdf-tools"
-names = ("README.md", "tools.json", "check-installed.ps1")
+names = ("README.md", "tools.json", "export.py", "download-tools.py", "validation.json")
 checksums = "".join(
     f"{hashlib.sha256((source / name).read_bytes()).hexdigest()}  {name}\n"
     for name in names
