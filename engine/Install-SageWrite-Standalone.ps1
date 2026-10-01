@@ -158,6 +158,13 @@ if (-not [string]::IsNullOrWhiteSpace($EffectiveWorkspaceRoot)) {
 Set-Content -LiteralPath $ConfigPath -Value $ConfigText -Encoding UTF8
 Write-Host "Wrote config: $ConfigPath"
 
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $EngineRoot 'Complete-SageWriteInstallation.ps1') -Profile Web -WorkspaceRoot $EffectiveWorkspaceRoot
+$EnvironmentCheckExitCode = $LASTEXITCODE
+if ($EnvironmentCheckExitCode -ne 0) {
+  Write-Warning 'Configuration was saved, but environment inspection did not pass. Resolve the reported blockers before starting the Web workspace.'
+  exit $EnvironmentCheckExitCode
+}
+
 if ($InstallAutoStart) {
   $TaskArgs = @{
     ConfigPath = $ConfigPath

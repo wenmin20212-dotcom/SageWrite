@@ -45,3 +45,15 @@ Record a redacted repair log in the local report directory: original report, app
 Rerun the same profile and workspace against the repaired environment, creating a new report. Link before/after reports and distinguish resolved failures from remaining warnings and unverified behavior. If a separately authorized smoke test ran, report its actual artifact or result. A static pass does not prove Word activation, model access, or successful book export.
 
 Do not modify manuscript files, mark a book stage complete, or issue 04F approval. Environment management ends with the report, repair record when applicable, and remaining user actions.
+
+## Installation handoff
+
+After installation or migration, rerun the relevant environment profile against the final configuration and workspace. The installers invoke `engine/Complete-SageWriteInstallation.ps1` for Writing or Web; inspect its JSON output and saved report. Inspect additional profiles when the requested installation includes export or MCP. DryRun is only a preview and must not produce an installation-complete greeting.
+
+Deliver a complete, readable text report directly in the Agent's conversation with the user, in their language. Terminal output or a report link alone is insufficient. Include actual installation actions, project version when known, project and workspace locations, checked capabilities and results, remaining blockers/warnings/unverified items, the saved report link, and a useful next step. Never include secrets. Distinguish static prerequisite checks from runtime tests and actual export verification.
+
+When installation actions are complete and the intended scope has no blockers, welcome the user, for example:
+
+> 欢迎使用 SageWrite！安装配置已完成，写作所需的静态环境检查已通过。您现在可以在当前 Agent 的协助下开始规划书籍。SageWrite 支持构思讨论、目录规划、章节写作、审稿修订与成书导出；具体导出功能以对应检查和实际验证结果为准。您无需先学习全部软件操作，可以直接告诉我想写什么书，或指定要继续处理的已有书稿。
+
+Adapt this wording to the actual checked scope and follow it with the concrete report details. If blockers remain, say which setup steps completed and which capability is blocked; give next actions instead of claiming readiness. For an existing installation or inspection-only task, report its current state without claiming a new installation. No standalone script can wake a conversation: the active Agent must deliver this handoff.

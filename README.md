@@ -1,16 +1,42 @@
 # SageWrite
 
-SageWrite is a structured AI writing engine and local web workspace for planning, generating, reviewing, rewriting, and building long-form books.
+SageWrite is a structured AI writing engine for planning, writing, reviewing, revising, and building long-form books through conversation with an AI Agent, with an optional local Web workspace.
 
-SageWrite 是一套结构化的 AI 写作引擎与本地 Web 工作台，用于完成长篇书籍的规划、生成、检查、重写与构建。
+SageWrite 是一套支持 AI Agent 对话式创作的结构化写书引擎，用于完成长篇书籍的规划、写作、审稿、修订与成书，并提供可选的本地 Web 工作台。
 
 **SageWrite 由文军（Wenjun）发起、设计并主导开发，借助 AI 编程工具协作实现。项目采用 MIT 许可证开源。**
 
 ## Overview
 
-SageWrite combines PowerShell workflow scripts with a local browser-based control panel. It is designed for book-length writing projects that need clear structure, repeatable generation steps, editable intermediate files, and human-in-the-loop revision.
+SageWrite combines PowerShell workflow scripts and file-based book workspaces with AI Agent collaboration and an optional local browser-based control panel. It is designed for book-length writing projects that need clear structure, repeatable generation steps, editable intermediate files, and human-in-the-loop revision.
 
-SageWrite 将 PowerShell 工作流脚本与本地浏览器控制台结合在一起，适合需要清晰结构、可重复生成流程、可编辑中间文件以及人工干预修订的长篇写作项目。
+SageWrite 将 PowerShell 工作流脚本、文件化的书籍工作区与 AI Agent 协作结合在一起，并提供可选的本地浏览器控制台，适合需要清晰结构、可重复生成流程、可编辑中间文件以及人工干预修订的长篇写作项目。
+
+## 面向 AI 时代：以对话驱动写书
+
+**SageWrite 正是为适应这一变化而开始编写的：把获取项目、阅读文档、学习工具和执行操作的工作交给 AI Agent，让作者专注于创作意图与作品本身。**
+
+传统软件和常见的 SaaS 产品通常通过图形界面提供功能，用户需要自己学习菜单、按钮、参数以及操作顺序。Agent 带来了一种新的使用方式：作者把项目地址和任务交给具备相应能力的 AI Agent，由它在授权范围内下载项目、阅读说明、检查环境、学习调用方法并执行工作。作者可以通过对话说明目标、讨论方案和检查结果，无需先掌握整套软件的界面与操作流程。
+
+对于一个新的 AI Agent 环境，用户可以从提供项目地址开始：
+
+> 请阅读这个项目：https://github.com/wenmin20212-dotcom/SageWrite。了解它的用途和操作规则，检查当前环境，协助我安装配置，然后通过对话指导我完成写书。遇到需要我决定或授权的事项，请向我说明。
+
+Agent 根据项目文档了解系统，检查适用条件并协助完成安装配置；准备完成后，再引导作者确定书的目标、规划目录、撰写与修订正文以及检查成书结果。用户无需预先熟悉项目的全部内容，可以在实际创作过程中，由 Agent 按当前任务解释必要信息并执行获授权的操作。
+
+这种方式要求 Agent 能够读取项目，并具备或通过工具获得本地文件访问与命令执行能力，同时遵守项目规则和工作区权限。项目已提供 Codex 的使用说明；根据项目发起人反馈，也已有多位用户通过腾讯 WorkBuddy 下载并正常使用 SageWrite。这些使用案例说明，用户可以把项目地址交给 Agent，由它阅读项目、协助安装并指导后续使用，无需预先熟悉项目的全部内容。这里记录的是用户实际使用反馈，不代表对所有版本、环境和功能的逐项测试。
+
+腾讯推出的 [WorkBuddy](https://cloud.tencent.com/product/workbuddy) 支持 [Skills 技能扩展](https://cloud.tencent.com/document/product/1831/134432)和 [MCP 工具接入](https://www.workbuddy.ai/docs/zh/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/MCP-Guide)。WorkBuddy、Codex 等 Agent 环境具有相近的工具协作方式：通过技能说明理解任务，通过 MCP 或本地工具执行操作。SageWrite 因而围绕文档、技能、脚本和 MCP 提供操作入口，让不同 Agent 能够学习并使用同一套写书流程。具体接入方式、权限和可用工具仍以各平台及当前环境为准。
+
+因此，面向 Agent 的项目不仅要提供功能，还要提供 Agent 能够理解和调用的文档、工具入口、明确的输入输出以及可检查的执行结果。SageWrite 通过 Agent 规则、技能说明、脚本和 MCP 工具承载这些信息，使项目发布后，具备相应权限与能力的 Agent 可以依据项目文件学习如何使用它。实际使用仍需满足本地依赖、访问权限和必要的人工确认。
+
+SageWrite 的设计理念是：**作者表达创作意图，AI Agent 操作写书工具，文件与工作流承载创作结果。** 在具备工作区访问和命令执行权限的活跃 Agent 协助下，作者可以通过文字或受支持的语音对话，推进从构思、目录规划、章节写作、审稿修订到成书导出的完整流程。具体步骤仍需满足相应的环境依赖与检查要求。
+
+作者可以说“先讨论这本书的读者和主旨”“按确认的目录写下一节”“根据审稿意见修改第三章”或“检查并导出新版书稿”。Agent 将这些意图落实为具体的文件编辑和程序调用，检查结果并继续与作者讨论。作者负责思想、判断与确认，系统负责组织和执行可重复的流程。
+
+在这种使用方式下，Web 界面是可选的查看与操作入口，作者无需先打开网页或逐个点击按钮来推进写书。对话成为连接作者与工具的操作层，底层引擎继续提供结构化文件、备份、审校记录和构建检查，使创作过程能够保存、复核和继续。
+
+这种变化的意义，在于软件使用中的学习与操作工作可以更多地由 Agent 承担。作者仍然决定写什么、为什么写以及什么样的结果可以接受；Agent 负责理解工具并落实操作。SageWrite 将这一设计方向用于长篇写作，同时保留 Web 工作台，供需要可视化查看和直接编辑的作者使用。
 
 ## Core Capabilities
 
@@ -28,6 +54,8 @@ SageWrite 将 PowerShell 工作流脚本与本地浏览器控制台结合在一�
 
 安装或迁移前先运行 `engine/Test-SageWriteEnvironment.ps1`。支持按写作、网页、PDF、EPUB、MCP等用途输出检查结果及JSON报告，不显示密钥、不自动安装。详见[环境自检说明](engine/ENVIRONMENT-CHECK.md)。
 
+Agent 安装器和 Web 独立安装器在实际配置完成后，会自动运行相应的环境检查并保存报告；预检查 `-DryRun` 不执行安装后检查。安装 Agent 应遵循[环境管理技能](skills/sagewrite-manage-environment/SKILL.md)中的交付规则，在对话框内给出完整的文本报告和欢迎词，说明安装位置、工作区、已检查功能、待处理事项和开始写书的方法。存在阻塞时报告部分完成；静态检查通过不代表 PDF、EPUB 等功能已经实际导出验证。
+
 中文快速开始：[Codex语音写书九步说明](docs/VOICE-WRITING-WORKFLOW.md)。新电脑恢复环境：[环境与安装清单](docs/ENVIRONMENT-RESTORE.md)。当前改写功能版本：[2026-09-28发布说明](engine/RELEASE-20260928.md)。
 
 The main pipeline is:
@@ -38,7 +66,7 @@ The main pipeline is:
 
 `03RW.ps1` 不重新设计故事。它按统一写作规范逐章润色已有章节，支持单章、连续范围和全书运行；原稿自动备份，修订稿单独保存，并为每章生成审校记录。详见 [03RW使用说明](engine/03RW.README.md)。
 
-Each stage can be run independently from scripts or from the local Web UI.
+Each stage can be run independently through an authorized AI Agent or directly from scripts; the local Web UI provides another entry point for the stages it supports.
 
 ## Skills
 
@@ -54,6 +82,29 @@ Each stage can be run independently from scripts or from the local Web UI.
 - [`sagewrite-workflow-status`](skills/sagewrite-workflow-status/SKILL.md)：通过MCP `sagewrite_workflow_status` 调用 `Get-SageWriteWorkflowStatus.ps1`，本地统计目录与正文进度、检查04F指纹并汇总证据。默认只读；`saveReport: true` 保存完整JSON。每批写作后再次调用可刷新，不会自动挂接旧程序，也不代替编辑判断或出版审批。
 
 ## 两种创作工作方式：网页操作与 AI Agent 对话
+
+### Windows 一键启动独立 Agent
+
+在安装了 Codex 桌面应用的 Windows 电脑上，双击仓库根目录的
+`Start-SageWrite-Agent.cmd`，即可启动一个独立 SageWrite Agent 会话。它会自动加载本项目的
+`AGENTS.md` 规则，把源码目录作为项目目录，并把 `SAGEWRITE_WORKSPACE_ROOT`（默认是仓库旁的
+`SageWriteWorkspaces`）加入可写范围。这个入口不依赖 Web UI 或 Node.js。
+
+首次使用可先验证，不启动 Agent：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\engine\Install-SageWrite-Agent.ps1 -DryRun
+```
+
+需要桌面快捷方式时显式执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\engine\Install-SageWrite-Agent.ps1 -CreateDesktopShortcut
+```
+
+可用 `-WorkspaceRoot` 指定书稿父目录，或在双击入口后由 Agent 列出当前书籍。独立会话仍使用
+`codex_agent` 交接协议：这里的“独立”是无需保持本对话开启，并不表示 SageWrite 自己在后台
+自动唤醒模型。Codex 桌面应用需要已安装并登录；涉及发布、覆盖整书或其他高影响操作时仍需人工确认。
 
 **安装和操作本系统的 AI Agent 请先阅读 [Agent 调用手册](docs/AGENT-CALLING-GUIDE.md)。** 手册逐项说明00—09及辅助入口的用途、前置条件、输入输出、推荐顺序与人工确认点；具体参数见 [完整PS1参数附录](docs/AGENT-SCRIPT-PARAMETERS.md)。不要按文件编号依次运行全部脚本。
 
@@ -156,7 +207,7 @@ SageWrite/
 
 API 模式需自行提供可用密钥、模型权限和配额，不能以聊天订阅替代 API 配置。密钥不要写入 Git；Agent 不打印密钥。切换服务商时需同时核对地址、协议、模型及认证，不能仅替换密钥或未经测试就宣称兼容。不要假定 `OPENAI_BASE_URL` 已被适配器支持。
 
-该功能的可复用模板已纳入本项目，见 [模板导出与测试说明](templates/README.md)。导出器仅复制调用模块、示例、文档及测试，不包含书稿、私有配置或密钥。Work Buddy 等其他助手的集成尚未实现或验证。
+该功能的可复用模板已纳入本项目，见 [模板导出与测试说明](templates/README.md)。导出器仅复制调用模块、示例、文档及测试，不包含书稿、私有配置或密钥。根据项目发起人反馈，已有多位用户通过 WorkBuddy 下载并正常使用本系统；其他 Agent 使用文本交接模式时，应遵守上述请求、响应与脚本重跑规则。`codex_agent` 是本项目交接协议的 provider 标识，不表示使用本项目的助手必须是 Codex，也不表示已实现 WorkBuddy 专用适配器。
 
 ## Quick Start
 
