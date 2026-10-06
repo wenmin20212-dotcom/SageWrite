@@ -332,3 +332,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-SageWrite-Web.ps
 SageWrite is not the only possible writing system in the AI era. It is a representative engineering pattern: structured prompts, explicit files, script orchestration, local visibility, and human revision working together as a practical long-form writing workflow.
 
 SageWrite 并不是 AI 时代唯一的写作系统，而是一种具有代表性的工程范式：通过结构化提示、显式文件、脚本编排、本地可观察性以及人工修订，构成一个可落地的长篇写作工作流。
+
+## 独立 UAH/BOSS 安装包
+
+安装、模型配置和构建见 [UAH 安装说明](uah/README.md)。UAH 适配由 SageWrite 独立维护，发布包不包含宿主。

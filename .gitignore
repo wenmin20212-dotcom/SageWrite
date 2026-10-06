@@ -1,4 +1,4 @@
-﻿.codex/
+.codex/
 .DS_Store
 .env
 .venv/
@@ -20,3 +20,7 @@ engine/webui/.cache/
 engine/automation/node_modules/
 engine/automation/.cache/
 engine/mcp-server/node_modules/
+
+dist/
+uah/model.local.json
+uah/installation.local.json

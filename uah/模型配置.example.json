@@ -1,0 +1,7 @@
+{
+  "SAGE_LLM_PROVIDER": "openai-compatible",
+  "SAGE_LLM_API_STYLE": "chat-completions",
+  "SAGE_LLM_BASE_URL": "https://your-provider.example/v1",
+  "SAGE_LLM_MODEL": "your-model",
+  "SAGE_LLM_API_KEY": ""
+}
