@@ -1,0 +1,31 @@
+name: SageWrite UAH package
+on:
+  push:
+    paths: ['uah/**', 'engine/**', 'skills/**', '.github/workflows/uah-package.yml']
+  pull_request:
+    paths: ['uah/**', 'engine/**', 'skills/**', '.github/workflows/uah-package.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - run: corepack enable
+      - run: corepack pnpm@10.11.0 --dir engine/mcp-server install --frozen-lockfile
+      - run: node uah/build.cjs dist/SageWrite-UAH (Get-Command node.exe).Source
+      - run: node uah/verify.cjs dist/SageWrite-UAH
+      - run: |
+          Compress-Archive -Path dist/SageWrite-UAH/* -DestinationPath dist/SageWrite-UAH-win32-x64.zip
+          $hash = (Get-FileHash dist/SageWrite-UAH-win32-x64.zip -Algorithm SHA256).Hash.ToLower()
+          Set-Content dist/SageWrite-UAH-win32-x64.zip.sha256 "$hash  SageWrite-UAH-win32-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SageWrite-UAH-win32-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256

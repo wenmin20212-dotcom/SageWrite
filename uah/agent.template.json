@@ -1,0 +1,109 @@
+{
+  "schema": "uah-agent/v0.2",
+  "id": "sagewrite",
+  "name": "SageWrite",
+  "version": "1.1.0",
+  "prompt": "prompts/system.md",
+  "skills": [
+    {
+      "id": "sagewrite-new-book",
+      "path": "payload/SageWrite/skills/sagewrite-new-book"
+    },
+    {
+      "id": "sagewrite-generate-toc",
+      "path": "payload/SageWrite/skills/sagewrite-generate-toc"
+    },
+    {
+      "id": "sagewrite-write-chapters",
+      "path": "payload/SageWrite/skills/sagewrite-write-chapters"
+    },
+    {
+      "id": "sagewrite-review-edit",
+      "path": "payload/SageWrite/skills/sagewrite-review-edit"
+    },
+    {
+      "id": "sagewrite-create-cover",
+      "path": "payload/SageWrite/skills/sagewrite-create-cover"
+    },
+    {
+      "id": "sagewrite-publish-book",
+      "path": "payload/SageWrite/skills/sagewrite-publish-book"
+    },
+    {
+      "id": "sagewrite-manage-environment",
+      "path": "payload/SageWrite/skills/sagewrite-manage-environment"
+    },
+    {
+      "id": "sagewrite-workflow-status",
+      "path": "payload/SageWrite/skills/sagewrite-workflow-status"
+    }
+  ],
+  "mcp": [
+    {
+      "id": "sagewrite",
+      "type": "stdio",
+      "command": "runtime/node.exe",
+      "sha256": "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32",
+      "args": [],
+      "tools": [
+        "sagewrite_workflow_status",
+        "sagewrite_project_status",
+        "sagewrite_import_structure",
+        "sagewrite_initialize_book",
+        "sagewrite_generate_toc",
+        "sagewrite_expand_outline",
+        "sagewrite_write_chapters",
+        "sagewrite_rewrite_chapters",
+        "sagewrite_refine_chapters",
+        "sagewrite_translate_chapters",
+        "sagewrite_edit_book",
+        "sagewrite_editorial_action_review",
+        "sagewrite_part_budget_statistics",
+        "sagewrite_editorial_loop",
+        "sagewrite_import_third_party_audit",
+        "sagewrite_accepted_audit_rewrite",
+        "sagewrite_execute_revision_plan",
+        "sagewrite_repeat_audit",
+        "sagewrite_reference_workflow",
+        "sagewrite_reference_verification",
+        "sagewrite_apply_reference_changes",
+        "sagewrite_remove_section",
+        "sagewrite_format_preflight",
+        "sagewrite_build_manuscript",
+        "sagewrite_build_simple_docx",
+        "sagewrite_build_simple_docx_toc",
+        "sagewrite_export_epub",
+        "sagewrite_export_pdf",
+        "sagewrite_build_print_docx",
+        "sagewrite_export_print_pdf",
+        "sagewrite_cover_assist",
+        "sagewrite_cover_base_brief",
+        "sagewrite_cover_base_prompt",
+        "sagewrite_cover_review",
+        "sagewrite_cover_layout",
+        "sagewrite_cover_image_edit",
+        "sagewrite_cover_mockup",
+        "sagewrite_cover_print_spread",
+        "sagewrite_cover_export",
+        "sagewrite_cover_install"
+      ],
+      "resources": [],
+      "prompts": []
+    }
+  ],
+  "permissions": {},
+  "presentation": {
+    "readme": "README.md",
+    "icon": null
+  },
+  "work": {
+    "mode": "collection",
+    "item_name": "书籍",
+    "create_label": "新建书籍",
+    "create": {
+      "mcp": "sagewrite",
+      "tool": "sagewrite_initialize_book",
+      "instruction": "先确认书籍需求，然后通过 SageWrite MCP 创建。"
+    }
+  }
+}
