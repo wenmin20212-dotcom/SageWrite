@@ -336,4 +336,3 @@ SageWrite 并不是 AI 时代唯一的写作系统，而是一种具有代表性
 ## 独立 UAH/BOSS 安装包
 
 安装、模型配置和构建见 [UAH 安装说明](uah/README.md)。UAH 适配由 SageWrite 独立维护，发布包不包含宿主。
-

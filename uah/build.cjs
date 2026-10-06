@@ -59,5 +59,15 @@ walk(output, file => {
   const bytes = fs.readFileSync(file);
   files.push({ path: path.relative(output, file).replaceAll('\\', '/'), size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
 });
-fs.writeFileSync(path.join(output, 'uah', 'bom.yaml'), JSON.stringify({ schema: 'uah-agent-bom/v0.1', package: { id: 'sagewrite', version: '1.1.0', agent_manifest: 'uah/agent.yaml' }, files, components: [...versions].map(([name, version]) => ({ name, version, type: 'library' })), install: { scripts: ['prepare.cjs'], network_required: false }, provenance: { note: 'Generated from independent SageWrite checkout; runtime supplied to build command.' } }, null, 2));
+const manifest = JSON.parse(fs.readFileSync(path.join(output, 'uah', 'agent.yaml')));
+const libraries = [...versions].map(([name, version]) => ({ id: 'library:' + name, name, version, type: 'library', delivery: 'bundled', dependencies: [] }));
+const components = [
+  { id: 'mcp:sagewrite', name: 'SageWrite MCP', version: '1.1.0', type: 'mcp-server', delivery: 'bundled', entrypoint: 'runtime/node.exe', integrity: { sha256: manifest.mcp[0].sha256 }, capabilities: { tools: manifest.mcp[0].tools, resources: [], prompts: [] }, dependencies: ['runtime:node', 'runtime:powershell', 'model:configured', ...libraries.map(x => x.id)] },
+  { id: 'runtime:node', name: 'Node.js', version: execFileSync(node, ['--version'], { encoding: 'utf8' }).trim().replace(/^v/, ''), type: 'runtime', delivery: 'bundled', entrypoint: 'runtime/node.exe', integrity: { sha256: manifest.mcp[0].sha256 }, dependencies: [] },
+  { id: 'runtime:powershell', name: 'Windows PowerShell', version_constraint: '>=5.1', type: 'runtime', delivery: 'host', dependencies: [] },
+  { id: 'model:configured', name: 'User-configured writing model', version_constraint: 'configured by installer', type: 'model-service', delivery: 'external', dependencies: [] }, ...libraries,
+];
+const bom = { schema: 'uah-agent-bom/v0.1', package: { id: 'sagewrite', version: '1.1.0', agent_manifest: 'uah/agent.yaml' }, compatibility: { uah_agent_schema: 'uah-agent/v0.2', host: { min_version: '0.3.0' }, platforms: [{ os: 'windows', arch: 'x86_64' }] }, files: [], components, relationships: components.map(c => ({ from: 'package:sagewrite', type: 'contains', to: 'component:' + c.id })), install: { scripts: [], network_required: false, restart_required: false }, provenance: { source: { repository: 'https://github.com/wenmin20212-dotcom/SageWrite', revision: process.env.SAGEWRITE_SOURCE_REVISION || 'unrecorded-local-build' }, build: { reproducible: false, builder: 'SageWrite uah/build.cjs' }, licenses: { files: ['payload/SageWrite/LICENSE'] } } };
+fs.writeFileSync(path.join(output, 'bom.template.json'), JSON.stringify(bom, null, 2));
+execFileSync(node, [path.join(output, 'prepare.cjs')]);
 console.log(JSON.stringify({ output, files: files.length, dependencies: versions.size }));

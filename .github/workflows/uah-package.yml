@@ -18,6 +18,8 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm@10.11.0 --dir engine/mcp-server install --frozen-lockfile
       - run: node uah/build.cjs dist/SageWrite-UAH (Get-Command node.exe).Source
+        env:
+          SAGEWRITE_SOURCE_REVISION: ${{ github.sha }}
       - run: node uah/verify.cjs dist/SageWrite-UAH
       - run: |
           Compress-Archive -Path dist/SageWrite-UAH/* -DestinationPath dist/SageWrite-UAH-win32-x64.zip

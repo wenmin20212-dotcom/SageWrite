@@ -133,4 +133,3 @@ child.on('error', error => {
 child.on('exit', code => process.exit(code ?? 1));
 process.on('SIGTERM', () => child.kill());
 process.on('SIGINT', () => child.kill());
-

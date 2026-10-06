@@ -22,4 +22,4 @@ Windows x64；包包含 Node 运行时、MCP 依赖和 8 个 Skill。本机需 W
 
 在独立 SageWrite 源码目录使用锁定的 pnpm 依赖：`pnpm --dir engine/mcp-server install --frozen-lockfile`，然后执行 `node uah/build.cjs 新输出目录 Windows-node.exe路径`。构建器拒绝覆盖已有输出、实体化依赖并转换 PowerShell UTF-8 BOM。Node 来源和版本由发布者记录；发布 ZIP 必须附 SHA256。
 
-UAH 当前 v0.2 的 MCP args 不支持相对路径展开，所以安装脚本在本机生成路径化 agent.yaml。发布 BOM 记录解压原始文件；安装后 agent.yaml 与 installation.local.json 属于本机配置，不能把发布 BOM 当作安装后全目录不变的证明。
+UAH 当前 v0.2 的 MCP args 不支持相对路径展开，所以用户先手动运行准备脚本，生成本机路径化 agent.yaml 并刷新 BOM，然后交给 UAH 加载。UAH 不自动执行包的安装脚本。书籍和 model.local.json 是运行期间的本机数据，不属于发布交付文件；不要把发布 BOM 当作所有运行数据的安全证明。这里完成第一阶段可运行接入，不声称完整依赖封闭或受控凭据管理已实现。
